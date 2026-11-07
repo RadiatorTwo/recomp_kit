@@ -128,6 +128,45 @@ Belegung, Fehler des Originals): eine Spiel-Funktion durch Rust ersetzen.
 - Debug-Befehle: `Game::cheats` (Name, Shift+F-Taste, Funktion); ein Hook auf die
   Frame-Warte-Funktion ruft `cheats::run_pending(c)` und `savestate::frame()`.
 
+## 8b. Bildrate: Logik fest, Zwischenbilder dazu
+
+Alte Spiele rechnen ihre Logik für eine feste Bildrate (oft 30 oder 60, PlayStation-Ports
+60). Die Bildrate nie einfach freigeben: viel Logik zählt Frames statt Zeit oder nimmt ganze
+Frames aus einem Zeitschritt (`dt >> 8`, `dt / schritt` mit verworfenem Rest). Über der
+gedachten Rate hörten in Nuclear Strike Explosionen nie auf, Raketen zogen doppelt so viel
+Rauch, und der Autopilot des Hakens machte nie einen Schritt (`256 / 0x114 = 0`). Stattdessen
+(`win32::platform::tween`, Vorbilder: Future Cops `fps.rs`, Nuclear Strikes `pictures.rs`):
+
+1. **Logik fest.** Die Spielschleife finden (Uhr lesen, auf den Frame warten) und am Anfang
+   jedes Logik-Frames `LogicClock::frame` aufrufen (Hook auf die Uhr-Funktion, nur von der
+   Schleife aus: Rücksprungadresse prüfen). Die Uhr des Spiels geht dann genau einen Frame
+   pro Durchlauf weiter. Damit läuft das Spiel wie im Original; **erst testen**, dann weiter.
+2. **Zeichen-Teil der Schleife finden.** Was ist Logik, was Zeichnen? Oft vermischt (Nuclear
+   Strike: ein Durchgang bewegt die Objekte einer Kachel, der nächste zeichnet sie). Auch
+   Zeichen-Code macht manchmal Logik (ein Rotor dreht sich beim Zeichnen weiter).
+3. **Interpolieren, einen Frame zu spät.** Jedes Bild, auch das des Logik-Frames selbst,
+   zeigt das Spiel zwischen den letzten zwei Logik-Frames (`LogicClock::alpha`). Kamera und
+   Objekte (Position, Drehmatrix) werden nur *während des Zeichnens* dorthin gesetzt (Hooks
+   der Zeichenfunktionen) und danach zurück: die Logik sieht nur ihre eigenen Werte. Wer
+   beim Zeichnen ein Objekt selbst bewegt (eine Last am Haken), behält seine Position.
+   Drehungen über Quaternionen (`mix_rotation`; elementweise gemischt wird ein schnell
+   drehender Rotor zum Fächer), Sprünge (Respawn, Kameraschnitt) nicht interpolieren.
+4. **Zwischenbilder.** In `LogicClock::frame` läuft vor der Wartezeit nur der Zeichen-Teil
+   (Bildtausch, Gelände, Objekte, HUD, Ordering Table) als eigenes Bild.
+5. **Nebenwirkungen zurücksetzen.** Nach dem Bildtausch `Statics::save`, nach dem Zeichnen
+   `restore`: die statischen Daten des Spiels (Zufallsgenerator, Hilfsmatrizen, Zähler,
+   HUD-Zustand). Ausnahmen in `left`: Listen eines Speicher-Managers, deren Einträge woanders
+   liegen (zurückgesetzt zerstörten sie den Heap). Während des Zeichnens `hold_turn(true)`:
+   sonst laufen andere Threads (Audio-Timer) und ihre Änderungen gehen mit verloren.
+6. **Daten, die das Zeichnen für den nächsten Frame vorbereitet** (ein Gelände mit zwei
+   Puffern): Zwischenbilder zeichnen aus dem Stand vor dem Zeichnen des Logik-Frames
+   (vorher sichern, im Zwischenbild einsetzen, danach zurück). Sonst schmiert das Bild.
+
+Fehlerbilder: Schlieren (etwas wird in Zwischenbildern nicht gezeichnet, das Spiel löscht den
+Bildschirm nicht), Fächer (Matrix elementweise gemischt), fehlende Töne (Änderungen anderer
+Threads zurückgesetzt), Absturz nach Speicheranforderung 0 (Heap-Listen zurückgesetzt), die
+Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird zu 0).
+
 ## 9. Ton, Video, Netzwerk, Installation
 
 - DirectSound und PlaySound: fertig (`dsound.rs`, Mischung auf cpal).

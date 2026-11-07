@@ -78,7 +78,19 @@ White. Most apply to any game of that time. Add new ones here.
 
 - Never shorten a game's logic frame to raise the frame rate: logic written as
   `(rate * ticks) >> 8` breaks (hits, effects, hovering). Draw extra pictures between logic
-  frames with interpolated positions instead (Future Cop's `fps.rs`).
+  frames with interpolated positions instead (`platform::tween`, Future Cop's `fps.rs`,
+  Nuclear Strike's `pictures.rs`; GUIDE.md 8b).
+- Rounding the game's time to whole frames is not enough: code that counts frames (a trail
+  piece a frame) still runs per picture, and deadlines set with one time and compared with
+  another break. Fix the loop's rate; give pictures only drawing.
+- Logic may assume a frame longer than the fixed one: `dt / 0x114` (1/55.6 s) with the rest
+  dropped is 0 at 60 frames of 256: carry the rest (Nuclear Strike's autopilot).
+- Pictures: interpolate a frame late, only while drawing; quaternions for rotations; put back
+  static data (not a memory manager's lists), hold the turn meanwhile; draw from the data a
+  double-buffered renderer had before the frame's own drawing.
+- A PlayStation port may divide by zero where the PlayStation did not trap (a point at the
+  camera's depth): report it once and divide by 1 rather than stop (nuclear_rust_strike's
+  `lift.rs` `div` and its event handler; the kit's lifter still stops).
 - Generated code must not hold host addresses as constants if it is cached: statics move from
   run to run.
 

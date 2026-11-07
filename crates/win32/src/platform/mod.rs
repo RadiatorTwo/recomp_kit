@@ -26,6 +26,7 @@ pub mod record;
 pub mod sample;
 pub mod savestate;
 pub mod setting;
+pub mod tween;
 pub mod user32;
 pub mod window;
 
@@ -485,9 +486,35 @@ fn slice_ticks() -> u64 {
     })
 }
 
+thread_local! {
+    /// This thread keeps the turn at loop heads and imports (`hold_turn`).
+    static HOLD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Keep the turn (true) until released (false), at loop heads and in imports: for guest code
+/// whose changes are put back afterwards (a picture between logic frames, `tween`), so no
+/// other thread's change is undone with them (Nuclear Strike lost sounds: its audio timer ran
+/// meanwhile). Must not wrap code that waits for another guest thread.
+pub fn hold_turn(on: bool) {
+    HOLD.set(on);
+}
+
+/// Run host code that waits (a sleep) from a hook, the turn handed over meanwhile.
+pub fn without_turn<R>(f: impl FnOnce() -> R) -> R {
+    let held = HELD.get();
+    if held {
+        turn_give();
+    }
+    let r = f();
+    if held {
+        turn_take();
+    }
+    r
+}
+
 /// At a loop head with another thread waiting: let it run first, after this thread's slice.
 fn turn_yield() {
-    if HELD.get() && tsc().wrapping_sub(TAKEN.get()) >= slice_ticks() {
+    if HELD.get() && !HOLD.get() && tsc().wrapping_sub(TAKEN.get()) >= slice_ticks() {
         turn_give();
         turn_take();
     }
@@ -586,7 +613,7 @@ fn on_event(c: &mut Cpu, e: Event) {
             // hundreds of thousands of Glide calls a second: handing the turn over at each made
             // the game thread wait for the others again and again. Those that never wait keep
             // it (Glide draws on the window's thread here).
-            let keep = quick && window::on_main();
+            let keep = (quick && window::on_main()) || HOLD.get();
             if !keep {
                 turn_give();
             }

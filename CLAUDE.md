@@ -50,7 +50,9 @@ EXE's function list belongs in the game's repository, not here).
   dshow, dplay, misc, window, gl, glide (the version before Future Cop's effects), display,
   dialog, sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
   savestate (the game calls `level_start` / `frame`), cheats (`Game::cheats`, run by the game's
-  hook with `run_pending`), setting (registry + switch), hd (replacement textures)).
+  hook with `run_pending`), setting (registry + switch), hd (replacement textures), tween
+  (pictures between logic frames: `LogicClock`, `Hist`, interpolation with quaternions,
+  `Statics` put back, `call_regs`; with `hold_turn` / `without_turn` in `platform/mod.rs`)).
 - `crates/tools`: `rtools` (imports, missing, dis, at, smc, dialogs, iso, movie, vermap).
 - `examples/fcop_plain`: Future Cop with only its `Identity`, patch table and function list
   (read at run time from `FCOP_FUNCTIONS`, default ../future_rust_cop/data/functions.json): the

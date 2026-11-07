@@ -18,6 +18,10 @@
   imports, `on_main` per thread, uniform lookups cached (window blit), sampling profiler
   (`SAMPLE`), `DUMP`. fcop_plain checked: menu and first mission.
 
+- Pictures between logic frames from nuclear_rust_strike: `platform::tween` (`LogicClock`,
+  `Hist`, `mix_rotation`, `Statics`, `call_regs`), `hold_turn` / `without_turn`; GUIDE.md 8b,
+  LESSONS. The game-specific part (which functions draw, what to interpolate) stays in ports.
+
 ## Next
 
 Grow the kit for future games, one piece at a time, with tests:
