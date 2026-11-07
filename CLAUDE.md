@@ -1,0 +1,63 @@
+# CLAUDE.md — recomp_kit
+
+Hand-over for future sessions. What is done and what is open: **PLAN.md** (keep it current).
+
+## Goal (the user's)
+
+One framework for native Rust ports of late-1990s Windows games (32-bit x86 EXE, DirectX /
+Glide): the player's EXE recompiled with Cranelift, Windows and DirectX in Rust. Extracted
+on 2026-11-07 from future_rust_cop (the most advanced port); the sibling ports (rust_metal,
+rustschweine, nuclear_rust_strike, black_white_recomp) each still have their own copy of the
+core and move over later, one at a time. New games start from `template/`.
+
+Only code is shared. **Never commit anything derived from a game's EXE** (code, data, the
+EXE's function list belongs in the game's repository, not here).
+
+## The user
+
+- New to reverse engineering; explain in plain words, give a recommendation, not a survey.
+- Speaks German (docs/GUIDE.md is German, the code and its comments English); short sessions,
+  watches usage limits.
+- Confirm before anything outward-facing or destructive (pushing, deleting).
+- Clean Rust first, performance later. Never run cargo fmt (it reformats whole crates).
+- No Co-Authored-By or other AI attribution in commits.
+
+## Layout
+
+- `crates/recomp`: the core, no game and no Windows in it.
+  - `image.rs` PE images (sections with an `exec` flag: `Image::is_code`; imports, exports,
+    resources, `rebase`, `combine` for DLLs), `load_functions(json)`, `set_symbols(txt)`.
+  - `discover.rs` the code: functions from a list (`Program::build`) plus extra entries;
+    `find_functions(code, seeds)` without a list; jump tables end decoding (`table_bytes`).
+  - `lift.rs`, `lift/x87.rs` x86 -> Cranelift IR; `unsupported()` checks an instruction.
+  - `smc.rs` self-modifying code; what a game has beyond `mov [code], x` comes as `SmcSpec`.
+  - `jit.rs` compiles everything (cache file `RCMPJIT1`), hooks as `(address, fn)`.
+  - `rt.rs` `Cpu`, guest memory, helpers, call counters (`counter`, `counts`).
+  - `ver.rs` versions of an EXE: `Us(0x...)` is an address of the game's reference version,
+    `.at()` its place in the version that runs (`select` after `of_exe(versions, data)`).
+  - `config.rs` the switches' prefix (`env("COUNT")` = `FCOP_COUNT` for Future Cop), the CPUID
+    MMX bit (default off).
+- `crates/win32`: the Windows layer (from future_rust_cop's `platform/`, without its
+  game modules): `game.rs` (`Identity`, the `Game` trait and its extension traits
+  `DialogExt`, `GlideExt`; `game()` / `id()` give the running game), `run.rs` (the program's
+  start: setup, compile with cache, run), `setup.rs` (game files, CD images), `splash.rs`,
+  `iso.rs`, `mpeg/`, `platform/` (kernel32, user32, gdi32, advapi32, ddraw, dsound, dinput,
+  dshow, dplay, misc, window, gl, glide (the version before Future Cop's effects), display,
+  dialog, menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
+  savestate (the game calls `level_start` / `frame`), cheats (`Game::cheats`, run by the game's
+  hook with `run_pending`), setting (registry + switch), hd (replacement textures)).
+- `crates/tools`: `rtools` (imports, missing, dis, at, smc, dialogs, iso, movie, vermap).
+- `examples/fcop_plain`: Future Cop with only its `Identity`, patch table and function list
+  (read at run time from `FCOP_FUNCTIONS`, default ../future_rust_cop/data/functions.json): the
+  check that the framework runs a real game. Run with the EXE's path as argument (a copy of the
+  game files: setup and the registry write into the EXE's folder).
+- `template/` + `tools/new-game.ps1`: a new game project (`-Local` for a path dependency).
+- `docs/GUIDE.md` the way through a port, `docs/LESSONS.md` the traps.
+
+## Checks
+
+- `cargo test --release --workspace` (snippet tests of the lifter, x87, SMC, discovery, images).
+- `rtools missing <FCopLAPD.exe> --functions ../future_rust_cop/data/functions.json`: 2176
+  functions, 0 unsupported (without `--functions`: 1778 found).
+- fcop_plain with `FCOP_NO_VIDEO=1 FCOP_SHOT=... FCOP_INPUT="8000:click@484,303"`: main menu,
+  then the first mission.

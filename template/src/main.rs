@@ -45,7 +45,8 @@ static ID: Identity = Identity {
     game_files: &[],
     // a file in the CD's video folder, if the game has videos there
     video_marker: None,
-    net_magic: (b"MYGAMEN?", b"MYGAMEN!"),
+    // network discovery (DirectPlay over UDP): 8 bytes of the game's own, question and answer
+    net_magic: (b"GAMENET?", b"GAMENET!"),
     log_file: "mygame.log",
 };
 
