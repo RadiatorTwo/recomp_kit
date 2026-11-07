@@ -6,9 +6,16 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-# the framework (tag or branch: pin it; a local checkout: path = "../recomp_kit/crates/...")
-recomp = { git = "https://github.com/RadiatorTwo/recomp_kit", branch = "main" }
-win32 = { git = "https://github.com/RadiatorTwo/recomp_kit", branch = "main" }
+# the framework, copied from recomp_kit into crates/ (this game's own copy, change it freely)
+recomp = { path = "crates/recomp" }
+win32 = { path = "crates/win32" }
+
+[workspace]
+resolver = "3"
+members = [".", "crates/recomp", "crates/win32", "crates/tools"]
+
+# KIT_WORKSPACE (new-game.ps1 puts recomp_kit's [workspace.package] and
+# [workspace.dependencies] here)
 
 [features]
 # test-only debug commands, never in a release: cargo build --release --features cheats

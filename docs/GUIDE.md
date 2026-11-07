@@ -5,7 +5,9 @@ DirectSound, DirectInput. Das Spiel wird nicht emuliert: Beim Start wird die EXE
 in Maschinencode des eigenen Rechners übersetzt (Cranelift), und Windows/DirectX ersetzt
 Rust-Code. Jeder Schritt hat ein **Fertig, wenn …**. Erst dann weiter.
 
-Werkzeuge kommen aus diesem Repo: `cargo build --release -p tools` gibt `target/release/rtools`.
+Das neue Projekt bekommt eine **Kopie** des Frameworks (`crates/recomp`, `crates/win32`,
+`crates/tools`). Sie gehört dem Spiel: ändern, wo das Spiel es braucht. Werkzeuge:
+`cargo build --release -p tools` im Spiel-Projekt gibt `target/release/rtools`.
 
 ---
 
@@ -20,11 +22,11 @@ Werkzeuge kommen aus diesem Repo: `cargo build --release -p tools` gibt `target/
 ## 1. Projekt anlegen
 
 ```powershell
-C:\!Code2\recomp_kit\tools\new-game.ps1 -Name gun_metal -Title "Gun Metal" -Target C:\!Code2\gun_metal -Local
+C:\!Code2\recomp_kit\tools\new-game.ps1 -Name gun_metal -Title "Gun Metal" -Target C:\!Code2\gun_metal
 ```
 
-`-Local` bindet dieses Repo per Pfad ein (zum gleichzeitigen Arbeiten am Framework). Ohne:
-per git. Dann im neuen Projekt:
+Das Skript kopiert das Framework nach `crates/` und notiert in `PLAN.md`, von welchem
+recomp_kit-Commit. Dann im neuen Projekt:
 
 1. Spiel-EXE nach `game_files/<Ordner>/` legen (CD-Inhalt oder installierter Ordner).
 2. SHA-256 der EXE in `VERSIONS` in `src/main.rs` eintragen:
@@ -54,9 +56,10 @@ Instruktionen), `rtools dis <exe> <adresse>` (eine Funktion so, wie die Discover
 ## 3. Fehlende Instruktionen
 
 `rtools missing` listet Instruktionen, die der Lifter (`crates/recomp/src/lift.rs`) noch nicht
-kann. Jede kommt **ins Framework**, nie ins Spiel-Projekt, mit einem Test in
+kann. Jede kommt in die Kopie im Spiel-Projekt, mit einem Test in
 `crates/recomp/tests/` (Vorbild: `misc.rs`, `x87.rs`; der Test baut ein kleines x86-Stück mit
 iced, übersetzt es und vergleicht mit dem erwarteten Ergebnis). FPU-Befehle: `lift/x87.rs`.
+Neue Instruktionen helfen jedem Spiel: zusätzlich ins recomp_kit übernehmen.
 
 **Fertig, wenn** `rtools missing` "0 instructions not supported" meldet und
 `cargo test --release -p recomp` grün ist.

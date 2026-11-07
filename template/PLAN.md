@@ -1,6 +1,7 @@
 # PLAN — GAMETITLE
 
 The way through: recomp_kit's docs/GUIDE.md. Tick off what is done, note what was learned.
+Framework in `crates/`: copied from recomp_kit KITCOMMIT.
 
 ## 1. Start
 

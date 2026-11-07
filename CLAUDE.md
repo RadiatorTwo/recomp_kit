@@ -8,7 +8,8 @@ One framework for native Rust ports of late-1990s Windows games (32-bit x86 EXE,
 Glide): the player's EXE recompiled with Cranelift, Windows and DirectX in Rust. Extracted
 on 2026-11-07 from future_rust_cop (the most advanced port); the sibling ports (rust_metal,
 rustschweine, nuclear_rust_strike, black_white_recomp) each still have their own copy of the
-core and move over later, one at a time. New games start from `template/`.
+core and stay that way (they do not move onto the kit). New games start from `template/`
+with their own copy of the crates.
 
 Only code is shared. **Never commit anything derived from a game's EXE** (code, data, the
 EXE's function list belongs in the game's repository, not here).
@@ -51,7 +52,8 @@ EXE's function list belongs in the game's repository, not here).
   (read at run time from `FCOP_FUNCTIONS`, default ../future_rust_cop/data/functions.json): the
   check that the framework runs a real game. Run with the EXE's path as argument (a copy of the
   game files: setup and the registry write into the EXE's folder).
-- `template/` + `tools/new-game.ps1`: a new game project (`-Local` for a path dependency).
+- `template/` + `tools/new-game.ps1`: a new game project. The script **copies** crates/recomp,
+  win32 and tools into it (no dependency on this repo; the kit's commit goes into its PLAN.md).
 - `docs/GUIDE.md` the way through a port, `docs/LESSONS.md` the traps.
 
 ## Checks

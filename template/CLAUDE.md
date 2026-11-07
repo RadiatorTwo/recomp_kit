@@ -19,9 +19,11 @@ boundaries (`data/functions.json`) and our notes by address (`data/symbols.txt`)
 
 ## How it works
 
-- The framework: recomp_kit (`recomp`: discovery, lifter, JIT, runtime; `win32`: the Windows
-  layer). Its docs/GUIDE.md is the way through a new port, docs/LESSONS.md the known traps.
-  Fixes to the framework go there (not copied into this crate), with a test.
+- The framework, copied from recomp_kit into `crates/` (`recomp`: discovery, lifter, JIT,
+  runtime; `win32`: the Windows layer; `tools`: `rtools`). This project's own copy: change it
+  freely, with a test for the lifter (`crates/recomp/tests/`). recomp_kit's docs/GUIDE.md is
+  the way through a new port, docs/LESSONS.md the known traps. A fix that other games need
+  too: also into recomp_kit (ask the user).
 - `src/main.rs`: `Identity` (names, paths, registry key, CD) and `impl Game` (functions,
   self-modifying code, hooks, extensions).
 - `src/hooks.rs`: game functions replaced by Rust (`call_original` runs the game's own).

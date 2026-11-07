@@ -11,7 +11,8 @@ Linux. Extracted from [Future Cop: L.A.P.D. in Rust](https://github.com/Radiator
   DirectShow (MPEG-1), DirectPlay, Glide; dialogs, gamepad, setup from CD images
 - `crates/tools` — `rtools`: imports, unsupported instructions, disassembly, SMC, dialogs, CD
   images, movies, version maps
-- `template/` — a new game project (`tools/new-game.ps1`)
+- `template/` — a new game project (`tools/new-game.ps1`); the project gets its own copy of
+  the crates, it does not depend on this repository
 - `docs/GUIDE.md` — how to port a game step by step (German), `docs/LESSONS.md` — known traps
 
 A game describes itself with `win32::Identity` and adds what it needs through the
