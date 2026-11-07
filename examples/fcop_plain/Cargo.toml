@@ -1,0 +1,11 @@
+[package]
+name = "fcop_plain"
+description = "Check of the framework: Future Cop: L.A.P.D. with nothing of its own but who it is"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+recomp = { path = "../../crates/recomp" }
+win32 = { path = "../../crates/win32" }
