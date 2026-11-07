@@ -1,5 +1,5 @@
-//! A PE image (the game's EXE or a DLL): sections at their virtual addresses, its import table,
-//! its resources, and what is known about its functions (`load_functions`, `symbols`).
+//! A PE image (the game's EXE or a DLL): sections at their virtual addresses, its imports and
+//! exports, its relocations (`rebase`), its resources, and what is known about its functions (`load_functions`, `symbols`).
 
 use std::path::Path;
 
@@ -93,6 +93,54 @@ impl Image {
         )
     }
 
+    /// Move the image to another base: its relocations (.reloc, HIGHLOW entries) applied to
+    /// the file's bytes, the sections and the entry moved.
+    pub fn rebase(&mut self, base: u32) {
+        let delta = base.wrapping_sub(self.base);
+        let pe = le32(&self.data, 0x3c) as usize;
+        let (rva, size) = (le32(&self.data, pe + 24 + 136), le32(&self.data, pe + 24 + 140));
+        // file offset of a virtual address
+        let file = |img: &Image, a: u32| {
+            let s = img.sections.iter().find(|s| a >= s.va && a < s.va + s.rsize)?;
+            Some((s.raw + a - s.va) as usize)
+        };
+        let mut b = self.base + rva;
+        while b < self.base + rva + size {
+            let (page, len) = (self.u32(b), self.u32(b + 4));
+            if len < 8 {
+                break;
+            }
+            for k in (8..len).step_by(2) {
+                let e = self.read(b + k, 2).map_or(0, |e| u16::from_le_bytes([e[0], e[1]]));
+                if e >> 12 == 3 {
+                    if let Some(o) = file(self, self.base + page + (e & 0xfff) as u32) {
+                        let v = le32(&self.data, o).wrapping_add(delta);
+                        self.data[o..o + 4].copy_from_slice(&v.to_le_bytes());
+                    }
+                }
+            }
+            b += len;
+        }
+        for s in &mut self.sections {
+            s.va = s.va.wrapping_add(delta);
+        }
+        self.entry = self.entry.wrapping_add(delta);
+        self.base = base;
+    }
+
+    /// Several images (each at its own base) as one, for finding and compiling their code
+    /// together. Base and entry are the first one's; the headers of the others are left out.
+    pub fn combine(parts: &[&Image]) -> Image {
+        let mut data = Vec::new();
+        let mut sections = Vec::new();
+        for img in parts {
+            let at = data.len() as u32;
+            data.extend_from_slice(&img.data);
+            sections.extend(img.sections.iter().map(|s| Section { name: s.name.clone(), raw: s.raw + at, ..*s }));
+        }
+        Image { data, base: parts[0].base, entry: parts[0].entry, sections }
+    }
+
     pub fn byte(&self, addr: u32) -> u8 {
         self.read(addr, 1).map_or(0, |b| b[0])
     }
@@ -126,6 +174,43 @@ impl Image {
                 out.push(Import { iat: self.base + ft + 4 * k, dll: dll.clone(), name });
             }
             d += 20;
+        }
+        out
+    }
+
+    /// Every export by its ordinal: (address, ordinal).
+    pub fn export_ordinals(&self) -> Vec<(u32, u32)> {
+        let pe = le32(&self.data, 0x3c) as usize;
+        let rva = le32(&self.data, pe + 24 + 96);
+        if rva == 0 {
+            return Vec::new();
+        }
+        let d = self.base + rva;
+        let (ord_base, nfuncs, funcs) = (self.u32(d + 16), self.u32(d + 20), self.base + self.u32(d + 28));
+        (0..nfuncs).filter(|&k| self.u32(funcs + 4 * k) != 0).map(|k| (self.base + self.u32(funcs + 4 * k), ord_base + k)).collect()
+    }
+
+    /// The exported functions: (address, name); ordinal-only exports are named `#n`.
+    pub fn exports(&self) -> Vec<(u32, String)> {
+        let pe = le32(&self.data, 0x3c) as usize;
+        let rva = le32(&self.data, pe + 24 + 96);
+        if rva == 0 {
+            return Vec::new();
+        }
+        let d = self.base + rva;
+        let (ord_base, nfuncs, nnames) = (self.u32(d + 16), self.u32(d + 20), self.u32(d + 24));
+        let (funcs, names, ords) = (self.base + self.u32(d + 28), self.base + self.u32(d + 32), self.base + self.u32(d + 36));
+        let mut out: Vec<(u32, String)> = (0..nfuncs)
+            .filter(|&k| self.u32(funcs + 4 * k) != 0)
+            .map(|k| (self.base + self.u32(funcs + 4 * k), format!("#{}", ord_base + k)))
+            .collect();
+        for k in 0..nnames {
+            let ord = (self.u32(ords + 2 * k) & 0xffff) + ord_base;
+            let name = self.cstr(self.base + self.u32(names + 4 * k));
+            let a = self.base + self.u32(funcs + 4 * (ord - ord_base));
+            if let Some(e) = out.iter_mut().find(|e| e.0 == a && e.1.starts_with('#')) {
+                e.1 = name;
+            }
         }
         out
     }

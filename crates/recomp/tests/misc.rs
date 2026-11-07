@@ -1,9 +1,10 @@
-//! MMX moves, port I/O and segment pushes, checked against Rust. Needs no game files.
+//! MMX moves, port I/O, segment registers, xlat, 16-bit pushf/popf and bsf/bsr, checked
+//! against Rust. Needs no game files.
 
 mod common;
 
 use common::{Guest, Rng, SCRATCH, Snippet};
-use recomp::rt::{EAX, ECX, EDI, ESP};
+use recomp::rt::{EAX, EBX, ECX, EDI, EDX, ESP};
 use iced_x86::IcedError;
 use iced_x86::code_asm::*;
 
@@ -55,7 +56,77 @@ fn segs(a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.ret()
 }
 
-const SNIPPETS: [(&str, Snippet); 3] = [("mmx", mmx), ("ports", ports), ("segs", segs)];
+/// (table, index): eax = the index with al replaced by table[al] (xlat)
+fn xlat(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.push(ebx)?;
+    a.mov(ebx, dword_ptr(esp + 8))?;
+    a.mov(eax, dword_ptr(esp + 12))?;
+    a.xlatb()?;
+    a.pop(ebx)?;
+    a.ret()
+}
+
+/// (p): eax = cs, ecx = fs, edx = gs, [p] = ds (a word), ebx = ss; writes to segment
+/// registers are dropped
+fn segmov(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.push(ebx)?;
+    a.mov(edx, dword_ptr(esp + 8))?;
+    a.mov(eax, 0x1234)?;
+    a.mov(es, ax)?;
+    a.mov(ds, word_ptr(edx))?;
+    a.mov(word_ptr(edx), ds)?;
+    a.mov(ebx, 0xffff_ffff_u32)?;
+    a.mov(bx, ss)?;
+    a.mov(ecx, ebx)?;
+    a.pop(ebx)?;
+    a.push(ecx)?;
+    a.mov(eax, cs)?;
+    a.mov(ecx, fs)?;
+    a.mov(edx, gs)?;
+    a.pop(ebx)?;
+    a.ret()
+}
+
+/// 16-bit flags: eax = pushf after stc (upper half kept), ecx = cf after popf of 1, edx =
+/// pushfd after popfd with AC and then popf (AC kept), ebx = esp moved
+fn flags16(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.push(ebx)?;
+    a.mov(ebx, esp)?;
+    a.mov(eax, 0x5555_0000)?;
+    a.stc()?;
+    a.pushf()?;
+    a.pop(ax)?;
+    a.push(0x4_0000)?; // AC
+    a.popfd()?;
+    a.mov(cx, 1)?;
+    a.push(cx)?;
+    a.popf()?;
+    a.setb(cl)?;
+    a.movzx(ecx, cl)?;
+    a.pushfd()?;
+    a.pop(edx)?;
+    a.push(0)?;
+    a.popfd()?;
+    a.sub(ebx, esp)?;
+    a.mov(dword_ptr(esp), ebx)?; // the saved ebx is not needed back here
+    a.pop(ebx)?;
+    a.ret()
+}
+
+/// (x): eax = bsf x, ecx = bsr x (both 0x77 for 0: left as they were), edx = zf
+fn bsfr(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.mov(edx, dword_ptr(esp + 4))?;
+    a.mov(eax, 0x77)?;
+    a.mov(ecx, 0x77)?;
+    a.bsf(eax, edx)?;
+    a.bsr(ecx, dword_ptr(esp + 4))?;
+    a.setz(dl)?;
+    a.movzx(edx, dl)?;
+    a.ret()
+}
+
+const SNIPPETS: [(&str, Snippet); 7] =
+    [("mmx", mmx), ("ports", ports), ("segs", segs), ("xlat", xlat), ("segmov", segmov), ("flags16", flags16), ("bsfr", bsfr)];
 
 #[test]
 fn misc() {
@@ -81,4 +152,35 @@ fn misc() {
     let cpu = g.call(2, &[]);
     assert_eq!(cpu.r[ECX], 0);
     assert_eq!(cpu.r[ESP], 0x0020_0000 - 0x100, "the return popped the return address");
+
+    for k in 0..256u32 {
+        m.wr8(SCRATCH + k, (k as u8).wrapping_mul(7) ^ 0x5a);
+    }
+    for v in [0x1234_5600u32, 0xdead_beff, 0x80] {
+        let cpu = g.call(3, &[SCRATCH, v]);
+        assert_eq!(cpu.r[EAX], v & !0xff | ((v as u8).wrapping_mul(7) ^ 0x5a) as u32);
+    }
+
+    m.wr32(SCRATCH, 0xaaaa_5555);
+    let cpu = g.call(4, &[SCRATCH]);
+    assert_eq!((cpu.r[EAX], cpu.r[ECX], cpu.r[EDX]), (0x1b, 0x3b, 0), "cs, fs, gs");
+    assert_eq!(cpu.r[EBX], 0xffff_0023, "ss into bx");
+    assert_eq!(m.rd32(SCRATCH), 0xaaaa_0023, "ds as a word");
+
+    let cpu = g.call(5, &[]);
+    assert_eq!(cpu.r[EAX], 0x5555_0203, "pushf: IF, the fixed bit and CF");
+    assert_eq!(cpu.r[ECX], 1, "popf set CF");
+    assert_eq!(cpu.r[EDX] & 0x4_0000, 0x4_0000, "popf left AC");
+    assert_eq!(cpu.r[EDX] & 0xffff, 0x203);
+    assert_eq!(cpu.r[EBX], 0, "stack balanced");
+    assert_eq!(cpu.r[ESP], 0x0020_0000 - 0x100);
+
+    for x in [1u32, 0x8000_0000, 0x0010_0100, 0xffff_ffff, 6] {
+        let cpu = g.call(6, &[x]);
+        assert_eq!(cpu.r[EAX], x.trailing_zeros(), "bsf {x:#x}");
+        assert_eq!(cpu.r[ECX], 31 - x.leading_zeros(), "bsr {x:#x}");
+        assert_eq!(cpu.r[EDX], 0);
+    }
+    let cpu = g.call(6, &[0]);
+    assert_eq!((cpu.r[EAX], cpu.r[ECX], cpu.r[EDX]), (0x77, 0x77, 1), "zero source");
 }

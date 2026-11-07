@@ -50,14 +50,16 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
         match i.op_kind(k) {
             OpKind::Register => {
                 let r = i.op_register(k);
-                // segment registers only as push/pop es (bytes in code that is never run)
-                let seg = r.is_segment_register() && matches!(i.mnemonic(), Mnemonic::Push | Mnemonic::Pop);
+                // segment registers: push/pop and mov (Watcom's start-up and "push ds; pop es"):
+                // flat selectors, writes dropped
+                let seg = r.is_segment_register() && matches!(i.mnemonic(), Mnemonic::Push | Mnemonic::Pop | Mnemonic::Mov);
                 if !(r.is_gpr8() || r.is_gpr16() || r.is_gpr32() || r.is_st() || r.is_mm() || seg) {
                     return Some(format!("register {r:?}"));
                 }
             }
             OpKind::Memory => {
-                if !gpr_ok(i.memory_base()) || !gpr_ok(i.memory_index()) {
+                // xlat's operand is [ebx + al] (lifted by itself)
+                if i.mnemonic() != Xlatb && (!gpr_ok(i.memory_base()) || !gpr_ok(i.memory_index())) {
                     return Some("16-bit addressing".into());
                 }
                 if !matches!(i.memory_segment(), Register::DS | Register::SS | Register::ES | Register::CS | Register::FS) {
@@ -85,7 +87,7 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
     }
     let ok = match m {
         Mov | Movzx | Movsx | Lea | Add | Adc | Sub | Sbb | Cmp | And | Or | Xor | Test | Inc | Dec | Neg | Not | Shl
-        | Sal | Shr | Sar | Rol | Ror | Rcl | Rcr | Push | Pop | Pushad | Popad | Pushfd | Popfd | Lahf | Sahf | Clc | Stc | Cmc
+        | Sal | Shr | Sar | Rol | Ror | Rcl | Rcr | Push | Pop | Pushad | Popad | Pushfd | Popfd | Pushf | Popf | Lahf | Sahf | Clc | Stc | Cmc
         | Cld | Std | Xchg | Bt | Bts | Btr | Btc | Cdq | Cwde | Cbw | Cwd | Xlatb | Div | Idiv | Leave | Nop | Wait
         | Pause | Cli | Sti | Cpuid | Rdtsc | Movsb | Movsw | Movsd | Stosb | Stosw | Stosd | Lodsb | Lodsw | Lodsd
         | Scasb | Scasw | Scasd | Cmpsb | Cmpsw | Cmpsd | Jmp | Call | Ret | Loop | Loope | Loopne | Jecxz | Jcxz
@@ -94,6 +96,7 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
         Insb | Insw | Insd => !(i.has_rep_prefix() || i.has_repe_prefix() || i.has_repne_prefix()),
         Movd | Movq => (0..i.op_count()).all(|k| i.op_kind(k) != OpKind::Register || !i.op_register(k).is_xmm()),
         Bswap => i.op0_register().is_gpr32(),
+        Bsf | Bsr => op_size(i, 0) == 4,
         Shld | Shrd => i.op0_register().is_gpr32() || (i.op0_kind() == OpKind::Memory && i.memory_size().size() == 4),
         Mul => i.op_count() == 1 && op_size(i, 0) != 2,
         Imul => !(i.op_count() == 1 && op_size(i, 0) == 2),
@@ -103,6 +106,16 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
     // string instructions also exist as SSE (movsd/cmpsd xmm): only the string forms here
     let string = matches!(m, Movsd | Cmpsd) && !matches!(i.op0_kind(), OpKind::MemoryESEDI | OpKind::MemorySegESI);
     if ok && !string { None } else { Some(format!("{m:?}")) }
+}
+
+/// What a segment register reads as: Windows 9x's flat selectors.
+fn selector(r: Register) -> i64 {
+    match r {
+        Register::CS => 0x1b,
+        Register::FS => 0x3b,
+        Register::GS => 0,
+        _ => 0x23,
+    }
 }
 
 pub fn is_setcc(i: &Instruction) -> bool {
@@ -736,11 +749,17 @@ impl<'a, 'f> Lifter<'a, 'f> {
             Push | Pop if i.op0_kind() == OpKind::Register && i.op0_register().is_segment_register() => {
                 // a flat selector; what is popped is dropped
                 if m == Push {
-                    let v = self.iconst(I32, 0x23);
+                    let v = self.iconst(I32, selector(i.op0_register()));
                     self.push32(v);
                 } else {
                     self.pop32();
                 }
+            }
+            Mov if i.op0_kind() == OpKind::Register && i.op0_register().is_segment_register() => {}
+            Mov if i.op1_kind() == OpKind::Register && i.op1_register().is_segment_register() => {
+                let n = op_size(i, 0);
+                let v = self.iconst(ty(n), selector(i.op1_register()));
+                self.wr(i, 0, v);
             }
             Mov => {
                 let v = self.rd(i, 1, op_size(i, 0));
@@ -836,7 +855,7 @@ impl<'a, 'f> Lifter<'a, 'f> {
                     self.set_reg(k, v);
                 }
             }
-            Pushfd => {
+            Pushfd | Pushf => {
                 let df = self.b.ins().load(I8, mf(), self.cpu, offset_of!(Cpu, df) as i32);
                 let mut v = self.iconst(I32, 0x202);
                 for (var, bit) in [(self.cf, 0), (self.pf, 2), (self.zf, 6), (self.sf, 7), (self.of, 11)] {
@@ -848,16 +867,46 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let d = self.b.ins().uextend(I32, df);
                 let d = self.b.ins().ishl_imm_u(d, 10);
                 v = self.b.ins().bor(v, d);
-                self.push32(v);
+                if m == Pushf {
+                    // 16 bits (Watcom's CPU check: whether div changed the flags)
+                    let v = self.b.ins().ireduce(I16, v);
+                    let sp = self.reg(4);
+                    let sp = self.b.ins().iadd_imm_s(sp, -2);
+                    self.set_reg(4, sp);
+                    self.store(sp, v);
+                } else {
+                    for (field, bit) in [(offset_of!(Cpu, ac), 18), (offset_of!(Cpu, id), 21)] {
+                        let f = self.b.ins().load(I8, mf(), self.cpu, field as i32);
+                        let f = self.b.ins().uextend(I32, f);
+                        let f = self.b.ins().ishl_imm_u(f, bit);
+                        v = self.b.ins().bor(v, f);
+                    }
+                    self.push32(v);
+                }
             }
-            Popfd => {
-                let v = self.pop32();
+            Popfd | Popf => {
+                let v = if m == Popf {
+                    let sp = self.reg(4);
+                    let v = self.load(sp, 2);
+                    let sp = self.b.ins().iadd_imm_s(sp, 2);
+                    self.set_reg(4, sp);
+                    self.b.ins().uextend(I32, v)
+                } else {
+                    self.pop32()
+                };
                 for (var, bit) in [(self.cf, 0), (self.pf, 2), (self.zf, 6), (self.sf, 7), (self.of, 11)] {
                     let f = self.bit8(v, bit);
                     self.set_flag(var, f);
                 }
                 let d = self.bit8(v, 10);
                 self.b.ins().store(mf(), d, self.cpu, offset_of!(Cpu, df) as i32);
+                // AC and ID are in the upper half, which popf leaves
+                if m == Popfd {
+                    for (field, bit) in [(offset_of!(Cpu, ac), 18), (offset_of!(Cpu, id), 21)] {
+                        let f = self.bit8(v, bit);
+                        self.b.ins().store(mf(), f, self.cpu, field as i32);
+                    }
+                }
             }
             Lahf => {
                 let mut v = self.iconst(I32, 0x200);
@@ -902,6 +951,22 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let x = self.rd(i, 0, 4);
                 let v = self.b.ins().bswap(x);
                 self.wr(i, 0, v);
+            }
+            Bsf | Bsr => {
+                // the lowest/highest set bit's index; a zero source leaves the destination
+                let x = self.rd(i, 1, 4);
+                let old = self.rd(i, 0, 4);
+                let n = if m == Bsf {
+                    self.b.ins().ctz(x)
+                } else {
+                    let z = self.b.ins().clz(x);
+                    let k = self.iconst(I32, 31);
+                    self.b.ins().isub(k, z)
+                };
+                let zero = self.b.ins().icmp_imm_u(IntCC::Equal, x, 0);
+                let v = self.b.ins().select(zero, old, n);
+                self.wr(i, 0, v);
+                self.set_flag(self.zf, zero);
             }
             Bt | Bts | Btr | Btc => self.bit_test(i, m),
             Cdq => {

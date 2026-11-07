@@ -22,7 +22,7 @@ pub fn is_x87(m: Mnemonic) -> bool {
             | Fsqrt | Frndint | Fld1 | Fldz | Fldpi | Fldl2e | Fldl2t | Fldlg2 | Fldln2 | Fcom | Fcomp | Fcompp
             | Fucom | Fucomp | Fucompp | Ficom | Ficomp | Ftst | Fcomi | Fcomip | Fucomi | Fucomip | Fnstsw | Fnstcw
             | Fldcw | Fnclex | Fninit | Ffree | Fincstp | Fdecstp | Fnop | Fxam | Fsin | Fcos | Fsincos | Fptan
-            | Fpatan | F2xm1 | Fyl2x | Fyl2xp1 | Fscale | Fprem | Fprem1 | Fxtract
+            | Fpatan | F2xm1 | Fyl2x | Fyl2xp1 | Fscale | Fprem | Fprem1 | Fxtract | Fnstenv | Fldenv | Fnsave | Frstor
     )
 }
 
@@ -30,7 +30,7 @@ pub fn is_x87(m: Mnemonic) -> bool {
 pub fn unsupported(i: &Instruction) -> Option<String> {
     use MemorySize::*;
     if i.op_kind(0) == OpKind::Memory || i.op_kind(1) == OpKind::Memory {
-        let ok = matches!(i.memory_size(), Float32 | Float64 | Float80 | Int16 | Int32 | Int64 | UInt16);
+        let ok = matches!(i.memory_size(), Float32 | Float64 | Float80 | Int16 | Int32 | Int64 | UInt16 | FpuEnv28 | FpuState108);
         if !ok {
             return Some(format!("{:?} {:?}", i.mnemonic(), i.memory_size()));
         }
@@ -416,6 +416,16 @@ impl Lifter<'_, '_> {
                 self.set_fsw(z);
                 let z = self.iconst(I32, 0);
                 self.b.def_var(self.top, z);
+            }
+            Fnstenv | Fldenv | Fnsave | Frstor => {
+                let op = match m {
+                    Fnstenv => X87::Fnstenv,
+                    Fldenv => X87::Fldenv,
+                    Fnsave => X87::Fnsave,
+                    _ => X87::Frstor,
+                };
+                let a = self.addr(i);
+                self.x87_helper(op, Some(a));
             }
             Fincstp => self.fpop(),
             Fdecstp => self.add_top(-1),
