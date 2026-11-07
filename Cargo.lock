@@ -2157,6 +2157,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tools"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "recomp",
+ "serde",
+ "serde_json",
+ "win32",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"

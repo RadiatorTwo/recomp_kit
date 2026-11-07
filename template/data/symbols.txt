@@ -1,0 +1,3 @@
+# What is known about the game, by address of the reference version (hex): name and a short
+# description; "?" marks a guess. Only addresses, names and descriptions: nothing of the EXE.
+# 0x401000 entry_example  the program's entry

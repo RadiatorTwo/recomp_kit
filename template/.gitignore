@@ -1,0 +1,9 @@
+target/
+game_files/
+*.iso
+*.bin
+*.img
+*.cue
+compiled.bin
+shot*/
+*.log

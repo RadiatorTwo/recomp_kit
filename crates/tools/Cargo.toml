@@ -1,0 +1,18 @@
+[package]
+name = "tools"
+description = "Porting tools: imports, unsupported instructions, disassembly, SMC, dialogs, CD images, movies, version maps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "rtools"
+path = "src/main.rs"
+
+[dependencies]
+recomp = { path = "../recomp" }
+win32 = { path = "../win32" }
+iced-x86.workspace = true
+serde.workspace = true
+serde_json.workspace = true

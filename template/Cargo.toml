@@ -1,0 +1,21 @@
+[package]
+name = "mygame"
+description = "GAMETITLE recompiled to native code"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+# the framework (tag or branch: pin it; a local checkout: path = "../recomp_kit/crates/...")
+recomp = { git = "https://github.com/RadiatorTwo/recomp_kit", branch = "main" }
+win32 = { git = "https://github.com/RadiatorTwo/recomp_kit", branch = "main" }
+
+[features]
+# test-only debug commands, never in a release: cargo build --release --features cheats
+cheats = []
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

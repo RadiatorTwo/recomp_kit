@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/recomp", "crates/win32", "examples/fcop_plain"]
+members = ["crates/recomp", "crates/win32", "crates/tools", "examples/fcop_plain"]
 
 [workspace.package]
 version = "0.1.0"
