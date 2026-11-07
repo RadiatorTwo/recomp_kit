@@ -31,8 +31,12 @@ EXE's function list belongs in the game's repository, not here).
   - `discover.rs` the code: functions from a list (`Program::build`) plus extra entries;
     `find_functions(code, seeds)` without a list; jump tables end decoding (`table_bytes`).
   - `lift.rs`, `lift/x87.rs` x86 -> Cranelift IR; `unsupported()` checks an instruction.
+    x87 registers are cached in Cranelift values along straight runs (`x87::Cache`, written
+    back at `Lifter::joins` and before non-plain instructions; `X87_CACHE` off for tests);
+    24-bit rounding inline (`round24_between`, `round24`).
   - `smc.rs` self-modifying code; what a game has beyond `mov [code], x` comes as `SmcSpec`.
-  - `jit.rs` compiles everything (cache file `RCMPJIT1`), hooks as `(address, fn)`.
+  - `jit.rs` compiles everything (cache file `RCMPJIT1`), hooks as `(address, fn)`;
+    `<PREFIX>_DUMP=<hex>` disassembles one function's code. `rt_lookup` reads a dense table.
   - `rt.rs` `Cpu`, guest memory, helpers, call counters (`counter`, `counts`).
   - `ver.rs` versions of an EXE: `Us(0x...)` is an address of the game's reference version,
     `.at()` its place in the version that runs (`select` after `of_exe(versions, data)`).
@@ -44,7 +48,7 @@ EXE's function list belongs in the game's repository, not here).
   start: setup, compile with cache, run), `setup.rs` (game files, CD images), `splash.rs`,
   `iso.rs`, `mpeg/`, `platform/` (kernel32, user32, gdi32, advapi32, ddraw, dsound, dinput,
   dshow, dplay, misc, window, gl, glide (the version before Future Cop's effects), display,
-  dialog, menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
+  dialog, sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
   savestate (the game calls `level_start` / `frame`), cheats (`Game::cheats`, run by the game's
   hook with `run_pending`), setting (registry + switch), hd (replacement textures)).
 - `crates/tools`: `rtools` (imports, missing, dis, at, smc, dialogs, iso, movie, vermap).

@@ -90,8 +90,12 @@ pub fn hide_cursor(hidden: bool) {
     CURSOR_HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
-fn on_main() -> bool {
-    *MAIN.get_or_init(|| std::thread::current().id()) == std::thread::current().id()
+pub fn on_main() -> bool {
+    thread_local! {
+        // asked at every Glide call: thread::current() each time cost
+        static IS: bool = *MAIN.get_or_init(|| std::thread::current().id()) == std::thread::current().id();
+    }
+    IS.with(|m| *m)
 }
 
 fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> R {

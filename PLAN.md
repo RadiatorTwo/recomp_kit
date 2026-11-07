@@ -13,6 +13,10 @@
 
 - New games get a copy of crates/recomp, win32 and tools (`new-game.ps1`), no dependency on
   this repo. The existing ports keep their own cores; they do not move onto the kit.
+- Speed from nuclear_rust_strike (its mission ~330 -> ~520 fps): x87 24-bit rounding inline,
+  x87 registers cached along straight runs, dense `rt_lookup`, turn slice and quick Glide
+  imports, `on_main` per thread, uniform lookups cached (window blit), sampling profiler
+  (`SAMPLE`), `DUMP`. fcop_plain checked: menu and first mission.
 
 ## Next
 
