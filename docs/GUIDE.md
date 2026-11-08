@@ -173,12 +173,23 @@ Rauch, und der Autopilot des Hakens machte nie einen Schritt (`256 / 0x114 = 0`)
    Matrix-Funktion des Spiels abschreiben, gegen ihr Ergebnis prüfen) und die Kamera vom
    gemerkten Punkt aus setzen. Erkennen: pro Logik-Frame Kamera- und Spieler-Ort loggen;
    schwanken die Schritte der Kamera, die des Spielers nicht, liegt es in der Logik.
+8. **Eigene Pause (Overlay-Menü) wie die Pause des Spiels.** Hält ein eigenes Menü die
+   Logik an, darf die feste Logik-Uhr danach nicht um die Pause hinter der Uhr des Spiels
+   (`clock`, GetTickCount) zurückbleiben. Das Spiel liest beide: Nuclear Strikes Esc-Menü
+   setzt beim Fortsetzen den Missionsstart aus der echten Uhr (`strikeClockPause_`), die
+   Missionszeit aus der nachgehenden Logik-Uhr lief dann rückwärts, ein Zeitschritt unter 0
+   ließ `Slerp_` rund 4 Milliarden Mal laufen: das Spiel fror ein. Richtig: die Pause so
+   nachbilden wie das Spiel selbst. Die Logik-Uhr springt nach der Pause auf die echte Uhr
+   vor (in ganzen Ticks des Spiels), und die Startzeiten, von denen das Spiel seine Zeit
+   abzieht (Missionsstart, letzter Tick), rücken um dieselbe Pause weiter. Testen: eigenes
+   Menü auf und zu, danach das Pausenmenü des Spiels auf und zu.
 
 Fehlerbilder: Schlieren (etwas wird in Zwischenbildern nicht gezeichnet, das Spiel löscht den
 Bildschirm nicht), Fächer (Matrix elementweise gemischt), fehlende Töne (Änderungen anderer
 Threads zurückgesetzt), Absturz nach Speicheranforderung 0 (Heap-Listen zurückgesetzt), die
 Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird zu 0), Zittern
-nur in Kurven (Kamera aus ganzzahligen Winkeln: Punkt 7).
+nur in Kurven (Kamera aus ganzzahligen Winkeln: Punkt 7), Einfrieren nach eigenem Menü und
+Pausenmenü des Spiels (Logik-Uhr geht nach: Punkt 8).
 
 ## 9. Ton, Video, Netzwerk, Installation
 

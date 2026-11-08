@@ -96,6 +96,14 @@ White. Most apply to any game of that time. Add new ones here.
   own matrix: one's own rounding times the distance is noise again), interpolate the fine
   angles, build the matrix in floats (checked against the game's), place the camera from
   that point (Nuclear Strike's `pictures.rs` `cam_update`/`view`).
+- A pause of one's own (an overlay menu stopping a fixed-rate logic clock) must leave that
+  clock even with the game's real clock afterwards: the game reads both. Nuclear Strike's
+  Esc menu set the mission start from the real clock on resuming (`strikeClockPause_`); with
+  the logic clock lagging by the pause the mission time went back, a negative time step ran
+  `Slerp_` some 4 billion times and the game froze. Do as the game's own pause: move the
+  logic clock up to the real one (whole game ticks) and the start times the game subtracts
+  (mission start, last tick) by the pause (nuclear_rust_strike's `frames.rs`
+  `logic_frame_us`). Test: own menu open and closed, then the game's pause menu.
 - A PlayStation port may divide by zero where the PlayStation did not trap (a point at the
   camera's depth): report it once and divide by 1 rather than stop (nuclear_rust_strike's
   `lift.rs` `div` and its event handler; the kit's lifter still stops).
