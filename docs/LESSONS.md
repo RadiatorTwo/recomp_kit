@@ -110,6 +110,24 @@ White. Most apply to any game of that time. Add new ones here.
 - Generated code must not hold host addresses as constants if it is cached: statics move from
   run to run.
 
+## Widescreen
+
+- Look for a separate x scale of the projection before hooking every projection: Nuclear
+  Strike's `View_SetWindow_` makes x and y scales from the view window and every projection
+  (fixed point and x87 assembly) reads them. Narrowing that one value by (4/3)/aspect (and
+  what the game derives from it: clip margin and bound) was the whole Hor+ projection.
+- The HUD may share the 3D picture's ordering table: no window switch or draw call to tell
+  them apart. Tag the primitives allocated while the HUD function runs and switch the view
+  per primitive at render time (nuclear_rust_strike `wide.rs`). Clear the tags when the HUD
+  begins, not at the frame's end: the allocator reuses addresses every frame.
+- Give the HUD the 4:3 projection scale while it runs: it sizes sprites and places marks with
+  it, and marks projected that way and drawn unstretched land on the stretched 3D picture.
+- Visible-area tables sized at level start (Nuclear Strike's tile count for TileMgr) cannot
+  grow later: allocate for at least 16:9 at the start, widen up to that afterwards.
+- `window_size()` called from the game thread returned a default (1280x960) in an earlier
+  version: the Glide target never followed the real window. Read the size the window's thread
+  last drew at.
+
 ## Process
 
 - Back up the game's settings files (key bindings!) before tests that start the game; some

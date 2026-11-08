@@ -191,6 +191,43 @@ Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird z
 nur in Kurven (Kamera aus ganzzahligen Winkeln: Punkt 7), Einfrieren nach eigenem Menü und
 Pausenmenü des Spiels (Logik-Uhr geht nach: Punkt 8).
 
+## 8c. Breitbild (Hor+)
+
+Ziel: links und rechts mehr sehen, nichts verzerrt, das HUD bleibt unverzerrt (in der
+4:3-Mitte oder an den Rändern). Vorbilder: future_rust_cop `wide.rs`/`walker.rs`,
+nuclear_rust_strike `wide.rs`.
+
+1. **Die x-Skala der Projektion finden.** Viele Spiele haben getrennte Skalen für x und y
+   (Nuclear Strike: `View_SetWindow_` rechnet sie aus dem Sichtfenster, alle Projektionen
+   lesen sie). Diese x-Skala mal k = (4/3) / Seitenverhältnis, dazu Werte, die das Spiel aus
+   ihr ableitet (Clip-Rand, rechte Clip-Grenze). Gibt es keine solche Skala: die
+   Kamera-x vor jeder Projektion und jedem Sichtbarkeitstest mal k (Future Cop).
+2. **Breit zeichnen.** Das Glide-Ziel bekommt das Seitenverhältnis des Fensters
+   (`glide.rs` `resize(aspect, h)`), das 3D-Bild wird über die ganze Breite gestreckt
+   (`View::Full`). Weil die x-Skala um k schmaler ist, stimmen die Proportionen wieder.
+3. **HUD erkennen.** Primitive des HUD in `View::Hud(0.5)` zeichnen (4:3-Mitte). Wie man sie
+   erkennt, hängt vom Spiel ab: Future Cop über die Displayliste (`walker.rs`), Nuclear Strike
+   über die Primitive, die während der HUD-Funktion angelegt werden (Allokator gehookt,
+   Adressen in einer Menge; Menge zu Beginn des HUD leeren), und die unter einem anderen
+   Sichtfenster (Meldungsfenster). Umschalten beim Zeichnen jedes Primitivs.
+4. **Während das HUD läuft, die 4:3-Skala.** Das HUD liest die Projektionsskala auch
+   (Sprite-Größen, Marken). HUD-Marken, die aus 3D-Positionen projiziert und unverzerrt
+   gezeichnet werden, landen mit der 4:3-Skala genau dort, wo das gestreckte 3D-Bild das
+   Objekt zeigt. Wurden ihre Positionen schon im 3D-Durchgang (schmal) berechnet, muss man sie
+   verschieben (Future Cop `to_screen`: x' = cx + (x − cx) / k).
+5. **Sichtbarkeit verbreitern.** Was das Spiel vorab aussortiert (Kacheln vor der Kamera,
+   Sichtkegel), um 1/k breiter machen. Achtung: Mengen, nach denen das Spiel beim Levelstart
+   Speicher anlegt (Nuclear Strike: Kachelzahl für TileMgr), für das breiteste erwartete
+   Verhältnis anlegen (mindestens 16:9), später nur bis dahin verbreitern.
+6. **Nur im Spiel breit.** Menüs, Videos und Texte bleiben 4:3: breit nur, solange 3D/HUD
+   gezeichnet wird (Nuclear Strike: HUD in den letzten 250 ms gezeichnet), Aspekt bei jedem
+   Swap für das nächste Bild festlegen. Mit Zwischenbildern (8b): Änderungen an statischen
+   Daten vor dem Sichern des Bildes machen, sonst setzt das Zurückschreiben sie zurück.
+
+**Fertig, wenn** im 16:9-Fenster der Rotor/die Räder rund sind, Gelände bis an die Ränder
+reicht, HUD und Meldungsfenster unverzerrt sind und Menüs 4:3 bleiben. Prüfen: an- und
+ausschalten, Pausenmenü, Zielmarken über Gegnern.
+
 ## 9. Ton, Video, Netzwerk, Installation
 
 - DirectSound und PlaySound: fertig (`dsound.rs`, Mischung auf cpal).
