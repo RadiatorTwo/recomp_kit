@@ -161,11 +161,24 @@ Rauch, und der Autopilot des Hakens machte nie einen Schritt (`256 / 0x114 = 0`)
 6. **Daten, die das Zeichnen für den nächsten Frame vorbereitet** (ein Gelände mit zwei
    Puffern): Zwischenbilder zeichnen aus dem Stand vor dem Zeichnen des Logik-Frames
    (vorher sichern, im Zwischenbild einsetzen, danach zurück). Sonst schmiert das Bild.
+7. **Kamera aus den feinsten Werten des Spiels.** Viele Spiele führen Winkel intern genauer
+   (Festkomma 16.16) als die Kamera, die sie daraus bauen (ganze 1/4096 Umdrehungen). In
+   einer Kurve dreht die Kamera dann ungleichmäßig (7, 8, 6, 8 pro Frame), und eine Kamera,
+   die im Abstand um den Spieler kreist, springt mit: das Bild zittert in Kurven, auch bei
+   perfekter Interpolation (Nuclear Strike: `StrkCam_Update_` hält `[0x52301c]..` in
+   16.16, `Camera_SetYPR_` bekommt `>> 16`). Abhilfe nur für die Anzeige: pro Logik-Frame
+   den verfolgten Punkt merken (Kamera-Ort minus ihr Versatz, mit der *Matrix des Spiels*
+   gerechnet, nicht einer eigenen: deren Rundung mal Abstand rauscht wieder), im Bild die
+   feinen Winkel interpolieren, die Matrix selbst in Gleitkomma bauen (Formel aus der
+   Matrix-Funktion des Spiels abschreiben, gegen ihr Ergebnis prüfen) und die Kamera vom
+   gemerkten Punkt aus setzen. Erkennen: pro Logik-Frame Kamera- und Spieler-Ort loggen;
+   schwanken die Schritte der Kamera, die des Spielers nicht, liegt es in der Logik.
 
 Fehlerbilder: Schlieren (etwas wird in Zwischenbildern nicht gezeichnet, das Spiel löscht den
 Bildschirm nicht), Fächer (Matrix elementweise gemischt), fehlende Töne (Änderungen anderer
 Threads zurückgesetzt), Absturz nach Speicheranforderung 0 (Heap-Listen zurückgesetzt), die
-Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird zu 0).
+Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird zu 0), Zittern
+nur in Kurven (Kamera aus ganzzahligen Winkeln: Punkt 7).
 
 ## 9. Ton, Video, Netzwerk, Installation
 

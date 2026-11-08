@@ -88,6 +88,14 @@ White. Most apply to any game of that time. Add new ones here.
 - Pictures: interpolate a frame late, only while drawing; quaternions for rotations; put back
   static data (not a memory manager's lists), hold the turn meanwhile; draw from the data a
   double-buffered renderer had before the frame's own drawing.
+- Shaking only in turns, with interpolation working: the game's camera may be built from
+  whole angle units (1/4096 turn) cut from finer ones it keeps (16.16), so it turns unevenly
+  per frame and, orbiting the player at a distance, its place jumps. Log camera and player
+  per logic frame: uneven camera steps with smooth player steps mean the logic. For the
+  pictures only: note the point followed (camera less its offset, computed with the game's
+  own matrix: one's own rounding times the distance is noise again), interpolate the fine
+  angles, build the matrix in floats (checked against the game's), place the camera from
+  that point (Nuclear Strike's `pictures.rs` `cam_update`/`view`).
 - A PlayStation port may divide by zero where the PlayStation did not trap (a point at the
   camera's depth): report it once and divide by 1 rather than stop (nuclear_rust_strike's
   `lift.rs` `div` and its event handler; the kit's lifter still stops).
