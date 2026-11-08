@@ -16,6 +16,15 @@ White. Most apply to any game of that time. Add new ones here.
 - Imports give up the turn while they run. Glide's drawing calls never wait: they keep it
   (`Thunk::quick`, `SLOW_GLIDE` lists the ones that may wait), else hundreds of thousands of
   hand-overs a second.
+- A message loop of PeekMessage and Sleep(0) must not spin: as `yield_now` (the kit's Sleep(0)
+  still is) Nuclear Strike's WinMain thread (priority LOWEST) took the turn ~340 000 times a
+  second while the game thread was in host code, kept a core busy and made the game thread
+  ~10% slower. There Sleep(0) sleeps 1 ms when another guest thread runs or the caller is
+  below normal priority (needs SetThreadPriority kept per guest thread). Count turn takes per
+  thread when the frame rate swings.
+- The rest of such swings (phases of seconds, same work a frame) is where Windows puts the
+  game thread: on a core's second hyperthread beside another process the recompiled code was
+  ~35% slower; pinning it to one core helped (~375 -> ~425 fps) but cannot keep others off.
 
 ## x87
 
@@ -25,6 +34,29 @@ White. Most apply to any game of that time. Add new ones here.
   when the double lands on a 24-bit number or a middle); only other modes, subnormals and
   infinities call `rt_fpu_round` (it took 24% of Nuclear Strike's game thread). Results are
   often exact 24-bit numbers: without the error's sign that case went to the slow call.
+  The usual cases cover them too: on a 24-bit number with no error (the error from fma/TwoSum
+  only a branch's condition), and exact zeros (x * 0); in Nuclear Strike ~20 million
+  operations a second had gone to the slow `round24`, its branch mispredicted. Keep the cut
+  in a vector register (`vpaddq`/`vpand`): moving the result to an integer register and back
+  put ~8 cycles on every operation of a chain.
+- Cranelift makes a pure value where it is first used: values made once for a run (the
+  rounding mode's tests) were made again in every operation's block, as those do not
+  dominate each other. A store of them (`Cpu::x87_mode`, read by nobody) pins them down.
+- Under 0xc7f a straight run with 4 or more x87 operations is lifted twice (`rz_runs`,
+  `versions`): if the control word truncates to 24 bits, `rt_mxcsr_rz` sets the SSE rounding
+  to truncate as well, and each operation is the double one cut to 24 bits (truncating twice
+  is truncating once), tested only for a normal result (`arith_rz`); a float store is a
+  plain fdemote. Nuclear Strike's projection routines: 16.6% -> 7.1% of the game thread.
+  Traps: Cranelift moves and shares pure float operations, so write the cache back before
+  the switch (nothing computed under the old rounding reaches the run) and let each result
+  feed a branch (made after the switch); our own Rust helpers (`rt_fpu_round`) must set the
+  default rounding themselves; keep out what the SSE rounding would change wrongly (fild
+  qword's conversion) and what changes the control word (fldcw, helpers).
+- The reference had two wrong answers the versioned code showed: a float store beyond a
+  float's range under truncation gives the largest float (masked overflow), not infinity;
+  and a truncated double overflow gives the largest double, which must go to the slow path.
+- `tests/x87_bench.rs` (`--ignored --nocapture`) times a projection-like loop under 0xc7f
+  and 0x27f: a steady number, unlike a game's frame rate.
 - The register stack lives in Cranelift values along straight runs of instructions
   (`x87::Cache`), with the control word and its rounding tests; it is written back before
   branch targets, calls, helpers and anything not a plain integer instruction (renderers'
@@ -46,7 +78,15 @@ White. Most apply to any game of that time. Add new ones here.
   (recompiled function, or host module unwound to our own frame), `<PREFIX>_SAMPLE_RAW=<file>`
   all samples; symbolise our own addresses with a build with
   `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` and llvm-symbolizer. `<PREFIX>_DUMP=<hex>`
-  disassembles one function's compiled code.
+  disassembles one function's compiled code; with both set the sampler counts that
+  function's samples by offset in its machine code (the dump's offsets).
+- Count before optimising a path: a temporary counter in the slow call (`rt_fpu_round`, the
+  Glide flush's reasons) told what a profile could not (which operations, which state change).
+- A Glide renderer drew ~250 batches a picture because the game changed the alpha test
+  (grAlphaTestFunction / ReferenceValue) between almost all primitives: state a game changes
+  per primitive belongs in the vertex data, not in uniforms that end a batch (the driver's
+  draw calls were ~10% of the game thread). A mapped ring buffer and cached uniforms gained
+  ~3% beside it. (The kit's Glide has no alpha test yet: add it that way.)
 - NVIDIA's glGetUniformLocation makes system calls: ~10% of a game thread at a few lookups a
   frame. Ask once (`gl::uniform`).
 - Indirect calls (function pointers, Glide through GetProcAddress) look the target up:

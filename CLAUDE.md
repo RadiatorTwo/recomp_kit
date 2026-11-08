@@ -33,7 +33,9 @@ EXE's function list belongs in the game's repository, not here).
   - `lift.rs`, `lift/x87.rs` x86 -> Cranelift IR; `unsupported()` checks an instruction.
     x87 registers are cached in Cranelift values along straight runs (`x87::Cache`, written
     back at `Lifter::joins` and before non-plain instructions; `X87_CACHE` off for tests);
-    24-bit rounding inline (`round24_between`, `round24`).
+    24-bit rounding inline (`round24_between`, `round24`); straight runs under 0xc7f lifted
+    twice with the SSE rounding set to truncate (`rz_runs`, `versions`, `arith_rz`,
+    `rt_mxcsr_rz`); `tests/x87_bench.rs` times it (ignored).
   - `smc.rs` self-modifying code; what a game has beyond `mov [code], x` comes as `SmcSpec`.
   - `jit.rs` compiles everything (cache file `RCMPJIT1`), hooks as `(address, fn)`;
     `<PREFIX>_DUMP=<hex>` disassembles one function's code. `rt_lookup` reads a dense table.

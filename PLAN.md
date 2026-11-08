@@ -18,6 +18,12 @@
   imports, `on_main` per thread, uniform lookups cached (window blit), sampling profiler
   (`SAMPLE`), `DUMP`. fcop_plain checked: menu and first mission.
 
+- Speed from nuclear_rust_strike (2026-11-08, its mission +18% and +10% fps in A/B runs): 24-bit rounding's usual cases cover exact results and zeros, cut in a vector
+  register, mode made once a run (`Cpu::x87_mode`); straight runs under 0xc7f lifted twice
+  with the SSE rounding set to truncate; `rt_fpu_round` corrected for float stores beyond a
+  float's range; `tests/x87_bench.rs`; sampler by offset with `DUMP`. LESSONS: the Glide
+  alpha test as vertex data (the kit's Glide has none yet).
+
 - Pictures between logic frames from nuclear_rust_strike: `platform::tween` (`LogicClock`,
   `Hist`, `mix_rotation`, `Statics`, `call_regs`), `hold_turn` / `without_turn`; GUIDE.md 8b,
   LESSONS. The game-specific part (which functions draw, what to interpolate) stays in ports.
@@ -37,5 +43,8 @@ Grow the kit for future games, one piece at a time, with tests:
    - nuclear_rust_strike: Watcom images, CodeView names, Miles Sound System.
    - future_rust_cop: the Glide effect points (vertex depth, `post_3d`, primitive census) if a
      Glide game wants its effects.
-2. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
-3. Video formats beyond MPEG-1 (Bink, Smacker, AVI) when a game needs them.
+2. From nuclear_rust_strike: SuspendThread/ResumeThread, thread priorities (turn by
+   priority), and its Sleep(0) (sleeps when another guest thread runs or the caller is below
+   normal priority): the kit's Sleep(0) still spins (LESSONS, Threads).
+3. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
+4. Video formats beyond MPEG-1 (Bink, Smacker, AVI) when a game needs them.
