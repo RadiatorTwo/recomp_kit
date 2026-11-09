@@ -31,6 +31,8 @@ pub struct Gl {
     /// what is shown: a texture, its size, whether its pixels are 0RGB/ARGB words (2D frames:
     /// the bytes are B G R A), and the gamma to show it with
     pub shown: (glow::Texture, u32, u32, bool, f32),
+    /// the swap interval set: 1 (vsync) or 0
+    vsync: bool,
 }
 
 thread_local! {
@@ -155,7 +157,7 @@ impl Gl {
         upload(&gl, frame, &vec![0; 640 * 480], 640, 480);
         let overlay = texture(&gl, true);
         let video = texture(&gl, true);
-        let g = Gl { gl, surface, context, blit, vao, frame, overlay, has_overlay: false, video, video_size: None, shown: (frame, 640, 480, true, 1.0) };
+        let g = Gl { gl, surface, context, blit, vao, frame, overlay, has_overlay: false, video, video_size: None, shown: (frame, 640, 480, true, 1.0), vsync: false };
         (win, g)
     }
 
@@ -265,7 +267,24 @@ impl Gl {
                 .collect();
             (px, rw as u32, rh as u32)
         });
+        let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
+        if vsync != self.vsync {
+            self.vsync = vsync;
+            let interval = if vsync { SwapInterval::Wait(NonZeroU32::MIN) } else { SwapInterval::DontWait };
+            let _ = self.surface.set_swap_interval(&self.context, interval);
+        }
         let _ = self.surface.swap_buffers(&self.context);
         out
     }
+}
+
+/// Vsync: the picture changes only at the display's refresh (no tearing in fullscreen; in a
+/// window the desktop's compositor does that anyway). Off by default: the game paces itself.
+static VSYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Vsync on or off, from the next swap. The pace stays the game's (or the port's): while the
+/// game is slower than the display the driver queues a picture and the swap returns at once,
+/// so the swap's return does not say when the refresh was (LESSONS, Vsync).
+pub fn set_vsync(on: bool) {
+    VSYNC.store(on, std::sync::atomic::Ordering::Relaxed);
 }

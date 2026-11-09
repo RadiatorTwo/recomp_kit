@@ -27,7 +27,8 @@ EXE's function list belongs in the game's repository, not here).
 
 - `crates/recomp`: the core, no game and no Windows in it.
   - `image.rs` PE images (sections with an `exec` flag: `Image::is_code`; imports, exports,
-    resources, `rebase`, `combine` for DLLs), `load_functions(json)`, `set_symbols(txt)`.
+    resources, `rebase`, `combine` for DLLs, `patch` (code bytes changed before compiling,
+    old bytes checked: `Game::code_patches`)), `load_functions(json)`, `set_symbols(txt)`.
   - `discover.rs` the code: functions from a list (`Program::build`) plus extra entries;
     `find_functions(code, seeds)` without a list; jump tables end decoding (`table_bytes`).
   - `lift.rs`, `lift/x87.rs` x86 -> Cranelift IR; `unsupported()` checks an instruction.
@@ -50,7 +51,7 @@ EXE's function list belongs in the game's repository, not here).
   start: setup, compile with cache, run), `setup.rs` (game files, CD images), `splash.rs`,
   `iso.rs`, `mpeg/`, `platform/` (kernel32, user32, gdi32, advapi32, ddraw, dsound, dinput,
   dshow, dplay, misc, window, gl, glide (the version before Future Cop's effects), display,
-  dialog, sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
+  dialog, gl (`set_vsync`: swap interval 1, the pace stays the game's), sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
   savestate (the game calls `level_start` / `frame`), cheats (`Game::cheats`, run by the game's
   hook with `run_pending`), setting (registry + switch), hd (replacement textures), tween
   (pictures between logic frames: `LogicClock`, `Hist`, interpolation with quaternions,

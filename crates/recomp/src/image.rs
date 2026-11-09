@@ -141,6 +141,27 @@ impl Image {
         Image { data, base: parts[0].base, entry: parts[0].entry, sections }
     }
 
+    /// Replaces the bytes at a virtual address (in a section's raw data) when they are `old`:
+    /// a change to the game's code before it is compiled (`Game::code_patches`). Other bytes
+    /// there (another version of the EXE) are an error, nothing is changed.
+    pub fn patch(&mut self, addr: u32, old: &[u8], new: &[u8]) -> Result<(), String> {
+        if old.len() != new.len() {
+            return Err(format!("patch at {addr:#x}: {} bytes for {}", new.len(), old.len()));
+        }
+        let s = self
+            .sections
+            .iter()
+            .find(|s| addr >= s.va && addr as u64 + old.len() as u64 <= s.va as u64 + s.rsize as u64)
+            .ok_or_else(|| format!("patch at {addr:#x}: not in a section's data"))?;
+        let at = (s.raw + addr - s.va) as usize;
+        let bytes = self.data.get_mut(at..at + old.len()).ok_or_else(|| format!("patch at {addr:#x}: past the file's end"))?;
+        if bytes != old {
+            return Err(format!("patch at {addr:#x}: {bytes:02x?} instead of {old:02x?}"));
+        }
+        bytes.copy_from_slice(new);
+        Ok(())
+    }
+
     pub fn byte(&self, addr: u32) -> u8 {
         self.read(addr, 1).map_or(0, |b| b[0])
     }

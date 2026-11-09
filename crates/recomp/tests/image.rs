@@ -98,3 +98,17 @@ fn combine() {
     assert_eq!(both.u32(0x2000_1010), 0x2000_1004);
     assert!(both.is_code(BASE + 0x1000) && both.is_code(0x2000_1000));
 }
+
+/// `Image::patch` changes code bytes only where they are what the port expects.
+#[test]
+fn patch_checks_old_bytes() {
+    let mut img = Image::parse(dll());
+    let at = BASE + 0x1000;
+    let old = img.read(at, 2).unwrap();
+    assert!(img.patch(at, &[old[0] ^ 0xff, old[1]], &[0x90, 0x90]).is_err());
+    assert_eq!(img.read(at, 2).unwrap(), old);
+    img.patch(at, &old, &[0xeb, 0x00]).unwrap();
+    assert_eq!(img.read(at, 2).unwrap(), [0xeb, 0x00]);
+    assert!(img.patch(BASE + 0x9000, &[0], &[0]).is_err());
+    assert!(img.patch(at, &[0xeb], &[0x90, 0x90]).is_err());
+}

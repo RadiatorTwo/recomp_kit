@@ -167,6 +167,42 @@ White. Most apply to any game of that time. Add new ones here.
 - `window_size()` called from the game thread returned a default (1280x960) in an earlier
   version: the Glide target never followed the real window. Read the size the window's thread
   last drew at.
+- Screens with a panel of their own (Nuclear Strike's cockpit HUD modes: a full-screen frame
+  around a smaller 3D window; mission menus) stay 4:3: stretched, the panel came out wide and
+  its parts tagged as HUD were drawn again in the middle. Switch to 4:3 before the screen
+  draws (hook the mode switch), not at the next swap.
+- Before widening HUD marks, check whether the HUD projects anything at all: Nuclear Strike's
+  HUD never calls a projection (its 3D sprites are sized by the x scale and stay round), so
+  there was nothing to move.
+
+## Drawing once
+
+- Many HUDs draw a panel whole once (after a mode change) and then only the parts that
+  change, trusting the card's buffers to keep the rest. Every time the port makes its render
+  target anew (aspect, window size, MSAA samples) that panel is gone: find the game's "draw
+  everything" flag (Nuclear Strike `[0x51f1b9]`, read by HUDUserDraw_) and set it for the next
+  two HUD frames (one per buffer). A test passed at 640x480 only by luck: an extra picture
+  between logic frames happened to draw the panel a second time.
+
+## Game checks
+
+- A mode the game allows at one resolution only (Nuclear Strike: cockpit HUD at 640x480)
+  may well work at any: its layout was scaled by the screen size already. Patch the check
+  out before compiling (`Game::code_patches`, the old bytes are checked), look for all of them
+  (Nuclear Strike had two: one made the panel at level start, one let the key choose the
+  mode; with only the second the game read a null panel and crashed).
+- Patches written into guest memory after the start do not reach code: it was compiled
+  ahead. Code patches go into the image before compiling, and so into the cache key.
+
+## Vsync
+
+- With vsync the swap does not tell when the refresh is: while the game is slower than the
+  display the driver queues the picture and returns at once (Nuclear Strike at 480 Hz: swap
+  and glFinish after it never waited). Keep the port's own pacing and only set the swap
+  interval; when the pace runs ahead, the swap waits and the pace starts again from then.
+- In a window the desktop's compositor already keeps tearing away; vsync matters in
+  (borderless) fullscreen. With G-Sync/FreeSync there is no tearing below the display's
+  maximum anyway: make vsync a setting of its own (off: no cap), not tied to a frame rate.
 
 ## Process
 

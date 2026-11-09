@@ -65,6 +65,15 @@ pub trait Game: Sync {
         SmcSpec::default()
     }
 
+    /// Changes to the game's code before it is compiled: (address, its bytes, the new ones).
+    /// Code is compiled ahead, so a change written into guest memory later (`on_start`) does
+    /// not reach it. For checks the port does not want (a mode the game allows only at one
+    /// resolution, ...): a jump over the check, nops. The old bytes are checked: another
+    /// version of the EXE stops with an error instead of being patched wrong.
+    fn code_patches(&self) -> Vec<(u32, &'static [u8], &'static [u8])> {
+        Vec::new()
+    }
+
     /// Game functions replaced by Rust functions (`rt::call_original` runs the original).
     fn hooks(&self) -> Vec<(u32, Hook)> {
         Vec::new()

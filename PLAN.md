@@ -28,6 +28,10 @@
   `Hist`, `mix_rotation`, `Statics`, `call_regs`), `hold_turn` / `without_turn`; GUIDE.md 8b,
   LESSONS. The game-specific part (which functions draw, what to interpolate) stays in ports.
 
+- From nuclear_rust_strike (2026-11-09): code patches before compiling (`Image::patch`,
+  `Game::code_patches`, test), `gl::set_vsync`; GUIDE 8c point 7, 8d, 8e; LESSONS (screens of
+  their own stay 4:3, drawing once, game checks, vsync).
+
 ## Next
 
 Grow the kit for future games, one piece at a time, with tests:

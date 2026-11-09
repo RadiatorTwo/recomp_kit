@@ -82,10 +82,14 @@ fn start() -> u32 {
             std::process::exit(2);
         }
     };
-    let img = Image::load(&exe).unwrap_or_else(|e| panic!("{}: {e}", exe.display()));
+    let mut img = Image::load(&exe).unwrap_or_else(|e| panic!("{}: {e}", exe.display()));
     // the addresses the game knows are its reference version's: where they are in this one
     if let Some(v) = recomp::ver::of_exe(id.versions, &img.data) {
         recomp::ver::select(v);
+    }
+    // before the cache key: patched code is compiled code of its own
+    for (addr, old, new) in g.code_patches() {
+        img.patch(addr, old, new).unwrap_or_else(|e| panic!("{e}"));
     }
     let ranges = g.functions(&img);
     platform::dinput::start(); // gamepads are found while we compile

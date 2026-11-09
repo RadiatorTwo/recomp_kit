@@ -224,9 +224,34 @@ nuclear_rust_strike `wide.rs`.
    Swap für das nächste Bild festlegen. Mit Zwischenbildern (8b): Änderungen an statischen
    Daten vor dem Sichern des Bildes machen, sonst setzt das Zurückschreiben sie zurück.
 
+7. **Eigene Bildschirme bleiben 4:3.** Alles mit eigenem Rahmen über den ganzen Bildschirm
+   (Missionsmenü, Cockpit-HUD mit kleinerem 3D-Fenster) auf 4:3 schalten, bevor es zeichnet:
+   die Umschalt-Funktion hooken. Zeichnet das Spiel den Rahmen nur einmal und danach nur
+   geänderte Teile, nach jedem Neuanlegen des Render-Ziels sein "alles zeichnen"-Flag setzen
+   (LESSONS, Drawing once).
+
 **Fertig, wenn** im 16:9-Fenster der Rotor/die Räder rund sind, Gelände bis an die Ränder
 reicht, HUD und Meldungsfenster unverzerrt sind und Menüs 4:3 bleiben. Prüfen: an- und
-ausschalten, Pausenmenü, Zielmarken über Gegnern.
+ausschalten, Pausenmenü, Zielmarken über Gegnern (erst nachsehen, ob das HUD überhaupt
+etwas projiziert), alle HUD-Modi des Spiels in jeder Spielauflösung, Fenstergröße und MSAA
+im laufenden Spiel ändern.
+
+## 8d. Sperren des Spiels umgehen
+
+Erlaubt das Spiel etwas nur in einer Auflösung oder Konfiguration (Nuclear Strike: Cockpit-HUD
+nur bei 640x480), ist der Rest oft schon allgemein (Positionen nach Bildschirmgröße). Dann die
+Prüfung vor dem Kompilieren überspringen: `Game::code_patches` liefert (Adresse, alte Bytes,
+neue Bytes), etwa ein `jmp` über die Prüfung und `nop`s. Alle Stellen suchen
+(`rtools dis`, nach den Vergleichswerten wie `280h`/`1E0h`), sonst fehlt Vorbereitetes und
+das Spiel liest Nullzeiger. Patches in den Speicher (`on_start`) erreichen den schon
+kompilierten Code nicht.
+
+## 8e. Vsync
+
+`gl::set_vsync(true)` setzt das Swap-Intervall 1 (ab dem nächsten Swap). Eigene Einstellung,
+nicht an die Bildrate gekoppelt (mit G-Sync will man es oft aus). Das Takten bleibt beim
+Port: der Treiber puffert Bilder, der Swap kehrt sofort zurück, solange das Spiel langsamer
+als der Bildschirm ist (LESSONS, Vsync).
 
 ## 9. Ton, Video, Netzwerk, Installation
 
