@@ -204,6 +204,23 @@ White. Most apply to any game of that time. Add new ones here.
   (borderless) fullscreen. With G-Sync/FreeSync there is no tearing below the display's
   maximum anyway: make vsync a setting of its own (off: no cap), not tied to a frame rate.
 
+## Modern effects
+
+- **Rule: tell the game's effects apart by the game's own functions, never by colour.**
+  Hook the function that draws (or creates) an effect, note which effect is drawing, and tag
+  the primitives allocated meanwhile (allocator hook: primitive -> effect; renderer hook: the
+  one drawn now). Colour filters failed twice: Future Cop's heat shimmer, and Nuclear
+  Strike's dynamic lights, where a boat's wake and water spray (additive, grey-blue) lit the
+  water like fire; a "warm only" rule left them half in. Nuclear Strike: all effects are
+  pyros drawn by one function (0x430970), the pyro's sequence at +0x38 says which effect;
+  a list of sequences gives light (nuclear_rust_strike `lights.rs`).
+- Find that function by logging which code allocates the effect primitives (the allocator's
+  return address, counted by blend mode), then read its record for a kind/sequence field.
+  Debug names help (Nuclear Strike's `pyro*`); the effect kinds usually come from one data
+  file and are the same in every level.
+- Keep a log of the effects by kind with their counts (`NSTRIKE_LIGHT_LOG=1`) and an
+  environment override of the list: the user names what misbehaves, the log says its kind.
+
 ## Process
 
 - Back up the game's settings files (key bindings!) before tests that start the game; some
