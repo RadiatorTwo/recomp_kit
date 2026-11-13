@@ -56,6 +56,9 @@ pub fn run(g: &'static dyn Game) -> ! {
         splash::child();
         std::process::exit(0);
     }
+    // early, before other allocations may take its place, and before compiling: the code
+    // takes the base as a constant when it is at rt::FIXED_BASE
+    platform::reserve_memory();
     output();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = g.command(&args) {
@@ -130,5 +133,7 @@ fn cache_key(img: &Image) -> Option<[u8; 32]> {
     let mut h = Sha256::new();
     h.update(&own);
     h.update(&img.data);
+    // the memory's base, a constant in the code when fixed
+    h.update(recomp::lift::FIXED_BASE.load(std::sync::atomic::Ordering::Relaxed).to_le_bytes());
     Some(h.finalize().into())
 }

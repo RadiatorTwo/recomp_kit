@@ -32,6 +32,15 @@
   `Game::code_patches`, test), `gl::set_vsync`; GUIDE 8c point 7, 8d, 8e; LESSONS (screens of
   their own stay 4:3, drawing once, game checks, vsync).
 
+- Speed from nuclear_rust_strike (2026-11-13; it went ~175 -> ~790 fps without effects):
+  guest memory at a fixed base (a constant in the code), hook index in the stub, thunks per
+  thread, the turn by priority with Suspend/ResumeThread and POLL cleared while the slice
+  lasts, Sleep(0) that sleeps, Glide's unchanged texture rows skipped, `tween::Statics` with
+  one buffer and the write watch, `tween::Pacer` (sleep and spin; pictures only when shown
+  before the next logic frame). GUIDE: goal "better than the original" and its rules
+  (section 0), 8a speed before effects (measure, per-call costs, hot game functions in Rust
+  checked identical), 11 modern effects. Not yet run on a game (fcop_plain).
+
 ## Next
 
 Grow the kit for future games, one piece at a time, with tests:
@@ -47,8 +56,11 @@ Grow the kit for future games, one piece at a time, with tests:
    - nuclear_rust_strike: Watcom images, CodeView names, Miles Sound System.
    - future_rust_cop: the Glide effect points (vertex depth, `post_3d`, primitive census) if a
      Glide game wants its effects.
-2. From nuclear_rust_strike: SuspendThread/ResumeThread, thread priorities (turn by
-   priority), and its Sleep(0) (sleeps when another guest thread runs or the caller is below
-   normal priority): the kit's Sleep(0) still spins (LESSONS, Threads).
+2. From nuclear_rust_strike: Glide on the game's own thread with a shared context and a
+   present thread (`window::present_later`, SwapBuffers off the game thread: +20%), Glide's
+   alpha test as vertex data and batches ended only by blend/chroma/filter/clamp/clip,
+   uploads staged until a texture's next use, glFlush only while another thread draws, the
+   sampler's 40-frame unwind; its effects (ao, lights, shadows, bloom, heat, zbuffer,
+   particles) when a game wants them.
 3. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
 4. Video formats beyond MPEG-1 (Bink, Smacker, AVI) when a game needs them.

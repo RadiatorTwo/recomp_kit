@@ -16,12 +16,20 @@ White. Most apply to any game of that time. Add new ones here.
 - Imports give up the turn while they run. Glide's drawing calls never wait: they keep it
   (`Thunk::quick`, `SLOW_GLIDE` lists the ones that may wait), else hundreds of thousands of
   hand-overs a second.
-- A message loop of PeekMessage and Sleep(0) must not spin: as `yield_now` (the kit's Sleep(0)
-  still is) Nuclear Strike's WinMain thread (priority LOWEST) took the turn ~340 000 times a
-  second while the game thread was in host code, kept a core busy and made the game thread
-  ~10% slower. There Sleep(0) sleeps 1 ms when another guest thread runs or the caller is
-  below normal priority (needs SetThreadPriority kept per guest thread). Count turn takes per
-  thread when the frame rate swings.
+- A message loop of PeekMessage and Sleep(0) must not spin: as `yield_now` Nuclear Strike's
+  WinMain thread (priority LOWEST) took the turn ~340 000 times a second while the game
+  thread was in host code, kept a core busy and made the game thread ~10% slower. The kit's
+  Sleep(0) sleeps 1 ms when another guest thread runs or the caller is below normal priority
+  (SetThreadPriority is kept per guest thread). Count turn takes per thread when the frame
+  rate swings.
+- The turn goes to waiters by priority (a higher one gets it at the holder's next loop head,
+  as Windows preempts), else after the slice, then politely (behind all waiters: no
+  starvation). SuspendThread stops a thread at its next loop head or before guest code after
+  an import, never in host code (it would hold our locks).
+- Loop heads must not call into the host while nothing can change: with a lower thread
+  waiting, `rt_yield` ran at every loop head (4.5 million calls a second, ~3% of the game
+  thread). The holder clears `POLL` while its slice lasts or it holds the turn; waiters wait
+  with a timeout of half a slice and set it again.
 - The rest of such swings (phases of seconds, same work a frame) is where Windows puts the
   game thread: on a core's second hyperthread beside another process the recompiled code was
   ~35% slower; pinning it to one core helped (~375 -> ~425 fps) but cannot keep others off.
@@ -91,6 +99,27 @@ White. Most apply to any game of that time. Add new ones here.
   frame. Ask once (`gl::uniform`).
 - Indirect calls (function pointers, Glide through GetProcAddress) look the target up:
   `rt_lookup` reads a dense table, thunks miss at once; a binary search there cost 7%.
+- The guest memory's base as a register: large functions (~50 KB of machine code) spilled it
+  and reloaded it from the stack at nearly every access. Reserved at `rt::FIXED_BASE`
+  (0x7fff0000, below 2 GB) it is a constant folded into each access's displacement (+11%).
+  Reserve it first thing (`run`), before other allocations take the place.
+- Per-call costs at ~2 million hooked calls and ~400 000 imports a second: a binary search
+  for the hook (now its index in the stub), the thunk table's lock (now a copy per thread),
+  an `Arc` clone of the thread's record at every loop head, the thread id from the system,
+  four SipHash maps per primitive. Each was 1-4%.
+- A game downloads the same texture rows again and again (Nuclear Strike marks a page's rows
+  dirty, its picture restore marks them again: ~30 000 single-row uploads a second, 87%
+  unchanged): compare with the kept raw texels and skip; upload the rest together.
+- A picture between logic frames saving and restoring 625 KB of static data: a fresh `Vec`
+  each time came from the system (page faults); keep one, and copy only the pages written
+  (`MEM_WRITE_WATCH`, `Memory::written`).
+- SwapBuffers costs 0.4 to 0.7 ms of the calling thread in the driver, also with nothing
+  else to do: show pictures from a present thread of one's own (nuclear_rust_strike
+  `window::present_later`).
+- Hot game functions rewritten in Rust (projections, polygon set-ups) gained 6-20% each.
+  Kept exact (same operations, order and rounding) and checked by a switch that runs both:
+  not one difference in millions of calls. Lifting longer x87 runs under 0xc7f (over
+  branches) gained nothing: the renderers' cost was their size, not the rounding.
 
 ## Windows
 

@@ -68,6 +68,14 @@ struct Texture {
     stamp: u64,
     /// its layer in the replacements' array, when parts of it are replaced (`hd.rs`)
     hd: Option<u32>,
+    /// the texels of its top level as last downloaded, in `format` (empty: not known): rows
+    /// downloaded again unchanged are skipped (Nuclear Strike marks a texture page's rows
+    /// dirty and downloads them again every frame, ~30 000 single-row uploads a second, ~87%
+    /// unchanged)
+    raw: Vec<u8>,
+    /// the rows of `raw` that are known
+    known: Vec<bool>,
+    format: u32,
 }
 
 /// Layers of the texture array: TMU memory holds 64 textures of 256x256 at 8 bits.
@@ -903,14 +911,31 @@ impl Glide {
 
     /// Texels into the texture at TMU address `addr` (rows `rows` of its top level, or all).
     fn download(&mut self, gl: &glow::Context, addr: u32, lod: u32, aspect: u32, format: u32, data: u32, rows: Option<(u32, u32)>) {
-        self.flush(gl);
         let (w, h) = lod_size(lod, aspect);
-        let bytes = w * h * bytes_per_texel(format);
+        let bpt = bytes_per_texel(format);
+        let bytes = w * h * bpt;
         self.downloads += 1;
         let stamp = self.downloads;
+        let (r0, r1) = rows.unwrap_or((0, h - 1));
+        let r1 = r1.min(h - 1);
+        // the same texels again: nothing to do (and no flush)
+        let src: Option<&[u8]> = (r0 <= r1).then(|| &*mem().slice(data, ((r1 - r0 + 1) * w * bpt) as usize));
+        let at = (r0 * w * bpt) as usize;
+        if let (Some(t), Some(src)) = (self.textures.get_mut(&addr), src) {
+            let known = t.known.get(r0 as usize..=r1 as usize).is_some_and(|k| k.iter().all(|&k| k));
+            if (t.w, t.h, t.bytes, t.format) == (w, h, bytes, format) && known && t.raw[at..at + src.len()] == src[..] {
+                t.stamp = stamp;
+                return;
+            }
+        }
+        self.flush(gl);
         let layer = match self.textures.get_mut(&addr) {
             Some(t) if (t.w, t.h, t.bytes) == (w, h, bytes) => {
                 t.stamp = stamp;
+                if t.format != format {
+                    t.known.fill(false);
+                    t.format = format;
+                }
                 t.layer
             }
             _ => {
@@ -923,17 +948,18 @@ impl Glide {
                     self.textures.remove(&a);
                     l
                 });
-                self.textures.insert(addr, Texture { layer, w, h, bytes, stamp, hd: None });
+                self.textures.insert(addr, Texture { layer, w, h, bytes, stamp, hd: None, raw: vec![0; bytes as usize], known: vec![false; h as usize], format });
                 layer
             }
         };
+        let Some(src) = src else { return };
+        {
+            let t = self.textures.get_mut(&addr).unwrap();
+            t.raw[at..at + src.len()].copy_from_slice(src);
+            t.known[r0 as usize..=r1 as usize].fill(true);
+        }
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.array));
-            let (r0, r1) = rows.unwrap_or((0, h - 1));
-            let r1 = r1.min(h - 1);
-            if r0 > r1 {
-                return;
-            }
             let n = ((r1 - r0 + 1) * w) as usize;
             let mut px = convert(format, data, n);
             let key = super::hd::hash(format, w, r1 - r0 + 1, mem().slice(data, n * bytes_per_texel(format) as usize));

@@ -55,12 +55,19 @@ impl LogicClock {
         s.map(|(start, n)| (start + Duration::from_nanos(self.frame_ns * n), n))
     }
 
-    /// At the start of a logic frame: `picture()` (draw and show one picture between frames)
-    /// while the picture after this one (`next_shown()`: the next swap's time) comes well
-    /// before the frame is due, then the wait (the turn handed over). Returns the frame's
-    /// number and its time since the first frame: a whole number of frames (a computer too
-    /// slow for the rate runs fewer frames, each a whole number of frames long).
-    pub fn frame(&self, mut picture: impl FnMut(), next_shown: impl Fn() -> Instant) -> (u64, Duration) {
+    /// At the start of a logic frame: pictures (`picture`) while one drawn now is shown before
+    /// the frame is due, then the wait (the turn handed over). `pacer` paces the pictures (its
+    /// `pace` at each buffer swap) at `period` (zero: unlimited). Returns the frame's number
+    /// and its time since the first frame: a whole number of frames (a computer too slow for
+    /// the rate runs fewer frames, each a whole number of frames long).
+    ///
+    /// A picture drawn now is shown at the swap after the one pending (`Pacer::next_shown`):
+    /// one whose swap came after the frame is due showed the game later than the newest logic
+    /// frame and was drawn at the newest frame's places instead (Nuclear Strike at 120 Hz:
+    /// steps of 0.69 and 0.31 frame alternating, a double image). Such a swap gets the new
+    /// frame instead: the logic runs at once, up to a period before it is due (its clock does
+    /// not change).
+    pub fn frame(&self, mut picture: impl FnMut(), pacer: &Pacer, period: Duration) -> (u64, Duration) {
         let frame = self.frame_time();
         let due = {
             let mut s = self.state.lock().unwrap();
@@ -72,15 +79,17 @@ impl LogicClock {
                 Some((start, n)) => start + frame * (n + 1) as u32,
             }
         };
+        let period = if period.is_zero() { frame / 4 } else { period };
         for _ in 0..16 {
-            if next_shown() + frame / 4 >= due {
+            if pacer.next_shown() + period >= due {
                 break;
             }
             picture();
         }
+        let start = due.checked_sub(period).unwrap_or(due);
         let now = Instant::now();
-        if now < due {
-            super::without_turn(|| std::thread::sleep(due - now));
+        if now < start {
+            super::without_turn(|| std::thread::sleep(start - now));
         }
         let mut s = self.state.lock().unwrap();
         let (start, n) = s.as_mut().unwrap();
@@ -99,6 +108,59 @@ impl LogicClock {
         let (due, _) = self.newest()?;
         let d = shown.saturating_duration_since(due).as_nanos() * 256 / self.frame_ns as u128;
         Some(d.min(256) as u32)
+    }
+}
+
+/// The pace of the pictures, called at each buffer swap (`pace`). A sleep may last a
+/// millisecond longer than asked: the last part before the due time is spun (Nuclear Strike
+/// at 240 fps: pictures 3.7 to 4.7 ms apart with a sleep, ~4.2 with the spin).
+pub struct Pacer {
+    next: Mutex<Option<Instant>>,
+}
+
+impl Pacer {
+    pub const fn new() -> Self {
+        Pacer { next: Mutex::new(None) }
+    }
+
+    /// Wait for this swap's turn, the next `period` later (zero: unlimited, no wait).
+    pub fn pace(&self, period: Duration) {
+        if period.is_zero() {
+            *self.next.lock().unwrap() = None;
+            return;
+        }
+        let now = Instant::now();
+        let at = self.next.lock().unwrap().filter(|&t| t > now);
+        if let Some(t) = at {
+            sleep_until(t);
+        }
+        // the next one: a period after this, or after now if the game fell behind
+        *self.next.lock().unwrap() = Some(at.unwrap_or(now) + period);
+    }
+
+    /// When a picture drawn now will be shown: at the next swap's turn, or now.
+    pub fn next_shown(&self) -> Instant {
+        let now = Instant::now();
+        self.next.lock().unwrap().filter(|&t| t > now).unwrap_or(now)
+    }
+}
+
+impl Default for Pacer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Wait until `t`: asleep up to 1.5 ms before it (the turn kept: call from host code or within
+/// `without_turn` for long waits), the rest spun.
+pub fn sleep_until(t: Instant) {
+    const SPIN: Duration = Duration::from_micros(1500);
+    let now = Instant::now();
+    if t > now + SPIN {
+        std::thread::sleep(t - now - SPIN);
+    }
+    while Instant::now() < t {
+        std::hint::spin_loop();
     }
 }
 
@@ -214,23 +276,66 @@ pub fn mix_rotation(a: &[i16; 9], b: &[i16; 9], one: f64, alpha: u32) -> Option<
 
 /// Guest memory put back after a picture: `range` except `left` (kept as the picture left it:
 /// a memory manager's lists whose records are elsewhere; anything other threads may change).
+///
+/// Fast: one buffer is kept for all pictures (a new one of 625 KB each time came fresh from the
+/// system: page faults and system calls), brought up to date at `save` by the pages written
+/// since the last picture, and `restore` writes back only the pages the picture wrote (guest
+/// memory has a write watch, `Memory::written`; copying all of it there and back was ~3% of
+/// Nuclear Strike's game thread). One `Statics` per game: the watch over its range is reset at
+/// each call.
 pub struct Statics {
     pub range: (u32, u32),
     pub left: &'static [(u32, u32)],
 }
 
+thread_local! {
+    static KEPT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl Statics {
+    /// The range as it is now (to be given to `restore`).
     pub fn save(&self) -> Vec<u8> {
-        mem().slice(self.range.0, (self.range.1 - self.range.0) as usize).to_vec()
+        let (lo, hi) = self.range;
+        let m = mem();
+        let mut kept = KEPT.take();
+        let len = (hi - lo) as usize;
+        match m.written(lo, hi) {
+            Some(pages) if kept.len() == len => {
+                for p in pages {
+                    let (a, b) = (p.max(lo), (p + 0x1000).min(hi));
+                    let at = (a - lo) as usize;
+                    kept[at..at + (b - a) as usize].copy_from_slice(m.slice(a, (b - a) as usize));
+                }
+            }
+            _ => {
+                kept.clear();
+                kept.extend_from_slice(m.slice(lo, len));
+            }
+        }
+        kept
     }
 
+    /// Put the range back as `save` found it, except `left`.
     pub fn restore(&self, mut saved: Vec<u8>) {
+        let (lo, hi) = self.range;
         let m = mem();
-        for &(lo, hi) in self.left {
-            let at = (lo - self.range.0) as usize;
-            saved[at..at + (hi - lo) as usize].copy_from_slice(m.slice(lo, (hi - lo) as usize));
+        for &(a, b) in self.left {
+            let at = (a - lo) as usize;
+            saved[at..at + (b - a) as usize].copy_from_slice(m.slice(a, (b - a) as usize));
         }
-        m.slice(self.range.0, saved.len()).copy_from_slice(&saved);
+        match m.written(lo, hi) {
+            Some(pages) => {
+                for p in pages {
+                    let (a, b) = (p.max(lo), (p + 0x1000).min(hi));
+                    let at = (a - lo) as usize;
+                    m.slice(a, (b - a) as usize).copy_from_slice(&saved[at..at + (b - a) as usize]);
+                }
+                // putting back writes too: the watch starts after it
+                let _ = m.written(lo, hi);
+            }
+            None => m.slice(lo, saved.len()).copy_from_slice(&saved),
+        }
+        KEPT.set(saved);
     }
 }
 
@@ -334,7 +439,7 @@ mod tests {
     fn clock_alpha() {
         let c = LogicClock::new(60);
         assert_eq!(c.alpha(Instant::now()), None);
-        c.frame(|| {}, Instant::now);
+        c.frame(|| {}, &Pacer::new(), Duration::ZERO);
         let (due, _) = c.newest().unwrap();
         assert_eq!(c.alpha(due), Some(0));
         assert_eq!(c.alpha(due + c.frame_time() / 2), Some(128));

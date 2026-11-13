@@ -36,7 +36,7 @@ use recomp::rt::{self, Cpu, EAX, ESP, Event, Memory};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 
 // guest address space
@@ -52,6 +52,18 @@ const THUNK_N: u32 = 0x4000;
 const RET_MAGIC: u32 = 0x7ffe_0000;
 
 static MEM: OnceLock<Memory> = OnceLock::new();
+
+/// Reserve the guest memory, at `rt::FIXED_BASE` if it is free: done before the game is
+/// compiled (the code then takes the base as a constant, `lift::FIXED_BASE`), and early,
+/// before other allocations may take the place.
+pub fn reserve_memory() {
+    let m = MEM.get_or_init(Memory::reserve_fixed);
+    if m.base as usize == rt::FIXED_BASE {
+        recomp::lift::FIXED_BASE.store(m.base as u64, Ordering::Relaxed);
+    } else {
+        eprintln!("guest memory at {:#x}, not {:#x}: its base is read at run time", m.base as usize, rt::FIXED_BASE);
+    }
+}
 
 /// Guest memory.
 pub fn mem() -> &'static Memory {
@@ -415,14 +427,44 @@ pub fn com_new(methods: &'static [Import], extra: u32) -> u32 {
 
 // ---- guest threads take turns ------------------------------------------------------------------
 
-/// Only one thread runs guest code at a time (a fair ticket lock): the game's threads race when
-/// they truly run in parallel. Host code (imports) runs without the turn.
+/// Only one thread runs guest code at a time: the game's threads race when they truly run in
+/// parallel. Host code (imports) runs without the turn. Waiting threads get it by priority
+/// (SetThreadPriority), then in the order they came; a thread that gave it up at a loop head
+/// only because its slice ran out (`polite`) comes after all others.
 struct Turn {
-    tickets: Mutex<(u64, u64)>,
+    state: Mutex<TurnState>,
     cv: Condvar,
 }
 
-static TURN: Turn = Turn { tickets: Mutex::new((0, 0)), cv: Condvar::new() };
+struct TurnState {
+    held: bool,
+    next: u64,
+    waiting: Vec<Waiter>,
+}
+
+#[derive(Clone, Copy)]
+struct Waiter {
+    prio: i32,
+    polite: bool,
+    ticket: u64,
+}
+
+impl TurnState {
+    /// The ticket of the waiter that gets the turn next.
+    fn first(&self) -> Option<u64> {
+        self.waiting.iter().max_by_key(|w| (!w.polite, w.prio, std::cmp::Reverse(w.ticket))).map(|w| w.ticket)
+    }
+
+    /// The highest priority among the waiters, polite ones included (`BEST`).
+    fn best(&self) -> i32 {
+        self.waiting.iter().map(|w| w.prio).max().unwrap_or(i32::MIN)
+    }
+}
+
+static TURN: Turn = Turn { state: Mutex::new(TurnState { held: false, next: 0, waiting: Vec::new() }), cv: Condvar::new() };
+
+/// The highest priority of a thread waiting for the turn (i32::MIN: none), read at loop heads.
+static BEST: AtomicI32 = AtomicI32::new(i32::MIN);
 
 thread_local! {
     static HELD: Cell<bool> = const { Cell::new(false) };
@@ -430,30 +472,140 @@ thread_local! {
 }
 
 fn turn_take() {
-    let mut t = lock(&TURN.tickets);
-    let me = t.0;
-    t.0 += 1;
-    while t.1 != me {
-        // the running thread hands over at its next loop head
-        rt::POLL.store(1, Ordering::Relaxed);
-        t = TURN.cv.wait(t).unwrap_or_else(|e| e.into_inner());
+    turn_take_as(false)
+}
+
+fn turn_take_as(polite: bool) {
+    let ctl = my_thread();
+    // SuspendThread: a thread stops before it runs guest code again
+    ctl.wait_resumed();
+    let mut t = lock(&TURN.state);
+    let me = t.next;
+    t.next += 1;
+    t.waiting.push(Waiter { prio: ctl.prio.load(Ordering::Relaxed), polite, ticket: me });
+    BEST.store(t.best(), Ordering::SeqCst);
+    while t.held || t.first() != Some(me) {
+        // the running thread hands over at its next loop head; it stops looking while its
+        // slice lasts (`turn_yield`), so the waiters ask again now and then
+        rt::POLL.store(1, Ordering::SeqCst);
+        t = TURN.cv.wait_timeout(t, SLICE / 2).unwrap_or_else(|e| e.into_inner()).0;
     }
-    rt::POLL.store((t.0 != t.1 + 1) as u32, Ordering::Relaxed);
+    t.waiting.retain(|w| w.ticket != me);
+    t.held = true;
+    BEST.store(t.best(), Ordering::SeqCst);
+    rt::POLL.store(!t.waiting.is_empty() as u32, Ordering::Relaxed);
     HELD.set(true);
     TAKEN.set(tsc());
 }
 
 fn turn_give() {
     HELD.set(false);
-    let mut t = lock(&TURN.tickets);
-    t.1 += 1;
-    rt::POLL.store((t.0 != t.1) as u32, Ordering::Relaxed);
+    let mut t = lock(&TURN.state);
+    t.held = false;
+    rt::POLL.store(!t.waiting.is_empty() as u32, Ordering::Relaxed);
     drop(t);
     TURN.cv.notify_all();
 }
 
+// ---- guest threads: suspension and priority -----------------------------------------------------
+
+/// What other threads may do to a guest thread: suspend it (SuspendThread / ResumeThread, or
+/// CreateThread's CREATE_SUSPENDED) and set its priority. A suspended thread stops at its next
+/// loop head, or before it runs guest code after an import: never inside host code, so it holds
+/// none of our locks (on Windows it stops anywhere). Nuclear Strike suspends its game thread when its
+/// window loses the focus.
+pub struct GuestThread {
+    suspend: Mutex<u32>,
+    /// the same count, read at loop heads without the lock
+    suspends: std::sync::atomic::AtomicU32,
+    cv: Condvar,
+    /// THREAD_PRIORITY_* (-15..15)
+    pub prio: AtomicI32,
+}
+
+impl GuestThread {
+    fn wait_resumed(&self) {
+        let mut n = lock(&self.suspend);
+        while *n > 0 {
+            n = self.cv.wait(n).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    fn suspended(&self) -> bool {
+        self.suspends.load(Ordering::Relaxed) > 0
+    }
+
+    /// SuspendThread: the count before. The thread stops at its next loop head.
+    pub fn suspend(&self) -> u32 {
+        let mut n = lock(&self.suspend);
+        let was = *n;
+        *n += 1;
+        self.suspends.store(*n, Ordering::Relaxed);
+        rt::POLL.store(1, Ordering::Relaxed);
+        was
+    }
+
+    /// ResumeThread: the count before; the thread goes on when it reaches 0.
+    pub fn resume(&self) -> u32 {
+        let mut n = lock(&self.suspend);
+        let was = *n;
+        if was > 0 {
+            *n -= 1;
+            self.suspends.store(*n, Ordering::Relaxed);
+            if *n == 0 {
+                self.cv.notify_all();
+            }
+        }
+        was
+    }
+
+    /// The calling thread: if it suspended itself, it waits here (it has not the turn).
+    pub fn wait_if_self(self: &std::sync::Arc<Self>) {
+        if std::sync::Arc::ptr_eq(self, &my_thread()) {
+            self.wait_resumed();
+        }
+    }
+}
+
+static GUEST_THREADS: Mutex<BTreeMap<u32, std::sync::Arc<GuestThread>>> = Mutex::new(BTreeMap::new());
+
+/// The guest thread with this id (kernel32's thread_id); made at its first use.
+pub fn guest_thread(id: u32) -> std::sync::Arc<GuestThread> {
+    lock(&GUEST_THREADS)
+        .entry(id)
+        .or_insert_with(|| std::sync::Arc::new(GuestThread { suspend: Mutex::new(0), suspends: std::sync::atomic::AtomicU32::new(0), cv: Condvar::new(), prio: AtomicI32::new(0) }))
+        .clone()
+}
+
+thread_local! {
+    static MY_THREAD: std::sync::Arc<GuestThread> = guest_thread(kernel32::thread_id());
+}
+
+pub fn my_thread() -> std::sync::Arc<GuestThread> {
+    MY_THREAD.with(|t| t.clone())
+}
+
+/// Run host code that waits (a sleep) from a hook, with the turn handed over meanwhile.
+pub fn without_turn<R>(f: impl FnOnce() -> R) -> R {
+    let held = HELD.get();
+    if held {
+        turn_give();
+    }
+    let r = f();
+    if held {
+        turn_take();
+    }
+    r
+}
+
+/// Whether another guest thread runs or waits for the turn (asked by a thread without it).
+pub fn others_running() -> bool {
+    let t = lock(&TURN.state);
+    t.held || !t.waiting.is_empty()
+}
+
 /// How long a thread keeps the turn at loop heads while another waits. Handing it over at
-/// every loop head made a game thread and a thread polling input every few ms trade it tens
+/// every loop head made the game thread and a thread polling input every few ms trade it tens
 /// of thousands of times a second, each time waking a thread (Nuclear Strike: 15% of the
 /// game thread's time).
 const SLICE: std::time::Duration = std::time::Duration::from_micros(500);
@@ -464,7 +616,7 @@ thread_local! {
 }
 
 /// The processor's time stamp counter: loop heads ask for the time while another thread waits,
-/// and Instant::now cost 8% of a game thread's time there.
+/// and Instant::now cost 8% of the game thread's time there.
 fn tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
     return unsafe { std::arch::x86_64::_rdtsc() };
@@ -487,7 +639,7 @@ fn slice_ticks() -> u64 {
 }
 
 thread_local! {
-    /// This thread keeps the turn at loop heads and imports (`hold_turn`).
+    /// This thread keeps the turn at loop heads (`hold_turn`).
     static HOLD: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -499,24 +651,49 @@ pub fn hold_turn(on: bool) {
     HOLD.set(on);
 }
 
-/// Run host code that waits (a sleep) from a hook, the turn handed over meanwhile.
-pub fn without_turn<R>(f: impl FnOnce() -> R) -> R {
-    let held = HELD.get();
-    if held {
-        turn_give();
-    }
-    let r = f();
-    if held {
-        turn_take();
-    }
-    r
-}
-
-/// At a loop head with another thread waiting: let it run first, after this thread's slice.
+/// At a loop head with another thread waiting: let it run first, at once if its priority is
+/// higher (as Windows preempts), else after this thread's slice (a higher priority thread
+/// spinning does not starve the others: Windows lifts starved threads after a few seconds).
+/// A suspended thread stops here.
 fn turn_yield() {
-    if HELD.get() && !HOLD.get() && tsc().wrapping_sub(TAKEN.get()) >= slice_ticks() {
+    if !HELD.get() {
+        return;
+    }
+    if HOLD.get() {
+        // a picture between frames keeps the turn: loop heads stop calling here (the waiters
+        // ask again when their wait times out)
+        rt::POLL.store(0, Ordering::SeqCst);
+        return;
+    }
+    // (by reference: my_thread's Arc clone at every loop head cost too)
+    let (suspended, prio) = MY_THREAD.with(|me| (me.suspended(), me.prio.load(Ordering::Relaxed)));
+    if suspended {
         turn_give();
         turn_take();
+        return;
+    }
+    let best = BEST.load(Ordering::Relaxed);
+    if best == i32::MIN {
+        // nobody waits (POLL was set for a suspension of another thread, or is stale)
+        let t = lock(&TURN.state);
+        rt::POLL.store(!t.waiting.is_empty() as u32, Ordering::Relaxed);
+        return;
+    }
+    if best > prio {
+        turn_give();
+        turn_take();
+    } else if tsc().wrapping_sub(TAKEN.get()) >= slice_ticks() {
+        turn_give();
+        turn_take_as(true);
+    } else {
+        // only lower or equal priorities wait: loop heads stop calling here until a waiter
+        // asks again (its wait times out): each loop head called here while a lower thread
+        // waited (Nuclear Strike: WinMain's, ~3% of the game thread). Looked at again after clearing: a higher priority
+        // or a suspension that came meanwhile is not missed.
+        rt::POLL.store(0, Ordering::SeqCst);
+        if BEST.load(Ordering::SeqCst) > prio || MY_THREAD.with(|me| me.suspended()) {
+            rt::POLL.store(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -589,7 +766,13 @@ fn on_event(c: &mut Cpu, e: Event) {
     match e {
         Event::Foreign(a) if (THUNK_LO..THUNK_LO + 4 * THUNK_N).contains(&a) => {
             let k = ((a - THUNK_LO) / 4) as usize;
-            let (f, nargs, quick) = {
+            // this thread's copy of the thunks it called: THUNKS' lock at each of ~400 000
+            // calls a second was ~1.5% of a game thread (stubs and traced runs not kept)
+            thread_local! {
+                static KNOWN: std::cell::RefCell<Vec<Option<(ImpFn, i32, bool)>>> = const { std::cell::RefCell::new(Vec::new()) };
+            }
+            let known = KNOWN.with_borrow(|v| v.get(k).copied().flatten());
+            let (f, nargs, quick) = if let Some(e) = known { e } else {
                 let t = lock(&THUNKS);
                 let Some(th) = t.get(k) else { fatal(c, &format!("call to unused thunk {a:#x}")) };
                 if trace_api() {
@@ -602,6 +785,14 @@ fn on_event(c: &mut Cpu, e: Event) {
                             if lock(&SEEN).insert(th.name.clone(), ()).is_none() {
                                 log!("warn: {} is not implemented (returns 0)", th.name);
                             }
+                        }
+                        if !th.stub && !trace_api() {
+                            KNOWN.with_borrow_mut(|v| {
+                                if v.len() <= k {
+                                    v.resize(k + 1, None);
+                                }
+                                v[k] = Some((f, th.nargs, th.quick));
+                            });
                         }
                         (f, th.nargs, th.quick)
                     }
@@ -804,7 +995,7 @@ fn find_import(dll: &str, name: &str) -> Option<&'static Import> {
 /// (which needs a large stack: guest calls nest on it). Returns the exit code.
 pub fn run_game(img: &Image, game_dir: PathBuf) -> u32 {
     let _ = GAME_DIR.set(game_dir);
-    let _ = MEM.set(Memory::reserve());
+    reserve_memory();
     let m = mem();
     m.map(IMAGE_BASE, IMAGE_BASE + 0x1000);
     let hdr = &img.data[..0x1000.min(img.data.len())];
@@ -849,8 +1040,11 @@ pub fn run_game(img: &Image, game_dir: PathBuf) -> u32 {
         // where the game is, every 2 s (for hangs)
         std::thread::spawn(|| loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let t = *lock(&TURN.tickets);
-            log!("watch: last import call returned to {:#x}, turn {}/{}, poll {}", LAST_CALL.load(Ordering::Relaxed), t.1, t.0, rt::POLL.load(Ordering::Relaxed));
+            let (held, waiting) = {
+                let t = lock(&TURN.state);
+                (t.held, t.waiting.len())
+            };
+            log!("watch: last import call returned to {:#x}, turn held {held}, {waiting} waiting, poll {}", LAST_CALL.load(Ordering::Relaxed), rt::POLL.load(Ordering::Relaxed));
         });
     }
     if let Some(path) = rt::count_file() {

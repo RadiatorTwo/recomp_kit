@@ -23,7 +23,7 @@ pub enum Obj {
     Std(u32),
     Event { manual: bool, set: bool },
     Mutex { owner: u32, count: u32 },
-    Thread { id: u32, done: bool, code: u32, resume: Arc<(Mutex<bool>, Condvar)> },
+    Thread { id: u32, done: bool, code: u32 },
     Heap,
 }
 
@@ -733,21 +733,16 @@ fn thread_handle_of(id: u32) -> u32 {
 
 fn create_thread(c: &mut Cpu) -> u32 {
     let (start, param, flags, id_out) = (arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5));
-    let resume = Arc::new((Mutex::new(flags & 4 == 0), Condvar::new()));
-    let r2 = resume.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .stack_size(64 << 20)
         .spawn(move || {
             let id = thread_id();
-            tx.send(id).unwrap();
-            {
-                let (m, cv) = &*r2;
-                let mut go = m.lock().unwrap();
-                while !*go {
-                    go = cv.wait(go).unwrap();
-                }
+            if flags & 4 != 0 {
+                // CREATE_SUSPENDED: it waits in guest_call (turn_take) for ResumeThread
+                super::guest_thread(id).suspend();
             }
+            tx.send(id).unwrap();
             let mut tc = super::new_thread_cpu();
             let r = guest_call(&mut tc, start, &[param]);
             let code = if tc.stop != 0 { EXIT_CODE.get() } else { r };
@@ -767,19 +762,43 @@ fn create_thread(c: &mut Cpu) -> u32 {
     if id_out != 0 {
         mem().wr32(id_out, id);
     }
-    objects().add(Obj::Thread { id, done: false, code: 0, resume })
+    objects().add(Obj::Thread { id, done: false, code: 0 })
+}
+
+/// The guest thread a handle names (GetCurrentThread's pseudo handle: the caller).
+fn thread_of(h: u32) -> Option<Arc<super::GuestThread>> {
+    if h == 0xffff_fffe {
+        return Some(super::guest_thread(thread_id()));
+    }
+    match objects().map.get(&h) {
+        Some(&Obj::Thread { id, .. }) => Some(super::guest_thread(id)),
+        _ => None,
+    }
 }
 
 fn resume_thread(c: &mut Cpu) -> u32 {
-    let g = objects();
-    if let Some(Obj::Thread { resume, .. }) = g.map.get(&arg(c, 0)) {
-        let (m, cv) = &**resume;
-        let was = !*m.lock().unwrap();
-        *m.lock().unwrap() = true;
-        cv.notify_all();
-        return was as u32;
-    }
-    0xffff_ffff
+    thread_of(arg(c, 0)).map_or(0xffff_ffff, |t| t.resume())
+}
+
+/// SuspendThread: the thread stops at its next loop head (see `GuestThread`).
+fn suspend_thread(c: &mut Cpu) -> u32 {
+    let Some(t) = thread_of(arg(c, 0)) else { return 0xffff_ffff };
+    let was = t.suspend();
+    t.wait_if_self();
+    was
+}
+
+/// SetThreadPriority: the turn goes to waiting threads by priority (see `turn_yield`). Games
+/// set their message loop's thread low, timers and audio high, and TIME_CRITICAL while they
+/// measure the processor's speed.
+fn set_thread_priority(c: &mut Cpu) -> u32 {
+    let Some(t) = thread_of(arg(c, 0)) else { return 0 };
+    t.prio.store(arg(c, 1) as i32, Ordering::Relaxed);
+    1
+}
+
+fn get_thread_priority(c: &mut Cpu) -> u32 {
+    thread_of(arg(c, 0)).map_or(0x7fff_ffff, |t| t.prio.load(Ordering::Relaxed) as u32)
 }
 
 fn terminate_thread(c: &mut Cpu) -> u32 {
@@ -841,7 +860,20 @@ fn query_performance_counter(c: &mut Cpu) -> u32 {
 
 fn sleep(c: &mut Cpu) -> u32 {
     let ms = arg(c, 0);
-    if ms == 0 { std::thread::yield_now() } else { std::thread::sleep(Duration::from_millis(ms as u64)) }
+    // Sleep(0) gives the rest of the time slice to the threads that are ready. Guest threads run
+    // one at a time here, and a thread back from an import waits for the running one to hand
+    // over at a loop head: Nuclear Strike's message loop (PeekMessageA, Sleep(0)) took the turn
+    // back some 800 000 times a second, the game thread got little done (slow menu, long
+    // loading). With another thread running it really sleeps a millisecond. So does a thread
+    // below normal priority: a LOWEST message loop yielded at once whenever the game thread was
+    // in host code (Glide, swaps), took and gave the turn ~340 000 times a second and kept a
+    // core busy; the game thread was ~10% slower and its frame rate swung more.
+    let low = super::my_thread().prio.load(Ordering::Relaxed) < 0;
+    if ms == 0 && !super::others_running() && !low {
+        std::thread::yield_now()
+    } else {
+        std::thread::sleep(Duration::from_millis(ms.max(1) as u64))
+    }
     0
 }
 
@@ -1115,9 +1147,10 @@ pub const IMPORTS: &[Import] = &[
     ("DuplicateHandle", 7, duplicate_handle),
     ("CreateThread", 6, create_thread),
     ("ResumeThread", 1, resume_thread),
+    ("SuspendThread", 1, suspend_thread),
     ("TerminateThread", 2, terminate_thread),
-    ("SetThreadPriority", 2, ret1),
-    ("GetThreadPriority", 1, ret0),
+    ("SetThreadPriority", 2, set_thread_priority),
+    ("GetThreadPriority", 1, get_thread_priority),
     ("GetTickCount", 0, get_tick_count),
     ("QueryPerformanceFrequency", 1, query_performance_frequency),
     ("QueryPerformanceCounter", 1, query_performance_counter),

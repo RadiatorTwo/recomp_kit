@@ -19,6 +19,30 @@ Das neue Projekt bekommt eine **Kopie** des Frameworks (`crates/recomp`, `crates
 - Erlaubt: Adressen, Namen und eigene Beschreibungen (`data/symbols.txt`), Funktionsgrenzen
   aus Ghidra (`data/functions.json`), Adress-Karten zwischen Versionen.
 
+### Ziel: besser als das Original, nicht gleich
+
+Der Port ist kein Emulator. Er soll nicht zu 100 % so laufen wie das Original auf seiner
+Hardware, sondern **besser**: schneller, ruhiger, ohne die Fehler und Grenzen der damaligen
+Technik. Drei Regeln folgen daraus:
+
+1. **Fehlerhafte Spiel-Funktionen haben keinen Bestand.** Produzieren sie Fehler (falsche
+   Sortierung, Grafikfehler, Abstürze), dürfen sie durch neuen Rust-Code ersetzt werden,
+   statt den Fehler mit immer mehr Aufwand zu umgehen.
+2. **Spiel-Code darf verändert werden, wenn es einen Vorteil bringt und das Ergebnis
+   identisch ist.** Eine heiße Funktion (Projektion, Polygon-Aufbau) läuft in Rust, wenn sie
+   dasselbe liefert: dieselben Operationen in derselben Reihenfolge, dieselbe Rundung, auch
+   die Eigenheiten des Originals. Jede solche Ersetzung bekommt einen Prüf-Schalter
+   (`<PREFIX>_..._CHECK=1`: beide laufen, Unterschiede werden geloggt) und wird erst
+   übernommen, wenn über Millionen Aufrufe nichts abweicht (Abschnitt 8a).
+3. **Grenzen der damaligen Technik dürfen behoben werden.** Was nur der Hardware von damals
+   geschuldet ist, wird besser gemacht, solange das Spiel dasselbe Spiel bleibt (seine Logik,
+   sein Ablauf, sein Aussehen in der Absicht): feste Logik-Rate mit Zwischenbildern statt
+   30/60 fps (8b), Breitbild (8c), hohe Auflösung, MSAA, Texturfilter, ein Tiefenpuffer statt
+   einer Ordering Table, die falsch sortiert, Sperren auf 640x480 (8d), Vsync (8e), Ruckeln
+   durch ganzzahlige Kamera-Winkel (8b Punkt 7), Leerlauf-Schleifen, die einen Kern verheizen
+   (LESSONS, Threads). Danach moderne Effekte (Abschnitt 11), als Einstellungen, die man
+   ausschalten kann.
+
 ## 1. Projekt anlegen
 
 ```powershell
@@ -119,6 +143,10 @@ Tabelle in `Game::smc` eintragen (`PatchTable { at, variants }`) und mit
 Für alles, was über "Windows nachbauen" hinausgeht (Widescreen, Bildrate, Cheats, Gamepad-
 Belegung, Fehler des Originals): eine Spiel-Funktion durch Rust ersetzen.
 
+**Regel** (Abschnitt 0): Original-Funktionen haben keinen Bestand, wenn sie Fehler
+produzieren; sie dürfen auch für einen Vorteil (Tempo) ersetzt werden, wenn das Ergebnis
+identisch ist. Treue zum Original gilt nicht für seine Fehler und Grenzen.
+
 - In `src/hooks.rs`: `(Us(0x406a30), meine_funktion)`. Adressen sind die der
   Referenz-Version (erste in `VERSIONS`); `.at()` rechnet für andere Versionen um.
 - `call_original(c, adresse)` ruft die Original-Funktion; Argumente mit
@@ -127,6 +155,60 @@ Belegung, Fehler des Originals): eine Spiel-Funktion durch Rust ersetzen.
   "?" bei Vermutungen). Absturzmeldungen und `rtools dis` zeigen dann Namen.
 - Debug-Befehle: `Game::cheats` (Name, Shift+F-Taste, Funktion); ein Hook auf die
   Frame-Warte-Funktion ruft `cheats::run_pending(c)` und `savestate::frame()`.
+
+## 8a. Tempo: bevor moderne Effekte kommen
+
+Erst schnell, dann schön: Effekte (SSAO, Schatten, Licht, Bloom) kosten jeder 10–30 % der
+Bildrate, und was vorher langsam war, wird mit ihnen nicht schneller. Nuclear Strike kam so
+von ~175 auf ~790 fps ohne Effekte (Mission 1); das Ziel waren 500. Reihenfolge:
+
+1. **Messen, nicht raten.** `<PREFIX>_SAMPLE=1` (Stichproben des Spiel-Threads alle 2 s:
+   Spiel-Funktion oder Host-Modul), `<PREFIX>_PROF=1` (Zeit in Imports und beim Warten auf den
+   Turn). Eigenen Rust-Code auflösen: `<PREFIX>_SAMPLE_RAW=<datei>` gegen eine Link-Map
+   (`cargo rustc --release --bin <spiel> -- -C link-arg=/MAP:<datei>`, eigenes
+   target-Verzeichnis) oder mit `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` und
+   llvm-symbolizer. Jede Änderung als A/B messen: Läufe desselben Builds schwanken um ~5 %
+   (LESSONS, Threads: Hyperthreads).
+2. **Was das Kit schon mitbringt** (nichts zu tun, aber wissen, dass es da ist): Gastspeicher
+   an fester Adresse (`rt::FIXED_BASE`, die Basis ist eine Konstante im Code: +11 %), x87 in
+   Registern und 24-Bit-Rundung inline (`lift/x87.rs`), dichte Tabelle für indirekte Aufrufe,
+   Hook-Index im Stub, Thunks pro Thread, Turn mit Zeitscheibe und Prioritäten (Loop-Köpfe
+   rufen `rt_yield` nicht, solange die Scheibe läuft), Sleep(0) ohne Spinnen, unveränderte
+   Texturzeilen werden nicht neu geladen, Zwischenbilder schreiben nur die Seiten zurück, die
+   sie geändert haben (`tween::Statics`, Write-Watch).
+3. **Kosten pro Aufruf im eigenen Code.** Bei Hunderttausenden Aufrufen pro Sekunde zählt
+   alles: keine Locks, keine `Arc`-Klone, keine Hash-Maps mit SipHash, kein `Vec` pro
+   Primitiv, keine Umgebungsvariable pro Aufruf (einmal lesen), keine Systemaufrufe
+   (`glGetUniformLocation`; `Instant::now` in heißen Schleifen: `tsc`). Thread-lokale Kopien,
+   Tabellen nach Adresse indiziert, offene Adressierung.
+4. **Heiße Spiel-Funktionen in Rust (Regel 2, Abschnitt 0).** Zeigt das Profil eine Spiel-
+   Funktion mit großem Anteil (Nuclear Strike: zwei Projektionen ~11 %, drei Polygon-Renderer
+   ~15 %), sie als Hook in Rust schreiben, **identisch**: dieselben Operationen in derselben
+   Reihenfolge, dieselbe x87-Rundung (unter 0xc7f: SSE-Rundung auf Abschneiden und jedes
+   Ergebnis auf 24 Bit gekürzt; unter 0x27f: Double, beim Speichern zu Float gerundet), die
+   Eigenheiten des Originals behalten (Register, die es nebenbei setzt; Zustände, die es in
+   Gastspeicher schreibt). Ein Prüf-Schalter lässt beide laufen und vergleicht (Ergebnisse,
+   geschriebener Speicher, Register): erst übernehmen, wenn über Millionen Aufrufe nichts
+   abweicht. Fälle, die man nicht nachbaut (noch nicht geladene Daten), rufen das Original.
+   Nicht lohnend: Funktionen, deren Kosten der Algorithmus ist (Einfügen in eine sortierte
+   Liste), nicht der übersetzte Code.
+5. **Zeichnen bündeln.** Zustand, den das Spiel pro Primitiv ändert (Alpha-Test), gehört in
+   die Vertex-Daten, nicht in Uniforms, die einen Batch beenden. Ein Batch endet nur bei
+   Wechseln, die es wirklich brauchen (Blend, Chroma-Key, Filter, Clip). glFlush nur, wenn ein
+   zweiter Thread zeichnet. Uploads gesammelt, nicht zeilenweise.
+6. **Den Tausch der Puffer vom Spiel-Thread nehmen.** SwapBuffers kostete im Treiber 0,4 bis
+   0,7 ms pro Bild (~15 % bei 200 fps). Zeichnet das Spiel auf einem eigenen Thread mit
+   geteiltem Kontext, zeigt ein eigener Present-Thread die Bilder (Fence setzen, übergeben,
+   dort auf die GPU warten, blitten, tauschen): nuclear_rust_strike `window::present_later`
+   (im Kit noch nicht: PLAN).
+7. **Takten mit Schlafen und Spinnen** (`tween::Pacer`, `sleep_until`): ein Sleep dauert bis
+   1 ms länger als verlangt; die letzten 1,5 ms werden gespinnt (240 fps: Bildabstände
+   4,0–4,4 ms statt 3,7–4,7).
+
+**Fertig, wenn** das Spiel ohne Effekte deutlich über der Bildwiederholrate des Bildschirms
+läuft (Ziel: ein Mehrfaches, damit die Effekte Platz haben), alle Prüf-Schalter ohne
+Abweichung laufen und das Profil keinen einzelnen Posten über ~10 % mehr zeigt, der sich
+sinnvoll ersetzen lässt. Erst dann Abschnitt 11.
 
 ## 8b. Bildrate: Logik fest, Zwischenbilder dazu
 
@@ -268,6 +350,14 @@ als der Bildschirm ist (LESSONS, Vsync).
   future_rust_cop-Repo (`src/bin/difftest.rs`), nicht im Framework (siehe PLAN.md).
 - Release: Version in `Cargo.toml`, Tag `v0.1.0` pushen; `.github/workflows/build.yml` baut
   Windows und Linux und macht eine GitHub-Release.
+
+## 11. Moderne Effekte (nach 8a)
+
+Vorbilder: future_rust_cop und nuclear_rust_strike (`ao.rs`, `lights.rs`, `shadows.rs`,
+`bloom.rs`, `heat.rs`, `zbuffer.rs`, `particles.rs`). Grundlage ist eine Tiefe pro Vertex
+(Glide-Vertices haben meist keine: aus den Projektionen des Spiels holen). Effekte erkennt man
+an den Funktionen des Spiels, nie an der Farbe (LESSONS, Modern effects). Jeder Effekt ist
+eine Einstellung, die man ausschalten kann, und wird einzeln gemessen.
 
 ---
 

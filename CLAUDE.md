@@ -22,6 +22,16 @@ EXE's function list belongs in the game's repository, not here).
 - Confirm before anything outward-facing or destructive (pushing, deleting).
 - Clean Rust first, performance later. Never run cargo fmt (it reformats whole crates).
 - No Co-Authored-By or other AI attribution in commits.
+- The goal is **better than the original**, not identical to it like an emulator (the user
+  never liked that about emulators). So:
+  - the game's own functions have no standing when they produce faults (wrong sorting,
+    glitches, crashes): they may be replaced by new Rust code (a hook) instead of being
+    worked around in ever more complex ways;
+  - game code may be changed or replaced when it brings an advantage (speed) and the result
+    is identical (checked by a switch running both, GUIDE 8a);
+  - limits of the technology of the time may be lifted (fixed logic rate with pictures
+    between, widescreen, resolution, depth buffer, resolution locks, idle loops).
+- Speed before modern effects (GUIDE 8a, then 11).
 
 ## Layout
 
@@ -40,7 +50,10 @@ EXE's function list belongs in the game's repository, not here).
   - `smc.rs` self-modifying code; what a game has beyond `mov [code], x` comes as `SmcSpec`.
   - `jit.rs` compiles everything (cache file `RCMPJIT1`), hooks as `(address, fn)`;
     `<PREFIX>_DUMP=<hex>` disassembles one function's code. `rt_lookup` reads a dense table.
-  - `rt.rs` `Cpu`, guest memory, helpers, call counters (`counter`, `counts`).
+  - `rt.rs` `Cpu`, guest memory (reserved at `FIXED_BASE` if free: the lifter then takes the
+    base as a constant, `lift::FIXED_BASE`, in the cache key; `MEM_WRITE_WATCH`,
+    `Memory::written`), helpers, call counters (`counter`, `counts`); `rt_hook` gets the
+    hook's index from its stub.
   - `ver.rs` versions of an EXE: `Us(0x...)` is an address of the game's reference version,
     `.at()` its place in the version that runs (`select` after `of_exe(versions, data)`).
   - `config.rs` the switches' prefix (`env("COUNT")` = `FCOP_COUNT` for Future Cop), the CPUID
@@ -54,8 +67,12 @@ EXE's function list belongs in the game's repository, not here).
   dialog, gl (`set_vsync`: swap interval 1, the pace stays the game's), sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
   savestate (the game calls `level_start` / `frame`), cheats (`Game::cheats`, run by the game's
   hook with `run_pending`), setting (registry + switch), hd (replacement textures), tween
-  (pictures between logic frames: `LogicClock`, `Hist`, interpolation with quaternions,
-  `Statics` put back, `call_regs`; with `hold_turn` / `without_turn` in `platform/mod.rs`)).
+  (pictures between logic frames: `LogicClock`, `Pacer` (sleep and spin), `Hist`,
+  interpolation with quaternions, `Statics` put back by the pages written, `call_regs`; with
+  `hold_turn` / `without_turn` in `platform/mod.rs`)). Guest threads (`platform/mod.rs`):
+  one turn, given by priority (SetThreadPriority), Suspend/ResumeThread at loop heads,
+  `POLL` cleared while the slice lasts; Sleep(0) sleeps when others run or below normal
+  priority. Glide skips texture rows downloaded again unchanged.
 - `crates/tools`: `rtools` (imports, missing, dis, at, smc, dialogs, iso, movie, vermap).
 - `examples/fcop_plain`: Future Cop with only its `Identity`, patch table and function list
   (read at run time from `FCOP_FUNCTIONS`, default ../future_rust_cop/data/functions.json): the

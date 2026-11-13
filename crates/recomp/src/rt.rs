@@ -97,17 +97,52 @@ pub struct Memory {
 unsafe impl Send for Memory {}
 unsafe impl Sync for Memory {}
 
+/// Where the game's address space is reserved if it can be: below 2 GB, so the base is a
+/// constant in the compiled code that fits an instruction's displacement (`[reg + base]`, see
+/// `lift::FIXED_BASE`). Loaded from `Cpu::mem`, it took a register in every function, and the
+/// large ones (Nuclear Strike's polygon set-ups, ~50 KB of machine code) spilled it and read it
+/// back from the stack at nearly every access (+11% frame rate). Above the shared user data
+/// page (0x7ffe0000).
+pub const FIXED_BASE: usize = 0x7fff_0000;
+
 impl Memory {
     pub fn reserve() -> Memory {
+        let base = Self::reserve_at(0);
+        assert!(!base.is_null(), "cannot reserve 4 GB of address space");
+        Memory { base }
+    }
+
+    /// Reserved at `FIXED_BASE` if it is free, else anywhere.
+    pub fn reserve_fixed() -> Memory {
+        match Self::reserve_at(FIXED_BASE) {
+            p if p as usize == FIXED_BASE => Memory { base: p },
+            p => {
+                if !p.is_null() {
+                    // (unix: the address was only a hint)
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::munmap(p as _, GUEST_SPAN);
+                    }
+                }
+                Self::reserve()
+            }
+        }
+    }
+
+    /// Null if the space is not free.
+    fn reserve_at(at: usize) -> *mut u8 {
         #[cfg(windows)]
         let base = unsafe {
             use windows_sys::Win32::System::Memory::{MEM_RESERVE, PAGE_NOACCESS, VirtualAlloc};
-            VirtualAlloc(std::ptr::null(), GUEST_SPAN, MEM_RESERVE, PAGE_NOACCESS) as *mut u8
+            const MEM_WRITE_WATCH: u32 = 0x20_0000;
+            // write watch: what guest code wrote can be asked for (`written`; pictures between
+            // logic frames put back only the pages they wrote)
+            VirtualAlloc(at as *const _, GUEST_SPAN, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS) as *mut u8
         };
         #[cfg(unix)]
         let base = unsafe {
             let p = libc::mmap(
-                std::ptr::null_mut(),
+                at as *mut _,
                 GUEST_SPAN,
                 libc::PROT_NONE,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
@@ -116,8 +151,30 @@ impl Memory {
             );
             if p == libc::MAP_FAILED { std::ptr::null_mut() } else { p as *mut u8 }
         };
-        assert!(!base.is_null(), "cannot reserve 4 GB of address space");
-        Memory { base }
+        base
+    }
+
+    /// The pages (guest addresses) written in [lo, hi) since the last call, None where the
+    /// system does not tell (not Windows). The watch starts again.
+    pub fn written(&self, lo: u32, hi: u32) -> Option<Vec<u32>> {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::Memory::GetWriteWatch;
+            const WRITE_WATCH_FLAG_RESET: u32 = 1;
+            let n = ((hi - lo) as usize).div_ceil(0x1000);
+            let mut pages = vec![std::ptr::null_mut(); n];
+            let (mut count, mut gran) = (n, 0u32);
+            let r = GetWriteWatch(WRITE_WATCH_FLAG_RESET, self.base.add(lo as usize) as _, (hi - lo) as usize, pages.as_mut_ptr(), &mut count, &mut gran);
+            if r != 0 || gran != 0x1000 {
+                return None;
+            }
+            Some(pages[..count].iter().map(|&p| (p as usize - self.base as usize) as u32).collect())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (lo, hi);
+            None
+        }
     }
 
     /// Make guest addresses [lo, hi) readable and writable.
@@ -259,11 +316,11 @@ pub extern "C" fn rt_yield(_cpu: *mut Cpu) {
     }
 }
 
-/// What a hooked function's recompiled entry calls.
-pub extern "C" fn rt_hook(cpu: *mut Cpu, addr: u32) {
+/// What a hooked function's recompiled entry calls, with the hook's index in `Dispatch::hooks`
+/// (a binary search by address cost at ~2 million hooked calls a second).
+pub extern "C" fn rt_hook(cpu: *mut Cpu, index: u32) {
     let d = DISPATCH.get().expect("dispatch table not set");
-    let k = d.hooks.binary_search_by_key(&addr, |e| e.0).expect("hook");
-    (d.hooks[k].1)(unsafe { &mut *cpu });
+    (d.hooks[index as usize].1)(unsafe { &mut *cpu });
 }
 
 /// Run the original of the hooked function at `addr`: like a call to it, its return address
