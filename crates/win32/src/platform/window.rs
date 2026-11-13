@@ -161,6 +161,9 @@ pub fn pump(wait: Duration) {
             }
         }
         let _ = h.event_loop.pump_app_events(Some(wait), &mut h.app);
+        if let Some(gl) = &h.app.gl {
+            keep_spare(gl);
+        }
         h.app.catch_cursor();
         scripted(&mut h.app.input);
         // a pad's Start is the Escape key (pause)
@@ -201,6 +204,13 @@ fn scripted(input: &mut VecDeque<Input>) {
             Input::Poke(a, v) => super::mem().wr32(a, v),
             Input::Cheat(k) => super::cheats::request(k),
             Input::Pad(k, v) => super::dinput::script(k, v),
+            Input::Move(x, y) => {
+                // DirectInput's mouse moves by as much
+                static LAST: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+                let (lx, ly) = LAST.lock().unwrap().replace((x, y)).unwrap_or((320, 240));
+                super::dinput::motion(x - lx, y - ly);
+                input.push_back(Input::Move(x, y));
+            }
             i => input.push_back(i),
         }
     }
@@ -376,37 +386,109 @@ pub fn present(pixels: &[u32], w: u32, h: u32) {
     with_host(|host| host.app.frame(pixels, w, h));
 }
 
-/// Run `f` with the OpenGL context (None before the window exists or off the main thread).
-pub fn with_gl<R>(f: impl FnOnce(&mut Gl) -> R) -> Option<R> {
-    if !on_main() {
-        return None;
+/// Run `f` with an OpenGL context: the window's on its thread, else a context of this thread's
+/// sharing the window's objects (`gl_here`). None before the window exists.
+pub fn with_gl<R>(f: impl FnOnce(&glow::Context) -> R) -> Option<R> {
+    if on_main() {
+        return with_host(|h| h.app.gl.as_ref().map(|g| f(&g.gl)));
     }
-    with_host(|h| h.app.gl.as_mut().map(f))
+    SHARED.with_borrow(|sh| sh.as_ref().map(|s| f(&s.gl)))
 }
 
+thread_local! {
+    /// this thread's context sharing the window's (not the window's thread)
+    static SHARED: RefCell<Option<super::gl::Shared>> = const { RefCell::new(None) };
+}
+
+/// Contexts sharing the window's, made by the window's thread ahead (it may be busy with the
+/// game when another thread first draws), and whether one is wanted.
+static SPARE: Mutex<Vec<super::gl::SharedParts>> = Mutex::new(Vec::new());
+static SPARE_CV: std::sync::Condvar = std::sync::Condvar::new();
+static WINDOW_UP: AtomicBool = AtomicBool::new(false);
+
+/// Whether this thread can draw: the window's thread once the window exists; another thread
+/// once it has its own shared context (taken from `SPARE`, waiting for the window's thread to
+/// make one if none is left). Call it before taking a lock the window's thread may want.
+pub fn gl_here() -> bool {
+    if on_main() {
+        return with_host(|h| h.app.gl.is_some());
+    }
+    if SHARED.with_borrow(|s| s.is_some()) {
+        return true;
+    }
+    if !WINDOW_UP.load(Ordering::Relaxed) {
+        return false;
+    }
+    let mut spare = SPARE.lock().unwrap();
+    loop {
+        if let Some(p) = spare.pop() {
+            drop(spare);
+            SHARED.set(Some(p.make_current()));
+            return true;
+        }
+        // made at the window thread's next pump
+        spare = SPARE_CV.wait_timeout(spare, Duration::from_millis(50)).unwrap().0;
+    }
+}
+
+/// Does this thread have its GL context already (the window's thread, or one sharing it)?
+pub fn gl_ready_here() -> bool {
+    on_main() || SHARED.with_borrow(|s| s.is_some())
+}
+
+/// The window's thread: one context sharing its own kept ready for another thread.
+fn keep_spare(gl: &Gl) {
+    let mut spare = SPARE.lock().unwrap();
+    if spare.is_empty() {
+        spare.push(gl.share());
+        SPARE_CV.notify_all();
+    }
+}
+
+/// The window's size as its thread drew last (for other threads).
+static SIZE: Mutex<(u32, u32)> = Mutex::new((0, 0));
+
 /// Show a texture something rendered (first row at the bottom), w x h, with a gamma: a copy
-/// of it is handed to the present thread (`present_later`), unless `<PREFIX>_PRESENT=0`.
+/// of it is handed to the present thread (`present_later`), unless `<PREFIX>_PRESENT=0` (then
+/// the window's thread shows it; another thread's pictures always go to the present thread).
 pub fn show_texture(tex: glow::Texture, w: u32, h: u32, gamma: f32) {
     if !on_main() {
+        let size = *SIZE.lock().unwrap();
+        let Some(look) = super::gl::look_with((tex, w, h, false, gamma), size).filter(|_| size.0 > 0 && size.1 > 0) else { return };
+        let staged = SHARED.with_borrow(|sh| {
+            let s = sh.as_ref()?;
+            super::gl::stage(&s.gl, s.copy_fbo, tex, w, h)
+        });
+        let Some((copy, fence, slot)) = staged else { return };
+        // the window's thread shows it too when it draws next (a resize, the overlay)
+        *OTHER_SHOWN.lock().unwrap() = Some((copy, w, h, false, gamma));
+        let mut look = look;
+        look.shown = (copy, w, h, false, gamma);
+        present_later(Job { look, fence, slot, shot: shot_due(false) });
         return;
     }
     with_host(|host| {
         let app = &mut host.app;
         let (Some(win), Some(gl)) = (&app.window, &mut app.gl) else { return };
         let size = win.inner_size();
+        *OTHER_SHOWN.lock().unwrap() = None;
         if !present_thread() || app.mark_shot.is_some() || size.width == 0 || size.height == 0 {
             gl.shown = (tex, w, h, false, gamma);
             app.draw();
             return;
         }
-        let (copy, fence) = gl.stage(tex, w, h);
+        let Some((copy, fence, slot)) = super::gl::stage(&gl.gl, gl.copy_fbo, tex, w, h) else { return };
         gl.shown = (copy, w, h, false, gamma);
         let shot = shot_due(app.overlay_changed);
         app.overlay_changed &= !shot;
-        let job = Job { look: gl.look(size.width, size.height), fence, slot: gl.slot(), shot };
-        present_later(gl, job);
+        let job = Job { look: gl.look(size.width, size.height), fence, slot, shot };
+        present_later(job);
     });
 }
+
+/// A picture another thread showed since the window's thread drew (it shows that one when it
+/// draws next).
+static OTHER_SHOWN: Mutex<Option<(glow::Texture, u32, u32, bool, f32)>> = Mutex::new(None);
 
 /// Whether pictures rendered by Glide are shown by the present thread (`<PREFIX>_PRESENT=0`:
 /// by the game's thread, as before).
@@ -429,21 +511,25 @@ static PRESENTER: Mutex<(Option<Job>, bool)> = Mutex::new((None, false));
 static PRESENT_CV: std::sync::Condvar = std::sync::Condvar::new();
 static PRESENT_THREAD: std::sync::Once = std::sync::Once::new();
 
-/// Hand a picture to the present thread (made at the first one with a context sharing `gl`),
-/// after the one before is shown. The game thread swapping itself waited 0.4 to 0.7 ms in the
-/// driver at each swap (Nuclear Strike: ~15% of its time at 200 fps, also with all effects
-/// off); now it only copies the picture on the GPU and goes on.
-fn present_later(gl: &Gl, job: Job) {
-    PRESENT_THREAD.call_once(|| {
-        let parts = gl.share();
-        std::thread::Builder::new().name("present".into()).spawn(move || present_loop(parts)).expect("present thread");
-    });
+/// Hand a picture to the present thread (made with the window, `start_present`), after the
+/// one before is shown. The game thread swapping itself waited 0.4 to 0.7 ms in the driver at
+/// each swap (Nuclear Strike: ~15% of its time at 200 fps, also with all effects off); now it
+/// only copies the picture on the GPU and goes on.
+fn present_later(job: Job) {
     let mut p = PRESENTER.lock().unwrap();
     while p.0.is_some() || p.1 {
         p = PRESENT_CV.wait(p).unwrap();
     }
     p.0 = Some(job);
     PRESENT_CV.notify_all();
+}
+
+/// The present thread, with a context sharing the window's.
+fn start_present(gl: &Gl) {
+    PRESENT_THREAD.call_once(|| {
+        let parts = gl.share();
+        std::thread::Builder::new().name("present".into()).spawn(move || present_loop(parts)).expect("present thread");
+    });
 }
 
 /// Wait until the present thread has shown the picture handed to it (before the window's
@@ -587,7 +673,8 @@ pub fn frame_size() -> (u32, u32) {
 /// The window's drawable size in pixels (1280x960 before it exists).
 pub fn window_size() -> (u32, u32) {
     if !on_main() {
-        return (1280, 960);
+        let s = *SIZE.lock().unwrap();
+        return if s.0 > 0 && s.1 > 0 { s } else { (1280, 960) };
     }
     with_host(|h| h.app.window.as_ref().map(|w| w.inner_size()).filter(|s| s.width > 0 && s.height > 0).map_or((1280, 960), |s| (s.width, s.height)))
 }
@@ -666,8 +753,12 @@ impl App {
     fn draw(&mut self) {
         let (Some(win), Some(gl)) = (&self.window, &mut self.gl) else { return };
         let size = win.inner_size();
+        *SIZE.lock().unwrap() = (size.width, size.height);
         if size.width == 0 || size.height == 0 {
             return;
+        }
+        if let Some(shown) = *OTHER_SHOWN.lock().unwrap() {
+            gl.shown = shown;
         }
         let want_shot = shot_due(self.overlay_changed);
         let mark = self.mark_shot.take();
@@ -708,6 +799,9 @@ impl App {
         win.focus_window();
         self.window = Some(win);
         crate::splash::close();
+        start_present(&gl);
+        keep_spare(&gl);
+        WINDOW_UP.store(true, Ordering::Relaxed);
         self.gl = Some(gl);
         if let Some((px, w, h)) = self.early.take() {
             self.frame(&px, w, h);
@@ -760,6 +854,16 @@ impl ApplicationHandler for App {
         self.create(el);
     }
 
+    fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, e: winit::event::DeviceEvent) {
+        // DirectInput's mouse is relative: the raw motion, while the window has the focus (a
+        // scripted run moves it by its own items)
+        if let winit::event::DeviceEvent::MouseMotion { delta } = e {
+            if self.focused && script_text().is_empty() {
+                super::dinput::motion(delta.0.round() as i32, delta.1.round() as i32);
+            }
+        }
+    }
+
     fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, e: WindowEvent) {
         match e {
             WindowEvent::CloseRequested => self.push(Input::Close),
@@ -775,6 +879,7 @@ impl ApplicationHandler for App {
                 self.push(Input::Focus(f));
             }
             WindowEvent::Resized(size) => {
+                *SIZE.lock().unwrap() = (size.width, size.height);
                 if let Some(gl) = &self.gl {
                     gl.resize(size.width, size.height);
                 }

@@ -1,5 +1,6 @@
-//! DirectInput 5 for the game's joysticks (games of the time read the keyboard with
-//! GetAsyncKeyState), on gamepads through gilrs.
+//! DirectInput 5: the game's joysticks on gamepads through gilrs, and the system keyboard and
+//! mouse (many games of the time read the keyboard with GetAsyncKeyState instead; see the
+//! section at the end).
 //!
 //! Always two pads are reported (many games look for pads only at their start and have room
 //! for two): the real pads behind them are chosen at every read (`connected`), so pads plugged
@@ -343,6 +344,11 @@ fn release(c: &mut Cpu) -> u32 {
 
 fn create_device(c: &mut Cpu) -> u32 {
     let (g, out) = (guid_at(arg(c, 1)), arg(c, 2));
+    match g {
+        GUID_SYSKEYBOARD => return km_create(KEYBOARD, out),
+        GUID_SYSMOUSE => return km_create(MOUSE, out),
+        _ => {}
+    }
     let n = u32::from_le_bytes(g[..4].try_into().unwrap()).wrapping_sub(PAD_GUID);
     if n >= 2 || g != pad_guid(n) {
         mem().wr32(out, 0);
@@ -365,6 +371,10 @@ fn create_device(c: &mut Cpu) -> u32 {
 /// looks for pads only at its start; `connected` finds the real one behind each when it reads.
 fn enum_devices(c: &mut Cpu) -> u32 {
     let (kind, cb, user) = (arg(c, 1) & 0xff, arg(c, 2), arg(c, 3));
+    // the keyboard and the mouse first, as DirectInput lists them
+    if !km_enum(c, kind, cb, user) {
+        return DI_OK;
+    }
     if kind != 0 && kind != DIDEVTYPE_JOYSTICK {
         return DI_OK;
     }
@@ -568,3 +578,283 @@ pub fn player_pad(p: u32) -> Option<Pad> {
 }
 
 pub const IMPORTS: &[Import] = &[("DirectInputCreateA", 4, direct_input_create)];
+
+// ---- the system keyboard and mouse ---------------------------------------------------------------
+//
+// From nuclear_rust_strike. Keys and buttons come from `user32::poll` (`key`, `button`, `wheel`),
+// mouse motion from the window system's raw motion (`motion`): DirectInput's mouse is relative.
+// Both are read as a state (GetDeviceState: 256 key bytes; DIMOUSESTATE) or as buffered events
+// (GetDeviceData: DIDEVICEOBJECTDATA, after SetProperty(DIPROP_BUFFERSIZE)). Their devices have
+// their own vtable (`KM_DEVICE`); `<PREFIX>_PAD_LOG=1` logs them too.
+
+const DIPROP_BUFFERSIZE: u32 = 1;
+const DIDEVTYPE_MOUSE: u32 = 2;
+const DIDEVTYPE_KEYBOARD: u32 = 3;
+const GUID_SYSMOUSE: [u8; 16] = guid(0x6f1d_2b60, 0xd5a0, 0x11cf, DI_D4);
+const GUID_SYSKEYBOARD: [u8; 16] = guid(0x6f1d_2b61, 0xd5a0, 0x11cf, DI_D4);
+
+/// Device kinds: index into `KM`'s queues.
+const KEYBOARD: usize = 0;
+const MOUSE: usize = 1;
+const KM_NAMES: [&str; 2] = ["keyboard", "mouse"];
+
+struct KmState {
+    /// DIK codes: 0x80 while down
+    keys: [u8; 256],
+    /// mouse motion not yet read by GetDeviceState, wheel, buttons
+    dx: i32,
+    dy: i32,
+    dz: i32,
+    buttons: [u8; 4],
+    /// buffered events per device: (offset, data, time)
+    events: [std::collections::VecDeque<(u32, u32, u32)>; 2],
+    sequence: u32,
+}
+
+static KM: Mutex<KmState> = Mutex::new(KmState {
+    keys: [0; 256],
+    dx: 0,
+    dy: 0,
+    dz: 0,
+    buttons: [0; 4],
+    events: [std::collections::VecDeque::new(), std::collections::VecDeque::new()],
+    sequence: 0,
+});
+
+/// Room in each device's buffer (more events than that are dropped, oldest first).
+const BUFFER: usize = 256;
+
+fn km_push(s: &mut KmState, dev: usize, ofs: u32, data: u32) {
+    let q = &mut s.events[dev];
+    if q.len() >= BUFFER {
+        q.pop_front();
+    }
+    q.push_back((ofs, data, super::kernel32::ms_since_start()));
+}
+
+/// The DirectInput key code (DIK) of a Windows virtual key and its scan code: the scan code,
+/// with 0x80 for the keys of the extended set (arrows, the block above them, keypad /).
+pub fn dik(vk: u8, scan: u8) -> u8 {
+    match vk {
+        0x21..=0x28 | 0x2d | 0x2e | 0x6f => scan | 0x80,
+        _ => scan,
+    }
+}
+
+/// A key went down or up (from `user32::poll`).
+pub fn key(dik: u8, down: bool) {
+    let mut s = KM.lock().unwrap();
+    let v = if down { 0x80 } else { 0 };
+    if s.keys[dik as usize] != v || down {
+        s.keys[dik as usize] = v;
+        km_push(&mut s, KEYBOARD, dik as u32, v as u32);
+    }
+}
+
+/// Let every key go (the window lost the focus).
+pub fn release_keys() {
+    let mut s = KM.lock().unwrap();
+    for k in 0..256 {
+        if s.keys[k] != 0 {
+            s.keys[k] = 0;
+            km_push(&mut s, KEYBOARD, k as u32, 0);
+        }
+    }
+}
+
+/// A mouse button (0 left, 1 right, 2 middle, 3 X1) went down or up.
+pub fn button(b: u8, down: bool) {
+    let mut s = KM.lock().unwrap();
+    let Some(k) = s.buttons.get_mut(b as usize) else { return };
+    *k = if down { 0x80 } else { 0 };
+    km_push(&mut s, MOUSE, 12 + b as u32, if down { 0x80 } else { 0 });
+}
+
+/// Raw mouse motion in counts (any thread).
+pub fn motion(dx: i32, dy: i32) {
+    let mut s = KM.lock().unwrap();
+    s.dx += dx;
+    s.dy += dy;
+    if dx != 0 {
+        km_push(&mut s, MOUSE, 0, dx as u32);
+    }
+    if dy != 0 {
+        km_push(&mut s, MOUSE, 4, dy as u32);
+    }
+}
+
+/// The mouse wheel, in lines.
+pub fn wheel(lines: i32) {
+    let mut s = KM.lock().unwrap();
+    s.dz += lines * 120;
+    km_push(&mut s, MOUSE, 8, (lines * 120) as u32);
+}
+
+// keyboard/mouse device object: vtable, references, kind (KEYBOARD/MOUSE), buffered (0/1)
+const KM_KIND: u32 = 8;
+const KM_BUFFERED: u32 = 0xc;
+const KM_SIZE: u32 = 0x10;
+
+fn km_create(kind: usize, out: u32) -> u32 {
+    let d = super::com_new(KM_DEVICE, KM_SIZE);
+    let m = mem();
+    m.wr32(d + 4, 1);
+    m.wr32(d + KM_KIND, kind as u32);
+    m.wr32(d + KM_BUFFERED, 0);
+    m.wr32(out, d);
+    pad_log!("CreateDevice: {}", KM_NAMES[kind]);
+    DI_OK
+}
+
+/// EnumDevices for the keyboard and the mouse (DIDEVICEINSTANCEA of DirectX 5); false: the
+/// callback stopped.
+fn km_enum(c: &mut Cpu, kind: u32, cb: u32, user: u32) -> bool {
+    let ddi = alloc(0x244);
+    let m = mem();
+    let mut go_on = true;
+    for (g, t, name) in [(GUID_SYSKEYBOARD, DIDEVTYPE_KEYBOARD, "Keyboard"), (GUID_SYSMOUSE, DIDEVTYPE_MOUSE, "Mouse")] {
+        if kind != 0 && kind != t {
+            continue;
+        }
+        m.slice(ddi, 0x244).fill(0);
+        m.wr32(ddi, 0x244);
+        m.slice(ddi + 4, 16).copy_from_slice(&g);
+        m.slice(ddi + 0x14, 16).copy_from_slice(&g);
+        m.wr32(ddi + 0x24, t);
+        put_cstr(ddi + 0x28, name, 260);
+        put_cstr(ddi + 0x12c, name, 260);
+        if guest_call(c, cb, &[ddi, user]) == 0 {
+            go_on = false;
+            break;
+        }
+    }
+    free(ddi);
+    go_on
+}
+
+fn km_kind(d: u32) -> usize {
+    mem().rd32(d + KM_KIND) as usize
+}
+
+/// GetCapabilities(DIDEVCAPS): attached; the keyboard's 256 keys, the mouse's 3 axes and 4
+/// buttons.
+fn km_capabilities(c: &mut Cpu) -> u32 {
+    let (d, p) = (arg(c, 0), arg(c, 1));
+    let m = mem();
+    let size = m.rd32(p).max(24);
+    m.slice(p + 4, size as usize - 4).fill(0);
+    let caps = if km_kind(d) == KEYBOARD { [DIDC_ATTACHED, DIDEVTYPE_KEYBOARD, 0, 256, 0] } else { [DIDC_ATTACHED, DIDEVTYPE_MOUSE, 3, 4, 0] };
+    for (k, v) in caps.into_iter().enumerate() {
+        m.wr32(p + 4 + 4 * k as u32, v);
+    }
+    DI_OK
+}
+
+/// SetProperty: DIPROP_BUFFERSIZE turns buffered data on; others are accepted.
+fn km_set_property(c: &mut Cpu) -> u32 {
+    let (d, prop, h) = (arg(c, 0), arg(c, 1), arg(c, 2));
+    let v = mem().rd32(h + 0x10);
+    pad_log!("SetProperty({prop}, {v}) of the {}", KM_NAMES[km_kind(d)]);
+    if prop == DIPROP_BUFFERSIZE {
+        mem().wr32(d + KM_BUFFERED, (v != 0) as u32);
+    }
+    DI_OK
+}
+
+fn km_get_property(c: &mut Cpu) -> u32 {
+    let (prop, h) = (arg(c, 1), arg(c, 2));
+    match prop {
+        DIPROP_BUFFERSIZE => mem().wr32(h + 0x10, BUFFER as u32),
+        _ => return E_NOTIMPL,
+    }
+    DI_OK
+}
+
+fn km_acquire(c: &mut Cpu) -> u32 {
+    let kind = km_kind(arg(c, 0));
+    let mut s = KM.lock().unwrap();
+    // what happened before belongs to no one
+    s.events[kind].clear();
+    if kind == MOUSE {
+        (s.dx, s.dy, s.dz) = (0, 0, 0);
+    }
+    DI_OK
+}
+
+/// GetDeviceState: the keyboard's 256 key bytes, or DIMOUSESTATE (motion since the last read,
+/// 4 buttons).
+fn km_device_state(c: &mut Cpu) -> u32 {
+    let (d, size, out) = (arg(c, 0), arg(c, 1) as usize, arg(c, 2));
+    let m = mem();
+    let mut s = KM.lock().unwrap();
+    if km_kind(d) == KEYBOARD {
+        let n = size.min(256);
+        m.slice(out, n).copy_from_slice(&s.keys[..n]);
+    } else {
+        let mut st = [0u8; 16];
+        st[0..4].copy_from_slice(&s.dx.to_le_bytes());
+        st[4..8].copy_from_slice(&s.dy.to_le_bytes());
+        st[8..12].copy_from_slice(&s.dz.to_le_bytes());
+        st[12..16].copy_from_slice(&s.buttons);
+        (s.dx, s.dy, s.dz) = (0, 0, 0);
+        let n = size.min(16);
+        m.slice(out, n).copy_from_slice(&st[..n]);
+    }
+    DI_OK
+}
+
+/// GetDeviceData(object size, DIDEVICEOBJECTDATA[], in/out count, flags): buffered events
+/// (offset, data, time, sequence); no array: only removes them (DIGDD_PEEK = 1 keeps them).
+fn km_device_data(c: &mut Cpu) -> u32 {
+    let (d, size, out, count_p, flags) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
+    let m = mem();
+    let want = m.rd32(count_p) as usize;
+    let mut s = KM.lock().unwrap();
+    let kind = km_kind(d);
+    let n = want.min(s.events[kind].len());
+    for k in 0..n {
+        let (ofs, data, time) = s.events[kind][k];
+        s.sequence += 1;
+        if out != 0 {
+            let p = out + k as u32 * size.max(16);
+            for (j, v) in [ofs, data, time, s.sequence].into_iter().enumerate() {
+                m.wr32(p + 4 * j as u32, v);
+            }
+        }
+    }
+    if flags & 1 == 0 {
+        s.events[kind].drain(..n);
+    }
+    m.wr32(count_p, n as u32);
+    DI_OK
+}
+
+static KM_DEVICE: &[Import] = &[
+    ("IDirectInputDevice2A::QueryInterface", 3, dev_query),
+    ("IDirectInputDevice2A::AddRef", 1, add_ref),
+    ("IDirectInputDevice2A::Release", 1, release),
+    ("IDirectInputDevice2A::GetCapabilities", 2, km_capabilities),
+    ("IDirectInputDevice2A::EnumObjects", 4, ok),
+    ("IDirectInputDevice2A::GetProperty", 3, km_get_property),
+    ("IDirectInputDevice2A::SetProperty", 3, km_set_property),
+    ("IDirectInputDevice2A::Acquire", 1, km_acquire),
+    ("IDirectInputDevice2A::Unacquire", 1, ok),
+    ("IDirectInputDevice2A::GetDeviceState", 3, km_device_state),
+    ("IDirectInputDevice2A::GetDeviceData", 5, km_device_data),
+    ("IDirectInputDevice2A::SetDataFormat", 2, ok),
+    ("IDirectInputDevice2A::SetEventNotification", 2, ok),
+    ("IDirectInputDevice2A::SetCooperativeLevel", 3, ok),
+    ("IDirectInputDevice2A::GetObjectInfo", 4, not_impl),
+    ("IDirectInputDevice2A::GetDeviceInfo", 2, not_impl),
+    ("IDirectInputDevice2A::RunControlPanel", 3, ok),
+    ("IDirectInputDevice2A::Initialize", 4, ok),
+    ("IDirectInputDevice2A::CreateEffect", 5, not_impl),
+    ("IDirectInputDevice2A::EnumEffects", 4, ok),
+    ("IDirectInputDevice2A::GetEffectInfo", 3, not_impl),
+    ("IDirectInputDevice2A::GetForceFeedbackState", 2, not_impl),
+    ("IDirectInputDevice2A::SendForceFeedbackCommand", 2, not_impl),
+    ("IDirectInputDevice2A::EnumCreatedEffectObjects", 4, ok),
+    ("IDirectInputDevice2A::Escape", 2, not_impl),
+    ("IDirectInputDevice2A::Poll", 1, ok),
+    ("IDirectInputDevice2A::SendDeviceData", 5, not_impl),
+];

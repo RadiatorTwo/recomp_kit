@@ -60,6 +60,12 @@ pub trait Game: Sync {
         Vec::new()
     }
 
+    /// A division by zero goes on (divided by 1, logged once per place) instead of stopping
+    /// the game: for ports of PlayStation games, whose division does not trap.
+    fn div_by_zero_goes_on(&self) -> bool {
+        false
+    }
+
     /// Self-modifying code beyond `mov [code], x` (patch tables, rewritten immediates).
     fn smc(&self) -> SmcSpec {
         SmcSpec::default()

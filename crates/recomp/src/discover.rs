@@ -101,13 +101,16 @@ impl Func {
                         }
                     }
                     FlowControl::IndirectBranch | FlowControl::UnconditionalBranch => {
-                        if i.op0_kind() == OpKind::Memory
-                            && i.memory_index() != Register::None
-                            && i.memory_index_scale() == 4
-                            && i.memory_base() == Register::None
-                        {
+                        // jmp [index*4 + table], or Watcom's jmp cs:[reg + table] (reg = index*4)
+                        let scaled = i.memory_index() != Register::None && i.memory_index_scale() == 4 && i.memory_base() == Register::None;
+                        let based = i.memory_index() == Register::None
+                            && i.memory_base() != Register::None
+                            && i.memory_base().size() == 4
+                            && code.img.is_code(i.memory_displacement32());
+                        if i.op0_kind() == OpKind::Memory && (scaled || based) {
                             // "neg ecx; jmp [ecx*4 + T]" (memcpy's tail copy) only reads entries before T
-                            let neg = self.ins.contains(&(pc.wrapping_sub(2)))
+                            let neg = scaled
+                                && self.ins.contains(&(pc.wrapping_sub(2)))
                                 && code.at(pc - 2).is_some_and(|p| {
                                     p.mnemonic() == Mnemonic::Neg
                                         && p.op0_kind() == OpKind::Register

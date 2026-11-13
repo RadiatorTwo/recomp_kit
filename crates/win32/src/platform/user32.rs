@@ -145,6 +145,9 @@ fn poll(wait: Duration) {
         let m = |msg, wp, lp| Msg { hwnd, msg, wp, lp };
         match i {
             Input::Key { vk, scan, down, repeat } => {
+                if !repeat {
+                    super::dinput::key(super::dinput::dik(vk, scan), down);
+                }
                 let k = &mut s.keys[vk as usize];
                 if down {
                     *k = if *k & 0x80 == 0 { 0x81 } else { *k | 0x80 };
@@ -167,6 +170,7 @@ fn poll(wait: Duration) {
                 s.queue.push_back(m(WM_MOUSEMOVE, buttons(&s.keys), (x as u32 & 0xffff) | (y as u32) << 16));
             }
             Input::Button(b, down) => {
+                super::dinput::button(b, down);
                 let vk = [1u8, 2, 4, 5, 6][b as usize];
                 let k = &mut s.keys[vk as usize];
                 *k = if down { 0x81 } else { *k & !0x80 };
@@ -176,6 +180,7 @@ fn poll(wait: Duration) {
                 s.queue.push_back(m(msg, buttons(&s.keys) | which, (x as u32 & 0xffff) | (y as u32) << 16));
             }
             Input::Wheel(n) => {
+                super::dinput::wheel(n);
                 let (x, y) = s.mouse;
                 s.queue.push_back(m(WM_MOUSEWHEEL, buttons(&s.keys) | ((n * 120) as u32) << 16, (x as u32 & 0xffff) | (y as u32) << 16));
             }
@@ -184,6 +189,7 @@ fn poll(wait: Duration) {
             // games did; here it keeps running in the background. Keys held when the window
             // loses the focus would never see their release: they are let go.
             Input::Focus(false) => {
+                super::dinput::release_keys();
                 for vk in 0..256 {
                     if s.keys[vk] & 0x80 != 0 {
                         s.keys[vk] &= !0x80;

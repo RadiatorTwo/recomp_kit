@@ -44,6 +44,13 @@
   grBufferSwap and shown by a thread of ours with a shared context (`window::present_later`,
   `gl::Shared`, fences both ways; `<PREFIX>_PRESENT=0` off). The window's own drawing waits
   for it (`present_wait`, `PAINT`). Not yet run on a game.
+- From nuclear_rust_strike (2026-11-13): Glide from any thread (global state, a shared
+  context per thread made ahead by the window's thread, vertex arrays and framebuffers per
+  thread, glFlush only while two threads draw, pictures of other threads to the present
+  thread), Glide's alpha test as vertex data, DirectInput keyboard and mouse (GetDeviceState,
+  buffered GetDeviceData, raw mouse motion), VirtualAlloc 64 KB aligned, Watcom's jump tables
+  `jmp cs:[reg + table]`, `Game::div_by_zero_goes_on` (divided by 1, logged once), the
+  sampler's 40-frame unwind. Not yet run on a game.
 
 ## Next
 
@@ -60,9 +67,7 @@ Grow the kit for future games, one piece at a time, with tests:
    - nuclear_rust_strike: Watcom images, CodeView names, Miles Sound System.
    - future_rust_cop: the Glide effect points (vertex depth, `post_3d`, primitive census) if a
      Glide game wants its effects.
-2. From nuclear_rust_strike: Glide's alpha test as vertex data and batches ended only by blend/chroma/filter/clamp/clip,
-   uploads staged until a texture's next use, glFlush only while another thread draws, the
-   sampler's 40-frame unwind; its effects (ao, lights, shadows, bloom, heat, zbuffer,
-   particles) when a game wants them.
+2. From nuclear_rust_strike: Glide uploads staged until a texture's next use; its effects (ao,
+   lights, shadows, bloom, heat, zbuffer, particles) when a game wants them.
 3. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
 4. Video formats beyond MPEG-1 (Bink, Smacker, AVI) when a game needs them.

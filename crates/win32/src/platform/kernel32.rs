@@ -492,7 +492,9 @@ fn virtual_alloc(c: &mut Cpu) -> u32 {
         // committing pages of an earlier reservation: ours are committed already
         return p;
     }
-    alloc_aligned(n, 0x1000)
+    // Windows' allocation granularity: Nuclear Strike's memory manager (SSMemAllocAlign)
+    // corrupted its free list when a heap did not start 64 KB aligned
+    alloc_aligned(n, 0x10000)
 }
 
 fn virtual_free(c: &mut Cpu) -> u32 {

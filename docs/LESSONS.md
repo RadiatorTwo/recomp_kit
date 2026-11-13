@@ -126,6 +126,16 @@ White. Most apply to any game of that time. Add new ones here.
 
 ## Windows
 
+- VirtualAlloc hands out 64 KB aligned blocks (Windows' allocation granularity): games' own
+  heaps may rely on it (Nuclear Strike's SSMemAllocAlign corrupted its free list at 4 KB).
+- A game may draw from more than one thread (Nuclear Strike's text before a mission): GL
+  objects that contexts do not share (vertex arrays, framebuffers) are made per thread, and
+  a thread's GL work must be flushed before another context uses it (only while two draw:
+  flushing every call cost ~7%). The window's thread may be busy running the game: it makes
+  a shared context ahead, so a thread drawing first does not wait for it.
+- PlayStation ports may divide by zero on purpose-free paths (a depth of exactly 0): the
+  PlayStation does not trap. `Game::div_by_zero_goes_on` divides by 1 and logs once.
+
 - WM_PAINT: windows need a dirty flag; GetMessage/PeekMessage return WM_PAINT when the queue is
   empty. Menus that are redrawn only at WM_PAINT stay stale without it.
 - Never send WM_ACTIVATEAPP 0: games pause themselves on it. Release held keys when the focus

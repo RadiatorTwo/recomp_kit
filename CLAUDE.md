@@ -62,8 +62,11 @@ EXE's function list belongs in the game's repository, not here).
   game modules): `game.rs` (`Identity`, the `Game` trait and its extension traits
   `DialogExt`, `GlideExt`; `game()` / `id()` give the running game), `run.rs` (the program's
   start: setup, compile with cache, run), `setup.rs` (game files, CD images), `splash.rs`,
-  `iso.rs`, `mpeg/`, `platform/` (kernel32, user32, gdi32, advapi32, ddraw, dsound, dinput,
-  dshow, dplay, misc, window, gl, glide (the version before Future Cop's effects), display,
+  `iso.rs`, `mpeg/`, `platform/` (kernel32, user32, gdi32, advapi32, ddraw, dsound, dinput
+  (gamepads, and the system keyboard and mouse with GetDeviceData), dshow, dplay, misc,
+  window, gl, glide (the version before Future Cop's effects; global state, drawn from any
+  thread with its own shared context and `Local` objects, `glFlush` only while two threads
+  draw; the alpha test as vertex data), display,
   dialog, gl (`set_vsync`: swap interval 1, the pace stays the game's; `share`/`Shared`
   and `stage`: Glide pictures are shown by a present thread, `window::present_later`,
   `<PREFIX>_PRESENT=0` off), sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,

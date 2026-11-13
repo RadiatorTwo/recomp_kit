@@ -804,7 +804,8 @@ fn on_event(c: &mut Cpu, e: Event) {
             // hundreds of thousands of Glide calls a second: handing the turn over at each made
             // the game thread wait for the others again and again. Those that never wait keep
             // it (Glide draws on the window's thread here).
-            let keep = (quick && window::on_main()) || HOLD.get();
+            // (once the thread has its GL context: getting it may wait for the window's thread)
+            let keep = (quick && window::gl_ready_here()) || HOLD.get();
             if !keep {
                 turn_give();
             }
@@ -820,6 +821,12 @@ fn on_event(c: &mut Cpu, e: Event) {
             c.r[ESP] += 4 + 4 * nargs.max(0) as u32;
         }
         Event::Foreign(a) => fatal(c, &format!("call to unknown address {a:#x}")),
+        Event::Trap(a, 0) if crate::game::game().div_by_zero_goes_on() => {
+            static SEEN: Mutex<BTreeMap<u32, ()>> = Mutex::new(BTreeMap::new());
+            if lock(&SEEN).insert(a, ()).is_none() {
+                log!("division by zero at {a:#x}: divided by 1");
+            }
+        }
         Event::Trap(a, 0) => fatal(c, &format!("division by zero at {a:#x}")),
         Event::Trap(a, _) => fatal(c, &format!("int3/hlt/ud2 at {a:#x}")),
         Event::Unimpl(a) => fatal(c, &format!("unsupported instruction at {a:#x}")),

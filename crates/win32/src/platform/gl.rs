@@ -36,11 +36,8 @@ pub struct Gl {
     pub shown: (glow::Texture, u32, u32, bool, f32),
     /// the swap interval set: 1 (vsync) or 0
     vsync: bool,
-    /// the two copies of rendered pictures for the present thread (texture, size), the one
-    /// copied into last, and the framebuffers to copy through (`stage`)
-    staged: [(glow::Texture, u32, u32); 2],
-    slot: usize,
-    copy_fbo: [glow::Framebuffer; 2],
+    /// the framebuffers to copy pictures for the present thread through (`stage`)
+    pub copy_fbo: [glow::Framebuffer; 2],
 }
 
 thread_local! {
@@ -182,11 +179,16 @@ impl Gl {
             video_size: None,
             shown: (frame, 640, 480, true, 1.0),
             vsync: false,
-            staged,
-            slot: 0,
             copy_fbo,
         };
+        *STAGED.lock().unwrap() = Some((staged, 0));
+        g.parts();
         (win, g)
+    }
+
+    /// The look's parts for other threads (`PARTS`).
+    fn parts(&self) {
+        *PARTS.lock().unwrap() = Some((self.blit, self.has_overlay.then_some(self.overlay), self.video_size.map(|(vw, vh)| (self.video, vw, vh))));
     }
 
     /// Show a 2D frame of 0RGB pixels.
@@ -202,6 +204,7 @@ impl Gl {
             // the present thread may draw it next, with its context
             unsafe { self.gl.flush() };
         }
+        self.parts();
     }
 
     /// Show a video frame (0RGB, w x h), or no video.
@@ -211,6 +214,7 @@ impl Gl {
             upload(&self.gl, self.video, px, w, h);
             unsafe { self.gl.flush() };
         }
+        self.parts();
     }
 
     pub fn resize(&self, w: u32, h: u32) {
@@ -249,7 +253,8 @@ impl Gl {
         out
     }
 
-    /// A context sharing this one's objects (textures, fences), for the present thread.
+    /// A context sharing this one's objects (textures, fences), for the present thread or a
+    /// game thread drawing Glide.
     pub fn share(&self) -> SharedParts {
         let attrs = ContextAttributesBuilder::new()
             .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
@@ -260,44 +265,56 @@ impl Gl {
         let context = unsafe { display.create_context(&self.config, &attrs) }.expect("cannot create a shared OpenGL context");
         SharedParts { context, surface: &*self.surface, display }
     }
+}
 
-    /// The staged texture copied into last.
-    pub fn slot(&self) -> usize {
-        self.slot
-    }
+/// The two copies of rendered pictures for the present thread (texture, size; textures are
+/// shared by all contexts), and the one copied into last. Made with the window's context.
+static STAGED: std::sync::Mutex<Option<([(glow::Texture, u32, u32); 2], usize)>> = std::sync::Mutex::new(None);
 
-    /// A copy of the rendered texture `tex` (w x h) for the present thread, in one of two
-    /// textures of ours taking turns: the game draws on into its own meanwhile (it may draw
-    /// only what changes). Waits on the GPU until the present thread has drawn the copy made
-    /// into the same one two pictures ago (`DONE`). Returns the copy and a fence after it.
-    pub fn stage(&mut self, tex: glow::Texture, w: u32, h: u32) -> (glow::Texture, Fence) {
-        let gl = &self.gl;
-        self.slot ^= 1;
-        let k = self.slot;
-        unsafe {
-            if let Some(f) = DONE.lock().unwrap()[k].take() {
-                gl.wait_sync(f.0, 0, glow::TIMEOUT_IGNORED);
-                gl.delete_sync(f.0);
-            }
-            let t = self.staged[k].0;
-            if (self.staged[k].1, self.staged[k].2) != (w, h) {
-                gl.bind_texture(glow::TEXTURE_2D, Some(t));
-                gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
-                self.staged[k] = (t, w, h);
-            }
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.copy_fbo[0]));
-            gl.framebuffer_texture_2d(glow::READ_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(tex), 0);
-            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.copy_fbo[1]));
-            gl.framebuffer_texture_2d(glow::DRAW_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
-            gl.disable(glow::SCISSOR_TEST);
-            gl.blit_framebuffer(0, 0, w as i32, h as i32, 0, 0, w as i32, h as i32, glow::COLOR_BUFFER_BIT, glow::NEAREST);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            let f = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).expect("GL fence");
-            // the present thread's context sees the commands only once they are sent
-            gl.flush();
-            (t, Fence(f))
+/// A copy of the rendered texture `tex` (w x h) for the present thread, in one of two
+/// textures taking turns, through this thread's framebuffers `fbos`: the game draws on into
+/// its own meanwhile (it may draw only what changes). Waits on the GPU until the present
+/// thread has drawn the copy made into the same one two pictures ago (`DONE`). Returns the
+/// copy, a fence after it, and its slot.
+pub fn stage(gl: &glow::Context, fbos: [glow::Framebuffer; 2], tex: glow::Texture, w: u32, h: u32) -> Option<(glow::Texture, Fence, usize)> {
+    let mut st = STAGED.lock().unwrap();
+    let (staged, slot) = st.as_mut()?;
+    *slot ^= 1;
+    let k = *slot;
+    unsafe {
+        if let Some(f) = DONE.lock().unwrap()[k].take() {
+            gl.wait_sync(f.0, 0, glow::TIMEOUT_IGNORED);
+            gl.delete_sync(f.0);
         }
+        let t = staged[k].0;
+        if (staged[k].1, staged[k].2) != (w, h) {
+            gl.bind_texture(glow::TEXTURE_2D, Some(t));
+            gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+            staged[k] = (t, w, h);
+        }
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbos[0]));
+        gl.framebuffer_texture_2d(glow::READ_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(tex), 0);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(fbos[1]));
+        gl.framebuffer_texture_2d(glow::DRAW_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.blit_framebuffer(0, 0, w as i32, h as i32, 0, 0, w as i32, h as i32, glow::COLOR_BUFFER_BIT, glow::NEAREST);
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        let f = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).expect("GL fence");
+        // the present thread's context sees the commands only once they are sent
+        gl.flush();
+        Some((t, Fence(f), k))
     }
+}
+
+/// What the window shows besides the picture (the blit program, overlay, video), for threads
+/// other than the window's: set by the window's thread whenever it changes.
+static PARTS: std::sync::Mutex<Option<(glow::Program, Option<glow::Texture>, Option<(glow::Texture, u32, u32)>)>> = std::sync::Mutex::new(None);
+
+/// The window's look with `shown` as the picture, in a window of `size` (None before the window
+/// exists).
+pub fn look_with(shown: (glow::Texture, u32, u32, bool, f32), size: (u32, u32)) -> Option<Look> {
+    let (blit, overlay, video) = (*PARTS.lock().unwrap())?;
+    Some(Look { blit, shown, overlay, video, size })
 }
 
 /// A GL fence (shared by the contexts of a share group).
@@ -427,6 +444,8 @@ pub struct Shared {
     vao: glow::VertexArray,
     /// the swap interval set: 1 (vsync) or 0
     vsync: bool,
+    /// framebuffers to copy pictures through (`stage`; framebuffers are not shared)
+    pub copy_fbo: [glow::Framebuffer; 2],
 }
 
 impl SharedParts {
@@ -436,7 +455,8 @@ impl SharedParts {
         let gl = unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
         let vao = unsafe { gl.create_vertex_array() }.expect("GL vertex array");
         let _ = unsafe { &*self.surface }.set_swap_interval(&context, SwapInterval::DontWait);
-        Shared { gl, context, surface: self.surface, vao, vsync: false }
+        let copy_fbo = unsafe { [gl.create_framebuffer().expect("GL framebuffer"), gl.create_framebuffer().expect("GL framebuffer")] };
+        Shared { gl, context, surface: self.surface, vao, vsync: false, copy_fbo }
     }
 }
 
