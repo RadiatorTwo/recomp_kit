@@ -64,7 +64,9 @@ EXE's function list belongs in the game's repository, not here).
   start: setup, compile with cache, run), `setup.rs` (game files, CD images), `splash.rs`,
   `iso.rs`, `mpeg/`, `platform/` (kernel32, user32, gdi32, advapi32, ddraw, dsound, dinput,
   dshow, dplay, misc, window, gl, glide (the version before Future Cop's effects), display,
-  dialog, gl (`set_vsync`: swap interval 1, the pace stays the game's), sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
+  dialog, gl (`set_vsync`: swap interval 1, the pace stays the game's; `share`/`Shared`
+  and `stage`: Glide pictures are shown by a present thread, `window::present_later`,
+  `<PREFIX>_PRESENT=0` off), sample (sampling profiler, `<PREFIX>_SAMPLE`), menupad (gamepad in menus; the game gives its items with `Game::menu`), record,
   savestate (the game calls `level_start` / `frame`), cheats (`Game::cheats`, run by the game's
   hook with `run_pending`), setting (registry + switch), hd (replacement textures), tween
   (pictures between logic frames: `LogicClock`, `Pacer` (sleep and spin), `Hist`,

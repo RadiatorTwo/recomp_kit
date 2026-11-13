@@ -40,6 +40,10 @@
   before the next logic frame). GUIDE: goal "better than the original" and its rules
   (section 0), 8a speed before effects (measure, per-call costs, hot game functions in Rust
   checked identical), 11 modern effects. Not yet run on a game (fcop_plain).
+- Present thread (2026-11-13): Glide pictures copied on the GPU into one of two textures at
+  grBufferSwap and shown by a thread of ours with a shared context (`window::present_later`,
+  `gl::Shared`, fences both ways; `<PREFIX>_PRESENT=0` off). The window's own drawing waits
+  for it (`present_wait`, `PAINT`). Not yet run on a game.
 
 ## Next
 
@@ -56,9 +60,7 @@ Grow the kit for future games, one piece at a time, with tests:
    - nuclear_rust_strike: Watcom images, CodeView names, Miles Sound System.
    - future_rust_cop: the Glide effect points (vertex depth, `post_3d`, primitive census) if a
      Glide game wants its effects.
-2. From nuclear_rust_strike: Glide on the game's own thread with a shared context and a
-   present thread (`window::present_later`, SwapBuffers off the game thread: +20%), Glide's
-   alpha test as vertex data and batches ended only by blend/chroma/filter/clamp/clip,
+2. From nuclear_rust_strike: Glide's alpha test as vertex data and batches ended only by blend/chroma/filter/clamp/clip,
    uploads staged until a texture's next use, glFlush only while another thread draws, the
    sampler's 40-frame unwind; its effects (ao, lights, shadows, bloom, heat, zbuffer,
    particles) when a game wants them.

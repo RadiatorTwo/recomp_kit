@@ -384,17 +384,99 @@ pub fn with_gl<R>(f: impl FnOnce(&mut Gl) -> R) -> Option<R> {
     with_host(|h| h.app.gl.as_mut().map(f))
 }
 
-/// Show a texture something rendered (first row at the bottom), w x h, with a gamma.
+/// Show a texture something rendered (first row at the bottom), w x h, with a gamma: a copy
+/// of it is handed to the present thread (`present_later`), unless `<PREFIX>_PRESENT=0`.
 pub fn show_texture(tex: glow::Texture, w: u32, h: u32, gamma: f32) {
     if !on_main() {
         return;
     }
     with_host(|host| {
-        if let Some(gl) = &mut host.app.gl {
+        let app = &mut host.app;
+        let (Some(win), Some(gl)) = (&app.window, &mut app.gl) else { return };
+        let size = win.inner_size();
+        if !present_thread() || app.mark_shot.is_some() || size.width == 0 || size.height == 0 {
             gl.shown = (tex, w, h, false, gamma);
-            host.app.draw();
+            app.draw();
+            return;
         }
+        let (copy, fence) = gl.stage(tex, w, h);
+        gl.shown = (copy, w, h, false, gamma);
+        let shot = shot_due(app.overlay_changed);
+        app.overlay_changed &= !shot;
+        let job = Job { look: gl.look(size.width, size.height), fence, slot: gl.slot(), shot };
+        present_later(gl, job);
     });
+}
+
+/// Whether pictures rendered by Glide are shown by the present thread (`<PREFIX>_PRESENT=0`:
+/// by the game's thread, as before).
+fn present_thread() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| recomp::config::env("PRESENT").is_none_or(|v| v != "0"))
+}
+
+/// A picture for the present thread: what to draw, the fence of its copy and the copy's slot,
+/// whether a screenshot is due.
+struct Job {
+    look: super::gl::Look,
+    fence: super::gl::Fence,
+    slot: usize,
+    shot: bool,
+}
+
+/// The present thread's next picture, and whether it is drawing one.
+static PRESENTER: Mutex<(Option<Job>, bool)> = Mutex::new((None, false));
+static PRESENT_CV: std::sync::Condvar = std::sync::Condvar::new();
+static PRESENT_THREAD: std::sync::Once = std::sync::Once::new();
+
+/// Hand a picture to the present thread (made at the first one with a context sharing `gl`),
+/// after the one before is shown. The game thread swapping itself waited 0.4 to 0.7 ms in the
+/// driver at each swap (Nuclear Strike: ~15% of its time at 200 fps, also with all effects
+/// off); now it only copies the picture on the GPU and goes on.
+fn present_later(gl: &Gl, job: Job) {
+    PRESENT_THREAD.call_once(|| {
+        let parts = gl.share();
+        std::thread::Builder::new().name("present".into()).spawn(move || present_loop(parts)).expect("present thread");
+    });
+    let mut p = PRESENTER.lock().unwrap();
+    while p.0.is_some() || p.1 {
+        p = PRESENT_CV.wait(p).unwrap();
+    }
+    p.0 = Some(job);
+    PRESENT_CV.notify_all();
+}
+
+/// Wait until the present thread has shown the picture handed to it (before the window's
+/// thread draws into the window itself or resizes it).
+pub fn present_wait() {
+    let mut p = PRESENTER.lock().unwrap();
+    while p.0.is_some() || p.1 {
+        p = PRESENT_CV.wait(p).unwrap();
+    }
+}
+
+fn present_loop(parts: super::gl::SharedParts) {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    }
+    let mut sh = parts.make_current();
+    loop {
+        let job = {
+            let mut p = PRESENTER.lock().unwrap();
+            while p.0.is_none() {
+                p = PRESENT_CV.wait(p).unwrap();
+            }
+            p.1 = true;
+            p.0.take().unwrap()
+        };
+        if let Some((px, pw, ph)) = sh.present(&job.look, job.fence, job.slot, job.shot) {
+            write_shot(&px, pw, ph);
+        }
+        PRESENTER.lock().unwrap().1 = false;
+        PRESENT_CV.notify_all();
+    }
 }
 
 /// <PREFIX>_SHOT=file.png: the picture shown is written there (as the window shows it), at most

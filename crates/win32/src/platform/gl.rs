@@ -3,7 +3,7 @@
 //! something else rendered (the Glide scene); a video and the dialog overlay go on top.
 
 use glow::HasContext;
-use glutin::context::{ContextApi, ContextAttributesBuilder, GlProfile, NotCurrentGlContext, PossiblyCurrentContext, Version};
+use glutin::context::{ContextApi, ContextAttributesBuilder, GlProfile, NotCurrentContext, NotCurrentGlContext, PossiblyCurrentContext, Version};
 use glutin::config::GlConfig;
 use glutin::display::{GetGlDisplay, GlDisplay};
 use glutin::surface::{GlSurface, Surface, SwapInterval, WindowSurface};
@@ -18,8 +18,11 @@ pub const GLSL: &str = "#version 330 core\n";
 
 pub struct Gl {
     pub gl: glow::Context,
-    surface: Surface<WindowSurface>,
+    /// boxed: the present thread's shared context draws to it too (`share`)
+    surface: Box<Surface<WindowSurface>>,
     context: PossiblyCurrentContext,
+    config: glutin::config::Config,
+    raw: Option<raw_window_handle::RawWindowHandle>,
     blit: glow::Program,
     vao: glow::VertexArray,
     frame: glow::Texture,
@@ -33,6 +36,11 @@ pub struct Gl {
     pub shown: (glow::Texture, u32, u32, bool, f32),
     /// the swap interval set: 1 (vsync) or 0
     vsync: bool,
+    /// the two copies of rendered pictures for the present thread (texture, size), the one
+    /// copied into last, and the framebuffers to copy through (`stage`)
+    staged: [(glow::Texture, u32, u32); 2],
+    slot: usize,
+    copy_fbo: [glow::Framebuffer; 2],
 }
 
 thread_local! {
@@ -146,8 +154,8 @@ impl Gl {
             .build(handle);
         let context = unsafe { display.create_context(&config, &attrs) }.expect("cannot create an OpenGL 3.3 context");
         let sattrs = win.build_surface_attributes(Default::default()).expect("surface attributes");
-        let surface = unsafe { display.create_window_surface(&config, &sattrs) }.expect("cannot create the GL surface");
-        let context = context.make_current(&surface).expect("cannot make the GL context current");
+        let surface = Box::new(unsafe { display.create_window_surface(&config, &sattrs) }.expect("cannot create the GL surface"));
+        let context = context.make_current(&*surface).expect("cannot make the GL context current");
         // the game paces itself
         let _ = surface.set_swap_interval(&context, SwapInterval::DontWait);
         let gl = unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
@@ -157,7 +165,27 @@ impl Gl {
         upload(&gl, frame, &vec![0; 640 * 480], 640, 480);
         let overlay = texture(&gl, true);
         let video = texture(&gl, true);
-        let g = Gl { gl, surface, context, blit, vao, frame, overlay, has_overlay: false, video, video_size: None, shown: (frame, 640, 480, true, 1.0), vsync: false };
+        let staged = [(texture(&gl, true), 0, 0), (texture(&gl, true), 0, 0)];
+        let copy_fbo = [unsafe { gl.create_framebuffer() }.expect("GL framebuffer"), unsafe { gl.create_framebuffer() }.expect("GL framebuffer")];
+        let g = Gl {
+            gl,
+            surface,
+            context,
+            config,
+            raw: handle,
+            blit,
+            vao,
+            frame,
+            overlay,
+            has_overlay: false,
+            video,
+            video_size: None,
+            shown: (frame, 640, 480, true, 1.0),
+            vsync: false,
+            staged,
+            slot: 0,
+            copy_fbo,
+        };
         (win, g)
     }
 
@@ -171,6 +199,8 @@ impl Gl {
         self.has_overlay = o.is_some();
         if let Some((px, w, h)) = o {
             upload(&self.gl, self.overlay, px, w, h);
+            // the present thread may draw it next, with its context
+            unsafe { self.gl.flush() };
         }
     }
 
@@ -179,20 +209,125 @@ impl Gl {
         self.video_size = v.map(|v| (v.1, v.2));
         if let Some((px, w, h)) = v {
             upload(&self.gl, self.video, px, w, h);
+            unsafe { self.gl.flush() };
         }
     }
 
     pub fn resize(&self, w: u32, h: u32) {
+        super::window::present_wait();
+        let _p = PAINT.lock().unwrap_or_else(|e| e.into_inner());
         if let (Some(w), Some(h)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
             self.surface.resize(&self.context, w, h);
+        }
+    }
+
+    /// What the window shows, in a window of w x h.
+    pub fn look(&self, w: u32, h: u32) -> Look {
+        Look {
+            blit: self.blit,
+            shown: self.shown,
+            overlay: self.has_overlay.then_some(self.overlay),
+            video: self.video_size.map(|(vw, vh)| (self.video, vw, vh)),
+            size: (w, h),
         }
     }
 
     /// Draw the shown picture and the overlay into the window (w x h), letterboxed; with `shot`,
     /// read back the picture's area as 0RGB pixels.
     pub fn draw(&mut self, w: u32, h: u32, shot: bool) -> Option<(Vec<u32>, u32, u32)> {
+        // the present thread may be drawing the window
+        super::window::present_wait();
+        let _p = PAINT.lock().unwrap_or_else(|e| e.into_inner());
+        let out = paint(&self.gl, self.vao, &self.look(w, h), shot);
+        let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
+        if vsync != self.vsync {
+            self.vsync = vsync;
+            let interval = if vsync { SwapInterval::Wait(NonZeroU32::MIN) } else { SwapInterval::DontWait };
+            let _ = self.surface.set_swap_interval(&self.context, interval);
+        }
+        let _ = self.surface.swap_buffers(&self.context);
+        out
+    }
+
+    /// A context sharing this one's objects (textures, fences), for the present thread.
+    pub fn share(&self) -> SharedParts {
+        let attrs = ContextAttributesBuilder::new()
+            .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
+            .with_profile(GlProfile::Core)
+            .with_sharing(&self.context)
+            .build(self.raw);
+        let display = self.config.display();
+        let context = unsafe { display.create_context(&self.config, &attrs) }.expect("cannot create a shared OpenGL context");
+        SharedParts { context, surface: &*self.surface, display }
+    }
+
+    /// The staged texture copied into last.
+    pub fn slot(&self) -> usize {
+        self.slot
+    }
+
+    /// A copy of the rendered texture `tex` (w x h) for the present thread, in one of two
+    /// textures of ours taking turns: the game draws on into its own meanwhile (it may draw
+    /// only what changes). Waits on the GPU until the present thread has drawn the copy made
+    /// into the same one two pictures ago (`DONE`). Returns the copy and a fence after it.
+    pub fn stage(&mut self, tex: glow::Texture, w: u32, h: u32) -> (glow::Texture, Fence) {
         let gl = &self.gl;
-        let (tex, fw, fh, words, gamma) = self.shown;
+        self.slot ^= 1;
+        let k = self.slot;
+        unsafe {
+            if let Some(f) = DONE.lock().unwrap()[k].take() {
+                gl.wait_sync(f.0, 0, glow::TIMEOUT_IGNORED);
+                gl.delete_sync(f.0);
+            }
+            let t = self.staged[k].0;
+            if (self.staged[k].1, self.staged[k].2) != (w, h) {
+                gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+                self.staged[k] = (t, w, h);
+            }
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.copy_fbo[0]));
+            gl.framebuffer_texture_2d(glow::READ_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(tex), 0);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.copy_fbo[1]));
+            gl.framebuffer_texture_2d(glow::DRAW_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
+            gl.disable(glow::SCISSOR_TEST);
+            gl.blit_framebuffer(0, 0, w as i32, h as i32, 0, 0, w as i32, h as i32, glow::COLOR_BUFFER_BIT, glow::NEAREST);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            let f = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).expect("GL fence");
+            // the present thread's context sees the commands only once they are sent
+            gl.flush();
+            (t, Fence(f))
+        }
+    }
+}
+
+/// A GL fence (shared by the contexts of a share group).
+pub struct Fence(pub glow::Fence);
+
+// a fence is a name the share group knows; the present thread waits on it and deletes it
+unsafe impl Send for Fence {}
+
+/// The present thread's fences after drawing each staged texture (`Gl::stage`).
+static DONE: std::sync::Mutex<[Option<Fence>; 2]> = std::sync::Mutex::new([None, None]);
+
+/// What the window shows: the picture (texture, size, 0RGB words or not, gamma), the overlay
+/// and a video (textures shared by all contexts), the window's size.
+#[derive(Clone, Copy)]
+pub struct Look {
+    blit: glow::Program,
+    pub shown: (glow::Texture, u32, u32, bool, f32),
+    overlay: Option<glow::Texture>,
+    video: Option<(glow::Texture, u32, u32)>,
+    pub size: (u32, u32),
+}
+
+/// One thread at a time draws into the window and swaps (the window's thread, or the present
+/// thread with its shared context).
+static PAINT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Draw `l` into the window's back buffer; with `shot`, read back the picture's area.
+fn paint(gl: &glow::Context, vao: glow::VertexArray, l: &Look, shot: bool) -> Option<(Vec<u32>, u32, u32)> {
+        let (w, h) = l.size;
+        let (tex, fw, fh, words, gamma) = l.shown;
         let (ox, oy, s) = super::window::fit(fw, fh, w, h);
         let (x0, y0) = (ox / w as f64 * 2.0 - 1.0, 1.0 - oy / h as f64 * 2.0);
         let (x1, y1) = (x0 + fw as f64 * s / w as f64 * 2.0, y0 - fh as f64 * s / h as f64 * 2.0);
@@ -205,12 +340,12 @@ impl Gl {
             // the window stays opaque: 2D frames' 0RGB words have alpha 0, and a compositor that
             // blends windows by their alpha (Wayland) showed what is behind through the menu
             gl.color_mask(true, true, true, false);
-            gl.use_program(Some(self.blit));
-            gl.bind_vertex_array(Some(self.vao));
+            gl.use_program(Some(l.blit));
+            gl.bind_vertex_array(Some(vao));
             gl.active_texture(glow::TEXTURE0);
             // asked of the driver once: NVIDIA's lookup makes system calls (a picture's five
             // cost ~10% of a game thread that shows its own pictures)
-            let u = |n: &'static str| uniform(gl, self.blit, n);
+            let u = |n: &'static str| uniform(gl, l.blit, n);
             gl.uniform_4_f32(u("rect").as_ref(), x0 as f32, y1 as f32, x1 as f32, y0 as f32);
             gl.uniform_1_i32(u("tex").as_ref(), 0);
             gl.disable(glow::BLEND);
@@ -225,22 +360,23 @@ impl Gl {
             let (ox0, ox1) = (x0 + (x1 - x0) * sx as f64 / fw as f64, x0 + (x1 - x0) * (sx + sw) as f64 / fw as f64);
             // videos fill the window as far as their aspect allows, centred (the game placed
             // them in its 640x480 screen, briefings small and high up)
-            if let Some((vw, vh)) = self.video_size {
+            if let Some((video, vw, vh)) = l.video {
                 gl.clear(glow::COLOR_BUFFER_BIT);
                 let (vx, vy, s) = super::window::fit(vw, vh, w, h);
                 let (ax, ay) = (vx / w as f64 * 2.0 - 1.0, 1.0 - vy / h as f64 * 2.0);
                 let (bx, by) = (ax + vw as f64 * s / w as f64 * 2.0, ay - vh as f64 * s / h as f64 * 2.0);
-                gl.uniform_4_f32(u("rect").as_ref(), ax as f32, by as f32, bx as f32, ay as f32);                gl.bind_texture(glow::TEXTURE_2D, Some(self.video));
+                gl.uniform_4_f32(u("rect").as_ref(), ax as f32, by as f32, bx as f32, ay as f32);
+                gl.bind_texture(glow::TEXTURE_2D, Some(video));
                 gl.uniform_1_i32(u("words").as_ref(), 1);
                 gl.uniform_1_i32(u("flip").as_ref(), 0);
                 gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
-            if self.has_overlay {
+            if let Some(overlay) = l.overlay {
                 gl.uniform_4_f32(u("rect").as_ref(), ox0 as f32, y1 as f32, ox1 as f32, y0 as f32);
                 gl.enable(glow::BLEND);
                 gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.overlay));
+                gl.bind_texture(glow::TEXTURE_2D, Some(overlay));
                 gl.uniform_1_i32(u("words").as_ref(), 1);
                 gl.uniform_1_i32(u("flip").as_ref(), 0);
                 gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
@@ -267,13 +403,70 @@ impl Gl {
                 .collect();
             (px, rw as u32, rh as u32)
         });
+        out
+}
+
+/// A shared context (`Gl::share`) on its way to the present thread.
+pub struct SharedParts {
+    context: NotCurrentContext,
+    /// the window's surface: the Gl that made it lives as long as the window
+    surface: *const Surface<WindowSurface>,
+    display: glutin::display::Display,
+}
+
+// the context is made current on the receiving thread only; the surface is the window's, which
+// two contexts may draw to on two threads (one at a time: PAINT)
+unsafe impl Send for SharedParts {}
+
+/// A shared context current on its thread.
+pub struct Shared {
+    pub gl: glow::Context,
+    context: PossiblyCurrentContext,
+    surface: *const Surface<WindowSurface>,
+    /// for drawing into the window (vertex arrays are not shared)
+    vao: glow::VertexArray,
+    /// the swap interval set: 1 (vsync) or 0
+    vsync: bool,
+}
+
+impl SharedParts {
+    pub fn make_current(self) -> Shared {
+        let context = self.context.make_current(unsafe { &*self.surface }).expect("cannot make the shared GL context current");
+        let display = self.display;
+        let gl = unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
+        let vao = unsafe { gl.create_vertex_array() }.expect("GL vertex array");
+        let _ = unsafe { &*self.surface }.set_swap_interval(&context, SwapInterval::DontWait);
+        Shared { gl, context, surface: self.surface, vao, vsync: false }
+    }
+}
+
+impl Shared {
+    /// Draw `l` into the window and swap, once the GPU has done `fence` (the staged copy); the
+    /// staged texture `slot`'s fence of being drawn goes to `DONE`.
+    pub fn present(&mut self, l: &Look, fence: Fence, slot: usize, shot: bool) -> Option<(Vec<u32>, u32, u32)> {
+        let _p = PAINT.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: the window's surface lives as long as the window (see SharedParts)
+        let surface = unsafe { &*self.surface };
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
             self.vsync = vsync;
             let interval = if vsync { SwapInterval::Wait(NonZeroU32::MIN) } else { SwapInterval::DontWait };
-            let _ = self.surface.set_swap_interval(&self.context, interval);
+            let _ = surface.set_swap_interval(&self.context, interval);
         }
-        let _ = self.surface.swap_buffers(&self.context);
+        unsafe {
+            // the GPU waits for the copy, not this thread
+            self.gl.wait_sync(fence.0, 0, glow::TIMEOUT_IGNORED);
+            self.gl.delete_sync(fence.0);
+        }
+        let out = paint(&self.gl, self.vao, l, shot);
+        unsafe {
+            if let Some(f) = self.gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).ok() {
+                if let Some(old) = DONE.lock().unwrap()[slot].replace(Fence(f)) {
+                    self.gl.delete_sync(old.0);
+                }
+            }
+        }
+        let _ = surface.swap_buffers(&self.context);
         out
     }
 }

@@ -197,10 +197,11 @@ von ~175 auf ~790 fps ohne Effekte (Mission 1); das Ziel waren 500. Reihenfolge:
    Wechseln, die es wirklich brauchen (Blend, Chroma-Key, Filter, Clip). glFlush nur, wenn ein
    zweiter Thread zeichnet. Uploads gesammelt, nicht zeilenweise.
 6. **Den Tausch der Puffer vom Spiel-Thread nehmen.** SwapBuffers kostete im Treiber 0,4 bis
-   0,7 ms pro Bild (~15 % bei 200 fps). Zeichnet das Spiel auf einem eigenen Thread mit
-   geteiltem Kontext, zeigt ein eigener Present-Thread die Bilder (Fence setzen, übergeben,
-   dort auf die GPU warten, blitten, tauschen): nuclear_rust_strike `window::present_later`
-   (im Kit noch nicht: PLAN).
+   0,7 ms pro Bild (~15 % bei 200 fps). Das Kit zeigt Glide-Bilder deshalb von einem eigenen
+   Present-Thread (`window::present_later`, geteilter Kontext): beim Bildtausch wird das Bild
+   auf der GPU in eine von zwei eigenen Texturen kopiert, ein Fence gesetzt und übergeben;
+   der Present-Thread lässt die GPU auf den Fence warten, zeichnet ins Fenster und tauscht.
+   Ausschalten zum Vergleichen: `<PREFIX>_PRESENT=0`.
 7. **Takten mit Schlafen und Spinnen** (`tween::Pacer`, `sleep_until`): ein Sleep dauert bis
    1 ms länger als verlangt; die letzten 1,5 ms werden gespinnt (240 fps: Bildabstände
    4,0–4,4 ms statt 3,7–4,7).

@@ -114,8 +114,11 @@ White. Most apply to any game of that time. Add new ones here.
   each time came from the system (page faults); keep one, and copy only the pages written
   (`MEM_WRITE_WATCH`, `Memory::written`).
 - SwapBuffers costs 0.4 to 0.7 ms of the calling thread in the driver, also with nothing
-  else to do: show pictures from a present thread of one's own (nuclear_rust_strike
-  `window::present_later`).
+  else to do: show pictures from a present thread of one's own (`window::present_later`;
+  Nuclear Strike ~202 -> ~243 fps). The game may draw on into its buffer at once (and some
+  draw only what changes): the present thread gets a GPU copy, two copies take turns, and
+  fences both ways keep the GPU from reading a copy being made or overwriting one not yet
+  drawn.
 - Hot game functions rewritten in Rust (projections, polygon set-ups) gained 6-20% each.
   Kept exact (same operations, order and rounding) and checked by a switch that runs both:
   not one difference in millions of calls. Lifting longer x87 runs under 0xc7f (over
