@@ -132,6 +132,9 @@ White. Most apply to any game of that time. Add new ones here.
   fences both ways keep the GPU from reading a copy being made or overwriting one not yet
   drawn. Not a gain everywhere: Future Cop (~650 fps, one GPU copy a picture) was slower with
   it (692 -> 638); measure per game, `<PREFIX>_PRESENT=0` turns it off.
+- NVIDIA's "Vulkan/OpenGL present method: prefer layered on DXGI swapchain" (driver setting)
+  made a windowed OpenGL game slower, not faster: Future Cop 792 -> 517 fps, its thread waiting
+  ~39% in SwapBuffers instead of ~14%. Leave it on Auto.
 - Hot game functions rewritten in Rust (projections, polygon set-ups) gained 6-20% each.
   Kept exact (same operations, order and rounding) and checked by a switch that runs both:
   not one difference in millions of calls. Future Cop's Glide display list walker (~1000
