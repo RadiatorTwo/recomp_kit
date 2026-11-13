@@ -32,6 +32,8 @@ EXE's function list belongs in the game's repository, not here).
   - limits of the technology of the time may be lifted (fixed logic rate with pictures
     between, widescreen, resolution, depth buffer, resolution locks, idle loops).
 - Speed before modern effects (GUIDE 8a, then 11).
+- With these old games the GPU is never the limit: a low frame rate is always CPU side
+  (game code, our code, draw calls, driver). Never blame the GPU (GUIDE 8a, LESSONS Speed).
 
 ## Layout
 

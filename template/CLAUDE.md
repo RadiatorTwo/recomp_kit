@@ -16,6 +16,8 @@ boundaries (`data/functions.json`) and our notes by address (`data/symbols.txt`)
 - Speaks German; works in short sessions and watches usage limits.
 - Confirm before anything outward-facing or destructive (pushing, deleting).
 - Clean Rust first, performance later.
+- The GPU is never the limit with this old game: a low frame rate is CPU side (game code,
+  our code, draw calls, driver). Measure (recomp_kit GUIDE 8a).
 
 ## How it works
 

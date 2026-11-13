@@ -160,7 +160,16 @@ identisch ist. Treue zum Original gilt nicht für seine Fehler und Grenzen.
 
 Erst schnell, dann schön: Effekte (SSAO, Schatten, Licht, Bloom) kosten jeder 10–30 % der
 Bildrate, und was vorher langsam war, wird mit ihnen nicht schneller. Nuclear Strike kam so
-von ~175 auf ~790 fps ohne Effekte (Mission 1); das Ziel waren 500. Reihenfolge:
+von ~175 auf ~790 fps ohne Effekte (Mission 1); das Ziel waren 500.
+
+**Regel: Bei diesen alten Spielen ist nie die GPU das Limit.** Ihre Szenen haben ein paar
+tausend Dreiecke, jede heutige GPU zeichnet sie in Bruchteilen einer Millisekunde. Ist die
+Bildrate niedrig, liegt es an der CPU-Seite: übersetzter Spiel-Code, eigener Rust-Code pro
+Aufruf, zu viele Draw-Calls oder Zustandswechsel, Uploads, Warten auf den Turn, der Treiber
+(SwapBuffers, glFlush, Synchronisation). Nie mit "die GPU schafft es nicht" erklären und
+nicht zuerst Shader oder Auflösung kürzen: messen (Punkt 1) und die CPU-Seite suchen.
+
+Reihenfolge:
 
 1. **Messen, nicht raten.** `<PREFIX>_SAMPLE=1` (Stichproben des Spiel-Threads alle 2 s:
    Spiel-Funktion oder Host-Modul), `<PREFIX>_PROF=1` (Zeit in Imports und beim Warten auf den

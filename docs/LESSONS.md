@@ -82,6 +82,11 @@ White. Most apply to any game of that time. Add new ones here.
 
 ## Speed
 
+- With these old games the GPU is never the limit: a few thousand triangles a picture take a
+  modern GPU a fraction of a millisecond. A low frame rate is on the CPU side (translated game
+  code, our per-call cost, draw calls and state changes, uploads, the turn, the driver's
+  SwapBuffers / glFlush / synchronisation). Never blame the GPU, never cut shaders or
+  resolution first: measure and find the CPU cost.
 - Measure before guessing: `<PREFIX>_SAMPLE=1` samples the thread that swaps Glide's buffers
   (recompiled function, or host module unwound to our own frame), `<PREFIX>_SAMPLE_RAW=<file>`
   all samples; symbolise our own addresses with a build with
