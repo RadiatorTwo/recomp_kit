@@ -420,7 +420,38 @@ fn paint(gl: &glow::Context, vao: glow::VertexArray, l: &Look, shot: bool) -> Op
                 .collect();
             (px, rw as u32, rh as u32)
         });
+        // <PREFIX>_STATS' display, after the screenshot
+        if let Some(new) = super::stats::on().then(super::stats::pixels) {
+            draw_stats(gl, l.blit, new, w, h);
+        }
         out
+}
+
+/// <PREFIX>_STATS' display in the top left corner, twice its size from 900 rows on (`new`: its
+/// pixels when they changed). Its texture is shared by the contexts.
+fn draw_stats(gl: &glow::Context, blit: glow::Program, new: Option<Vec<u32>>, w: u32, h: u32) {
+    static TEX: std::sync::OnceLock<glow::Texture> = std::sync::OnceLock::new();
+    let t = *TEX.get_or_init(|| texture(gl, false));
+    if let Some(px) = new {
+        upload(gl, t, &px, super::stats::W as u32, super::stats::H as u32);
+    }
+    let scale = if h >= 900 { 2.0 } else { 1.0 };
+    let (x0, y0) = (-1.0 + 2.0 * 8.0 / w as f32, 1.0 - 2.0 * 8.0 / h as f32);
+    let (x1, y1) = (x0 + 2.0 * super::stats::W as f32 * scale / w as f32, y0 - 2.0 * super::stats::H as f32 * scale / h as f32);
+    let u = |n: &'static str| uniform(gl, blit, n);
+    unsafe {
+        gl.color_mask(true, true, true, false);
+        gl.uniform_4_f32(u("rect").as_ref(), x0, y1, x1, y0);
+        gl.uniform_1_i32(u("words").as_ref(), 1);
+        gl.uniform_1_i32(u("flip").as_ref(), 0);
+        gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
+        gl.enable(glow::BLEND);
+        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        gl.bind_texture(glow::TEXTURE_2D, Some(t));
+        gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        gl.disable(glow::BLEND);
+        gl.color_mask(true, true, true, true);
+    }
 }
 
 /// A shared context (`Gl::share`) on its way to the present thread.

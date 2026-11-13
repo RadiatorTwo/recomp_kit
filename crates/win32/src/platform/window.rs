@@ -452,6 +452,7 @@ static SIZE: Mutex<(u32, u32)> = Mutex::new((0, 0));
 /// of it is handed to the present thread (`present_later`), unless `<PREFIX>_PRESENT=0` (then
 /// the window's thread shows it; another thread's pictures always go to the present thread).
 pub fn show_texture(tex: glow::Texture, w: u32, h: u32, gamma: f32) {
+    super::stats::picture();
     if !on_main() {
         let size = *SIZE.lock().unwrap();
         let Some(look) = super::gl::look_with((tex, w, h, false, gamma), size).filter(|_| size.0 > 0 && size.1 > 0) else { return };
@@ -743,6 +744,7 @@ impl App {
     fn frame(&mut self, px: &[u32], w: u32, h: u32) {
         match &mut self.gl {
             Some(gl) => {
+                super::stats::picture();
                 gl.frame(px, w, h);
                 self.draw();
             }

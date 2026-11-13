@@ -92,7 +92,13 @@ White. Most apply to any game of that time. Add new ones here.
   all samples; symbolise our own addresses with a build with
   `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` and llvm-symbolizer. `<PREFIX>_DUMP=<hex>`
   disassembles one function's compiled code; with both set the sampler counts that
-  function's samples by offset in its machine code (the dump's offsets).
+  function's samples by offset in its machine code (the dump's offsets). Hooked functions
+  count by their lifted originals (`Dispatch::hooks`): left out, they counted for whatever
+  function lay before them in memory (Future Cop: a 3-instruction function at 21%).
+- The frame rate varies by ~10% from run to run (the same scene, the same build): a gain of a
+  few percent does not show in fps. Time the code itself (a timer around the path, both
+  variants in one build behind a switch, alternating runs). `<PREFIX>_STATS=1` shows frames a
+  second and frame times in the window (no RivaTuner hooking our GL).
 - Count before optimising a path: a temporary counter in the slow call (`rt_fpu_round`, the
   Glide flush's reasons) told what a profile could not (which operations, which state change).
 - A Glide renderer drew ~250 batches a picture because the game changed the alpha test
@@ -123,10 +129,14 @@ White. Most apply to any game of that time. Add new ones here.
   Nuclear Strike ~202 -> ~243 fps). The game may draw on into its buffer at once (and some
   draw only what changes): the present thread gets a GPU copy, two copies take turns, and
   fences both ways keep the GPU from reading a copy being made or overwriting one not yet
-  drawn.
+  drawn. Not a gain everywhere: Future Cop (~650 fps, one GPU copy a picture) was slower with
+  it (692 -> 638); measure per game, `<PREFIX>_PRESENT=0` turns it off.
 - Hot game functions rewritten in Rust (projections, polygon set-ups) gained 6-20% each.
   Kept exact (same operations, order and rounding) and checked by a switch that runs both:
-  not one difference in millions of calls. Lifting longer x87 runs under 0xc7f (over
+  not one difference in millions of calls. Future Cop's Glide display list walker (~1000
+  instructions, ~25% of its game thread) in Rust: ~490 -> ~645 fps; its locals kept in the
+  game's stack frame, so even the values the game leaves unset come out the same, and the
+  check compares the Glide calls of both (traced, ours not done). Lifting longer x87 runs under 0xc7f (over
   branches) gained nothing: the renderers' cost was their size, not the rounding.
 
 ## Windows

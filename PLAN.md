@@ -55,6 +55,10 @@
   together when the texture is next drawn with (`Texture::staged`, `pending`, `commit`; no
   flush per download). With HD replacements on, uploaded at once (they read the original's
   layer). Not yet run on a game.
+- From future_rust_cop (2026-11-13): `<PREFIX>_STATS` (frames a second and a frame time graph
+  in the window, `stats.rs`); the sampler counts hooked functions by their lifted originals;
+  LESSONS: fps varies ~10% between runs (time the code), the present thread is not a gain in
+  every game, a game's display list walker in Rust. Checked with fcop_plain.
 
 ## Next
 

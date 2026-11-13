@@ -24,6 +24,7 @@ pub mod menupad;
 pub mod misc;
 pub mod record;
 pub mod sample;
+pub mod stats;
 pub mod savestate;
 pub mod setting;
 pub mod tween;
