@@ -113,7 +113,8 @@ White. Most apply to any game of that time. Add new ones here.
 - The guest memory's base as a register: large functions (~50 KB of machine code) spilled it
   and reloaded it from the stack at nearly every access. Reserved at `rt::FIXED_BASE`
   (0x7fff0000, below 2 GB) it is a constant folded into each access's displacement (+11%).
-  Reserve it first thing (`run`), before other allocations take the place.
+  Reserve it first thing (`run`), before other allocations take the place. Future Cop, without
+  such large functions, still gained ~5% (with the hook index in the stub).
 - Per-call costs at ~2 million hooked calls and ~400 000 imports a second: a binary search
   for the hook (now its index in the stub), the thunk table's lock (now a copy per thread),
   an `Arc` clone of the thread's record at every loop head, the thread id from the system,
@@ -136,7 +137,16 @@ White. Most apply to any game of that time. Add new ones here.
   not one difference in millions of calls. Future Cop's Glide display list walker (~1000
   instructions, ~25% of its game thread) in Rust: ~490 -> ~645 fps; its locals kept in the
   game's stack frame, so even the values the game leaves unset come out the same, and the
-  check compares the Glide calls of both (traced, ours not done). Lifting longer x87 runs under 0xc7f (over
+  check compares the Glide calls of both (traced, ours not done). Its terrain pass (projection,
+  culling, display list records; ~6% of the game thread) was integer code only: exact by
+  following the instructions, checked by comparing the outputs (the vertex buffer, the records
+  appended, byte for byte), ~675 -> ~729 fps. Port a hooked callee inside its caller: the
+  hook's round trip per call (thousands a picture) goes too.
+- Before porting the kit's x87 work (rounding inline, register cache), look for `rt_fpu_round`
+  in the profile: in Future Cop it was not among the top 25, the work was not worth it.
+- Each framebuffer switch cost NVIDIA's driver ~7 µs of the calling thread. A bloom chain with a
+  framebuffer per level (14 switches a picture): one framebuffer, the levels attached in turn,
+  ~135 -> ~114 µs a picture. Lifting longer x87 runs under 0xc7f (over
   branches) gained nothing: the renderers' cost was their size, not the rounding.
 
 ## Windows

@@ -59,6 +59,9 @@
   in the window, `stats.rs`); the sampler counts hooked functions by their lifted originals;
   LESSONS: fps varies ~10% between runs (time the code), the present thread is not a gain in
   every game, a game's display list walker in Rust. Checked with fcop_plain.
+- LESSONS from future_rust_cop (2026-11-14): the fixed base's gain without large functions,
+  integer-only game functions ported exactly (terrain pass), check `rt_fpu_round` in the profile
+  before the x87 work, framebuffer switches' driver cost (bloom).
 
 ## Next
 
