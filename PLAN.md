@@ -50,7 +50,11 @@
   thread), Glide's alpha test as vertex data, DirectInput keyboard and mouse (GetDeviceState,
   buffered GetDeviceData, raw mouse motion), VirtualAlloc 64 KB aligned, Watcom's jump tables
   `jmp cs:[reg + table]`, `Game::div_by_zero_goes_on` (divided by 1, logged once), the
-  sampler's 40-frame unwind. Not yet run on a game.
+  sampler's 40-frame unwind. Checked with fcop_plain.
+- From nuclear_rust_strike (2026-11-13): Glide downloads staged on the CPU and uploaded
+  together when the texture is next drawn with (`Texture::staged`, `pending`, `commit`; no
+  flush per download). With HD replacements on, uploaded at once (they read the original's
+  layer). Not yet run on a game.
 
 ## Next
 
@@ -67,7 +71,7 @@ Grow the kit for future games, one piece at a time, with tests:
    - nuclear_rust_strike: Watcom images, CodeView names, Miles Sound System.
    - future_rust_cop: the Glide effect points (vertex depth, `post_3d`, primitive census) if a
      Glide game wants its effects.
-2. From nuclear_rust_strike: Glide uploads staged until a texture's next use; its effects (ao,
-   lights, shadows, bloom, heat, zbuffer, particles) when a game wants them.
+2. From nuclear_rust_strike: its effects (ao, lights, shadows, bloom, heat, zbuffer,
+   particles) when a game wants them.
 3. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
 4. Video formats beyond MPEG-1 (Bink, Smacker, AVI) when a game needs them.

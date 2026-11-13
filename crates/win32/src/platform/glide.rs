@@ -76,6 +76,13 @@ struct Texture {
     /// the rows of `raw` that are known
     known: Vec<bool>,
     format: u32,
+    /// its top level as it goes up (premultiplied rgba, alpha and cover), and the rows not
+    /// yet uploaded: a game may download textures a row at a time (Nuclear Strike ~30 000
+    /// rows a second, one upload and a flush each); they go up together when the texture is
+    /// next drawn with (`commit`)
+    staged: Vec<u8>,
+    staged_alpha: Vec<u8>,
+    pending: Option<(u32, u32)>,
 }
 
 /// Layers of the texture array: TMU memory holds 64 textures of 256x256 at 8 bits.
@@ -968,6 +975,9 @@ impl Glide {
         // the combine units a byte each, then invert bits, texturing, the layer and the
         // replacement's layer + 1, its size
         let bytes = |u: [u32; 5]| u[0] | u[1] << 8 | u[2] << 16 | u[3] << 24;
+        if let Some(a) = self.tex {
+            self.commit(gl, a);
+        }
         let tex = self.tex.and_then(|a| self.textures.get(&a));
         let mode = [
             bytes(self.cc),
@@ -1047,8 +1057,7 @@ impl Glide {
                 return;
             }
         }
-        self.flush(gl);
-        let layer = match self.textures.get_mut(&addr) {
+        match self.textures.get_mut(&addr) {
             Some(t) if (t.w, t.h, t.bytes) == (w, h, bytes) => {
                 t.stamp = stamp;
                 if t.format != format {
@@ -1067,7 +1076,7 @@ impl Glide {
                     self.textures.remove(&a);
                     l
                 });
-                self.textures.insert(addr, Texture { layer, w, h, bytes, stamp, hd: None, raw: vec![0; bytes as usize], known: vec![false; h as usize], format });
+                self.textures.insert(addr, Texture { layer, w, h, bytes, stamp, hd: None, raw: vec![0; bytes as usize], known: vec![false; h as usize], format, staged: vec![0; (w * h * 4) as usize], staged_alpha: vec![0; (w * h * 2) as usize], pending: None });
                 layer
             }
         };
@@ -1077,27 +1086,48 @@ impl Glide {
             t.raw[at..at + src.len()].copy_from_slice(src);
             t.known[r0 as usize..=r1 as usize].fill(true);
         }
+        let n = ((r1 - r0 + 1) * w) as usize;
+        let mut px = convert(format, data, n);
+        let key = super::hd::hash(format, w, r1 - r0 + 1, mem().slice(data, n * bytes_per_texel(format) as usize));
+        if let Some(x) = crate::game::game().glide() {
+            x.recolour(key, &mut px);
+        }
+        // as a replacement has it: alpha 0 where keyed out
+        let original: Vec<u8> = px.chunks(4).flat_map(|p| [p[0], p[1], p[2], if p[..3] == [0, 0, 0] { 0 } else { 255 }]).collect();
+        super::hd::dump(key, w, r1 - r0 + 1, &original);
+        let t = self.textures.get_mut(&addr).unwrap();
+        let at = (r0 * w) as usize;
+        let (rgb, alpha) = (&mut t.staged[at * 4..], &mut t.staged_alpha[at * 2..]);
+        // premultiplied by coverage: a black texel is keyed out
+        for (k, p) in px.chunks_exact(4).enumerate() {
+            let covered = p[..3] != [0, 0, 0];
+            rgb[4 * k..4 * k + 4].copy_from_slice(&if covered { [p[0], p[1], p[2], 255] } else { [0; 4] });
+            alpha[2 * k..2 * k + 2].copy_from_slice(&if covered { [p[3], 0] } else { [0, p[3]] });
+        }
+        t.pending = Some(t.pending.map_or((r0, r1), |(a, b)| (a.min(r0), b.max(r1))));
+        // the replacements read the original's layer: up at once
+        if self.hd.is_some() {
+            self.flush(gl);
+            self.commit(gl, addr);
+            self.replace(gl, addr, key, (r0, r1), &original);
+        }
+    }
+
+    /// Upload the rows of the texture at `addr` downloaded since its last upload into its
+    /// layer, what was batched before drawn first (with the old texels).
+    fn commit(&mut self, gl: &glow::Context, addr: u32) {
+        let Some(t) = self.textures.get_mut(&addr) else { return };
+        let Some((r0, r1)) = t.pending else { return };
+        if !self.batch.is_empty() {
+            self.flush(gl);
+        }
+        let t = self.textures.get_mut(&addr).unwrap();
+        t.pending = None;
+        let (w, layer) = (t.w as usize, t.layer);
+        let rows = r0 as usize * w..(r1 as usize + 1) * w;
         unsafe {
-            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.array));
-            let n = ((r1 - r0 + 1) * w) as usize;
-            let mut px = convert(format, data, n);
-            let key = super::hd::hash(format, w, r1 - r0 + 1, mem().slice(data, n * bytes_per_texel(format) as usize));
-            if let Some(x) = crate::game::game().glide() {
-                x.recolour(key, &mut px);
-            }
-            // as a replacement has it: alpha 0 where keyed out
-            let original: Vec<u8> = px.chunks(4).flat_map(|p| [p[0], p[1], p[2], if p[..3] == [0, 0, 0] { 0 } else { 255 }]).collect();
-            super::hd::dump(key, w, r1 - r0 + 1, &original);
-            // premultiplied by coverage: a black texel is keyed out
-            let mut rgb = Vec::with_capacity(n * 4);
-            let mut alpha = Vec::with_capacity(n * 2);
-            for p in px.chunks(4) {
-                let covered = p[..3] != [0, 0, 0];
-                rgb.extend(if covered { [p[0], p[1], p[2], 255] } else { [0; 4] });
-                alpha.extend(if covered { [p[3], 0] } else { [0, p[3]] });
-            }
-            for (t, format, px) in [(self.array, glow::RGBA, &rgb), (self.alpha, glow::RG, &alpha)] {
-                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(t));
+            for (tex, format, px) in [(self.array, glow::RGBA, &t.staged[rows.start * 4..rows.end * 4]), (self.alpha, glow::RG, &t.staged_alpha[rows.start * 2..rows.end * 2])] {
+                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(tex));
                 gl.tex_sub_image_3d(
                     glow::TEXTURE_2D_ARRAY,
                     0,
@@ -1112,9 +1142,8 @@ impl Glide {
                     glow::PixelUnpackData::Slice(Some(px)),
                 );
             }
-            self.stale = true;
-            self.replace(gl, addr, key, (r0, r1), &original);
         }
+        self.stale = true;
     }
 
     /// After a download of rows `r0..=r1` (known by `key`) into the texture at `addr`: its
