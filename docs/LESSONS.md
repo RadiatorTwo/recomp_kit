@@ -202,6 +202,13 @@ White. Most apply to any game of that time. Add new ones here.
   array grows. Never glGenerateMipmap a large array per download: hundreds of them at a
   mission's start took the NVIDIA driver down ("Unable to recover from a kernel exception",
   exit 0xC0000409, in the Application event log); mipmaps per texture on the CPU.
+- Everything packed into a vertex for the shader needs bits for its largest value: the layer
+  had 8 bits, and once the array grew past 256 layers the textures loaded last (Recoil's
+  vehicles) read a wrong layer and came out black. Glide's clamp stops at the texture's edge,
+  not only at the primitive's texture rectangle.
+- Find what draws a wrong pixel with false colours: give every draw state its own constant
+  colour (logged with its state) and look at the screenshot; then log the primitives covering
+  that pixel (mind grSstOrigin: y from the bottom).
 - Glide draws at the window's resolution, so a mouse position in the shown picture's pixels
   is not in the game's (Recoil: 1280x960 against 640x480). grSstWinOpen calls
   `window::set_screen`: input positions are then in the game's screen pixels.

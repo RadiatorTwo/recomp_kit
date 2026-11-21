@@ -406,6 +406,9 @@ vec4 sample_mip(out float cover) {
     vec2 q = st;
     if (wrap.x) { lo.x = 0.0; hi.x = ts.x; q.x = mod(st.x, ts.x); }
     if (wrap.y) { lo.y = 0.0; hi.y = ts.y; q.y = mod(st.y, ts.y); }
+    // clamped (or a rectangle inside the texture): never past the texture's edge
+    lo = clamp(lo, vec2(0.0), ts);
+    hi = clamp(hi, lo, ts);
     float lod = log2(max(max(length(dx), length(dy)), 1e-8));
     float top = max(log2(max(min(hi.x - lo.x, hi.y - lo.y), 1.0)) - 2.0, 0.0);
     if (lod > top) {
@@ -491,8 +494,8 @@ void main() {
     cc_inv = int(vmode.z & 1u);
     ac_inv = int((vmode.z >> 1) & 1u);
     use_tex = int((vmode.z >> 2) & 1u);
-    layer = int((vmode.z >> 8) & 255u);
-    hd_layer = int(vmode.z >> 16) - 1;
+    layer = int((vmode.z >> 8) & 4095u);
+    hd_layer = int(vmode.z >> 20) - 1;
     tex_size = ivec2(vmode.w & 0x3ffu, (vmode.w >> 10) & 0x3ffu);
     st = stq.z != 0.0 ? stq.xy / stq.z : stq.xy;
     // the depth compared: z-buffer ooz / 65535 (larger nearer); w-buffer 1 / (w + 1) (larger
@@ -1198,8 +1201,8 @@ impl Glide {
         let k = self.constant;
         let ch = |sh: u32| ((k >> sh & 0xff) as f32 / 255.0).to_bits();
         let konst = [ch(16), ch(8), ch(0), ch(24)];
-        // the combine units a byte each, then invert bits, texturing, the layer and the
-        // replacement's layer + 1, its size
+        // the combine units a byte each, then invert bits, texturing, the layer (12 bits: up to
+        // MAX_LAYERS) and the replacement's layer + 1, its size
         let bytes = |u: [u32; 5]| u[0] | u[1] << 8 | u[2] << 16 | u[3] << 24;
         if let Some(a) = self.tex {
             self.commit(gl, a);
@@ -1208,7 +1211,7 @@ impl Glide {
         let mode = [
             bytes(self.cc),
             bytes(self.ac),
-            (self.cc[4] & 1) | (self.ac[4] & 1) << 1 | (tex.is_some() as u32) << 2 | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 16),
+            (self.cc[4] & 1) | (self.ac[4] & 1) << 1 | (tex.is_some() as u32) << 2 | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 20),
             tex.map_or(0, |t| t.w | t.h << 10) | self.alpha_test.0 << 20 | self.alpha_test.1 << 24,
         ];
         // x y z r g b ooz a oow, then tmu 0: sow tow oow. Glide's s and t go 0..256 over the

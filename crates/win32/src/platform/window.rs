@@ -790,6 +790,11 @@ impl App {
 
     /// Input from the window system for the game (recorded with <PREFIX>_RECORD).
     fn push(&mut self, i: Input) {
+        // a scripted run (<PREFIX>_INPUT) takes only its own items: the user's mouse over the
+        // window must not move the game's cursor
+        if !script_text().is_empty() && !matches!(i, Input::Close) {
+            return;
+        }
         super::record::input(&i);
         self.input.push_back(i);
     }
