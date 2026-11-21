@@ -452,7 +452,9 @@ fn s_query_interface(c: &mut Cpu) -> u32 {
     let (this, id, out) = (arg(c, 0), iid(arg(c, 1)), arg(c, 2));
     match id {
         // IDirectDrawSurface, 2, 3: one method table serves them all
-        0x6c14_db81 | 0x5780_5885 | 0xda04_4e00 => {
+        // IDirectDrawSurface4 only for DirectX 6 checks (GetDXVersion): its methods take
+        // DDSURFACEDESC2, which this table does not know
+        0x6c14_db81 | 0x5780_5885 | 0xda04_4e00 | 0x0b2b_8630 => {
             mem().wr32(out, this);
             OK
         }

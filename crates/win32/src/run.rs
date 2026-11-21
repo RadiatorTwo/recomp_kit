@@ -94,17 +94,23 @@ fn start() -> u32 {
     for (addr, old, new) in g.code_patches() {
         img.patch(addr, old, new).unwrap_or_else(|e| panic!("{e}"));
     }
-    let ranges = g.functions(&img);
+    let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+    // the game's own DLLs, compiled with the EXE as one image
+    let dlls = platform::module::load(&dir).unwrap_or_else(|e| panic!("a DLL of the game: {e}"));
+    let parts: Vec<&Image> = std::iter::once(&img).chain(&dlls).collect();
+    let all = Image::combine(&parts);
+    let ranges = g.functions(&all);
     platform::dinput::start(); // gamepads are found while we compile
     splash::status("Compiling the game...");
     let t = Instant::now();
-    let mut code = Code::new(&img);
+    let mut code = Code::new(&all);
     let prog = Program::build(&mut code, &ranges);
     let smc = Smc::find(&prog, &mut code, &g.smc());
     let found = t.elapsed().as_millis();
     // the machine code is kept beside the EXE, for this program and this EXE
     let cache = exe.with_file_name(setup::COMPILED);
-    let key = cache_key(&img);
+    let key = cache_key(&all);
     let compiled = compile_cached(&prog, &smc, &mut code, &g.hooks(), key.map(|k| (cache.as_path(), k)));
     let st = &compiled.stats;
     if st.cached {
@@ -118,9 +124,8 @@ fn start() -> u32 {
             st.compile_ms
         );
     }
-    let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
-    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-    let code = platform::run_game(&img, dir);
+    let code = platform::run_game(&img, &dlls, dir);
+
     drop(compiled);
     code
 }

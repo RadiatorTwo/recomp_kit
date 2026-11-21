@@ -53,6 +53,12 @@ struct Win {
     /// needs painting (Windows' update region, whole or nothing): WM_PAINT comes when the
     /// queue is empty, until ValidateRect or BeginPaint
     dirty: bool,
+    class: String,
+    parent: u32,
+    /// the window's extra bytes (GetWindowLongA with an index from 0), by index
+    extra: BTreeMap<i32, u32>,
+    /// SetPropA's values, by name (an atom as `#n`)
+    props: BTreeMap<String, u32>,
 }
 
 struct Timer {
@@ -64,7 +70,8 @@ struct Timer {
 }
 
 struct State {
-    classes: BTreeMap<String, u32>,
+    /// registered classes by name (lower case): their WNDCLASSA
+    classes: BTreeMap<String, [u32; 10]>,
     wins: BTreeMap<u32, Win>,
     next: u32,
     main: u32,
@@ -391,6 +398,7 @@ fn def_window_proc_for(c: &mut Cpu, hwnd: u32, msg: u32, wp: u32, lp: u32) -> u3
             0
         }
         0x14 | 0x20 => 1, // WM_ERASEBKGND, WM_SETCURSOR
+        WM_NCCREATE => 1,
         0x84 => 1,        // WM_NCHITTEST: client
         _ => {
             let _ = (wp, lp);
@@ -404,13 +412,39 @@ fn def_window_proc(c: &mut Cpu) -> u32 {
     def_window_proc_for(c, h, m, wp, lp)
 }
 
+/// A class or property name: a string, or an atom below 0x10000 (`#n`).
+fn name_or_atom(p: u32) -> String {
+    if p > 0xffff { cstr(p) } else { format!("#{p}") }
+}
+
 fn register_class(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
-    let (proc_, name) = (mem().rd32(p + 4), mem().rd32(p + 36));
-    let name = if name > 0xffff { cstr(name) } else { format!("#{name}") };
-    st().classes.insert(name.to_ascii_lowercase(), proc_);
-    0xc000 + st().classes.len() as u32
+    let wc: [u32; 10] = std::array::from_fn(|k| mem().rd32(p + 4 * k as u32));
+    let name = name_or_atom(wc[9]);
+    let mut s = st();
+    s.classes.insert(name.to_ascii_lowercase(), wc);
+    0xc000 + s.classes.len() as u32
 }
+
+/// GetClassInfoA(instance, name, WNDCLASSA*): a class registered here.
+fn get_class_info(c: &mut Cpu) -> u32 {
+    let (name, p) = (name_or_atom(arg(c, 1)), arg(c, 2));
+    let Some(wc) = st().classes.get(&name.to_ascii_lowercase()).copied() else {
+        super::set_last_error(1411); // ERROR_CLASS_DOES_NOT_EXIST
+        return 0;
+    };
+    for (k, v) in wc.into_iter().enumerate() {
+        // the name pointer stays the caller's
+        if k != 9 {
+            mem().wr32(p + 4 * k as u32, v);
+        }
+    }
+    1
+}
+
+const WH_CBT: u32 = 5;
+const HCBT_CREATEWND: u32 = 3;
+const WM_NCCREATE: u32 = 0x81;
 
 fn create_window_ex(c: &mut Cpu) -> u32 {
     let a: Vec<u32> = (0..12).map(|k| arg(c, k)).collect();
@@ -421,13 +455,25 @@ fn create_window_ex(c: &mut Cpu) -> u32 {
     let (w, h) = (def(a[6], 640), def(a[7], 480));
     let (hwnd, first) = {
         let mut s = st();
-        let proc_ = s.classes.get(&class.to_ascii_lowercase()).copied().unwrap_or(0);
+        let proc_ = s.classes.get(&class.to_ascii_lowercase()).map_or(0, |wc| wc[1]);
         s.next += 4;
         let hwnd = s.next;
-        s.wins.insert(
-            hwnd,
-            Win { proc_, style: a[3], exstyle: a[0], rect: [x, y, x + w, y + h], title: title.clone(), user: 0, id: a[9], shown: false, dirty: false },
-        );
+        let win = Win {
+            proc_,
+            style: a[3],
+            exstyle: a[0],
+            rect: [x, y, x + w, y + h],
+            title: title.clone(),
+            user: 0,
+            id: a[9],
+            shown: false,
+            dirty: false,
+            class: class.clone(),
+            parent: a[8],
+            extra: BTreeMap::new(),
+            props: BTreeMap::new(),
+        };
+        s.wins.insert(hwnd, win);
         let first = s.main == 0 && a[8] == 0;
         if first {
             s.main = hwnd;
@@ -442,6 +488,17 @@ fn create_window_ex(c: &mut Cpu) -> u32 {
     let cs = super::alloc(48);
     for (k, v) in [a[11], a[10], a[9], a[8], h as u32, w as u32, y as u32, x as u32, a[3], a[2], a[1], a[0]].into_iter().enumerate() {
         mem().wr32(cs + 4 * k as u32, v);
+    }
+    // the CBT hooks see the window before its first message (MFC subclasses it there)
+    let cbt: Vec<u32> = st().hooks.iter().filter(|h| h.1 == WH_CBT).map(|h| h.2).collect();
+    let cw = super::alloc(8);
+    mem().wr32(cw, cs);
+    let refused = cbt.into_iter().any(|p| guest_call(c, p, &[HCBT_CREATEWND, hwnd, cw]) != 0);
+    super::free(cw);
+    if refused || send(c, hwnd, WM_NCCREATE, 0, cs) == 0 {
+        super::free(cs);
+        st().wins.remove(&hwnd);
+        return 0;
     }
     let r = send(c, hwnd, WM_CREATE, 0, cs);
     super::free(cs);
@@ -513,6 +570,28 @@ fn show_window(c: &mut Cpu) -> u32 {
 
 fn set_window_pos(c: &mut Cpu) -> u32 {
     let (h, x, y, w, hh, flags) = (arg(c, 0), arg(c, 2) as i32, arg(c, 3) as i32, arg(c, 4) as i32, arg(c, 5) as i32, arg(c, 6));
+    set_pos(h, x, y, w, hh, flags)
+}
+
+/// BeginDeferWindowPos: the moves are done at once (DeferWindowPos), the handle is a token.
+fn begin_defer_window_pos(_: &mut Cpu) -> u32 {
+    0xdef0
+}
+
+/// DeferWindowPos(hdwp, hwnd, after, x, y, cx, cy, flags)
+fn defer_window_pos(c: &mut Cpu) -> u32 {
+    let (h, x, y, w, hh, flags) = (arg(c, 1), arg(c, 3) as i32, arg(c, 4) as i32, arg(c, 5) as i32, arg(c, 6) as i32, arg(c, 7));
+    set_pos(h, x, y, w, hh, flags);
+    arg(c, 0)
+}
+
+/// MoveWindow(hwnd, x, y, cx, cy, repaint)
+fn move_window(c: &mut Cpu) -> u32 {
+    let (h, x, y, w, hh) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3) as i32, arg(c, 4) as i32);
+    set_pos(h, x, y, w, hh, 0)
+}
+
+fn set_pos(h: u32, x: i32, y: i32, w: i32, hh: i32, flags: u32) -> u32 {
     if dialog::owns(h) {
         // controls: client coordinates of the dialog; the dialog stays centred
         dialog::with(h, |d, k| {
@@ -577,8 +656,10 @@ fn get_window_long(c: &mut Cpu) -> u32 {
     let s = st();
     let Some(w) = s.wins.get(&h) else { return 0 };
     match i {
+        0.. => w.extra.get(&i).copied().unwrap_or(0),
         -4 => w.proc_,
         -6 => super::IMAGE_BASE,
+        -8 => w.parent,
         -12 => w.id,
         -16 => w.style,
         -20 => w.exstyle,
@@ -592,7 +673,9 @@ fn set_window_long(c: &mut Cpu) -> u32 {
     let mut s = st();
     let Some(w) = s.wins.get_mut(&h) else { return 0 };
     let f = match i {
+        0.. => w.extra.entry(i).or_insert(0),
         -4 => &mut w.proc_,
+        -8 => &mut w.parent,
         -12 => &mut w.id,
         -16 => &mut w.style,
         -20 => &mut w.exstyle,
@@ -756,6 +839,247 @@ fn wsprintf(c: &mut Cpu) -> u32 {
     put_cstr(buf, &s, s.len() as u32 + 1)
 }
 
+/// RegisterWindowMessageA: a number from 0xc000 up, the same for the same name (any case).
+fn register_window_message(c: &mut Cpu) -> u32 {
+    static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let name = cstr(arg(c, 0)).to_ascii_lowercase();
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let k = names.iter().position(|n| *n == name).unwrap_or_else(|| {
+        names.push(name);
+        names.len() - 1
+    });
+    0xc000 + k as u32
+}
+
+/// LoadStringA(module, id, buf, n): the string's length copied, 0 if there is none.
+fn load_string(c: &mut Cpu) -> u32 {
+    let (h, id, buf, n) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3));
+    match super::load_string(h, id) {
+        Some(s) => put_cstr(buf, &s, n),
+        None => {
+            if n != 0 {
+                mem().wr8(buf, 0);
+            }
+            0
+        }
+    }
+}
+
+/// CallWindowProcA(proc, hwnd, msg, wp, lp): the procedure MFC subclassed away (0: the default).
+fn call_window_proc(c: &mut Cpu) -> u32 {
+    let (p, h, m, wp, lp) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
+    if p == 0 { def_window_proc_for(c, h, m, wp, lp) } else { guest_call(c, p, &[h, m, wp, lp]) }
+}
+
+fn set_prop(c: &mut Cpu) -> u32 {
+    let (h, name, v) = (arg(c, 0), name_or_atom(arg(c, 1)), arg(c, 2));
+    st().wins.get_mut(&h).map(|w| w.props.insert(name.to_ascii_lowercase(), v)).is_some() as u32
+}
+
+fn get_prop(c: &mut Cpu) -> u32 {
+    let (h, name) = (arg(c, 0), name_or_atom(arg(c, 1)));
+    st().wins.get(&h).and_then(|w| w.props.get(&name.to_ascii_lowercase()).copied()).unwrap_or(0)
+}
+
+fn remove_prop(c: &mut Cpu) -> u32 {
+    let (h, name) = (arg(c, 0), name_or_atom(arg(c, 1)));
+    st().wins.get_mut(&h).and_then(|w| w.props.remove(&name.to_ascii_lowercase())).unwrap_or(0)
+}
+
+/// The desktop window: no window of ours, but a handle.
+const DESKTOP: u32 = 0xdee0;
+
+fn get_desktop_window(_: &mut Cpu) -> u32 {
+    DESKTOP
+}
+
+fn get_parent(c: &mut Cpu) -> u32 {
+    st().wins.get(&arg(c, 0)).map_or(0, |w| w.parent)
+}
+
+fn is_window(c: &mut Cpu) -> u32 {
+    let h = arg(c, 0);
+    (dialog::owns(h) || st().wins.contains_key(&h)) as u32
+}
+
+fn is_window_visible(c: &mut Cpu) -> u32 {
+    let h = arg(c, 0);
+    if dialog::owns(h) {
+        return 1;
+    }
+    st().wins.get(&h).is_some_and(|w| w.shown && w.style & 0x1000_0000 != 0 || w.shown) as u32
+}
+
+fn is_child(c: &mut Cpu) -> u32 {
+    let (p, mut h) = (arg(c, 0), arg(c, 1));
+    let s = st();
+    while let Some(w) = s.wins.get(&h) {
+        if w.parent == p {
+            return 1;
+        }
+        h = w.parent;
+    }
+    0
+}
+
+/// GetWindow(hwnd, cmd): GW_OWNER (4) is the parent; there are no others to walk.
+fn get_window(c: &mut Cpu) -> u32 {
+    match arg(c, 1) {
+        4 => st().wins.get(&arg(c, 0)).map_or(0, |w| w.parent),
+        _ => 0,
+    }
+}
+
+fn get_focus(_: &mut Cpu) -> u32 {
+    st().focus
+}
+
+fn get_active_window(_: &mut Cpu) -> u32 {
+    st().main
+}
+
+fn get_class_name(c: &mut Cpu) -> u32 {
+    let (h, buf, n) = (arg(c, 0), arg(c, 1), arg(c, 2));
+    let name = st().wins.get(&h).map(|w| w.class.clone()).unwrap_or_default();
+    put_cstr(buf, &name, n)
+}
+
+fn get_window_text(c: &mut Cpu) -> u32 {
+    let (h, buf, n) = (arg(c, 0), arg(c, 1), arg(c, 2));
+    let t = st().wins.get(&h).map(|w| w.title.clone()).unwrap_or_default();
+    put_cstr(buf, &t, n)
+}
+
+fn get_window_text_length(c: &mut Cpu) -> u32 {
+    st().wins.get(&arg(c, 0)).map_or(0, |w| w.title.len() as u32)
+}
+
+fn get_dlg_ctrl_id(c: &mut Cpu) -> u32 {
+    st().wins.get(&arg(c, 0)).map_or(0, |w| w.id)
+}
+
+/// The mouse in the game's screen pixels, as the last mouse message had it.
+pub fn mouse_pos() -> (i32, i32) {
+    st().mouse
+}
+
+fn get_cursor_pos(c: &mut Cpu) -> u32 {
+    let (x, y) = st().mouse;
+    mem().wr32(arg(c, 0), x as u32);
+    mem().wr32(arg(c, 0) + 4, y as u32);
+    1
+}
+
+fn get_message_pos(_: &mut Cpu) -> u32 {
+    let (x, y) = st().mouse;
+    (x as u32 & 0xffff) | (y as u32) << 16
+}
+
+fn get_message_time(_: &mut Cpu) -> u32 {
+    super::kernel32::ms_since_start()
+}
+
+/// GetWindowThreadProcessId(hwnd, &pid): every window is the main thread's.
+fn get_window_thread_process_id(c: &mut Cpu) -> u32 {
+    if arg(c, 1) != 0 {
+        mem().wr32(arg(c, 1), 0x100);
+    }
+    super::kernel32::thread_id()
+}
+
+fn wait_message(_: &mut Cpu) -> u32 {
+    poll(Duration::from_millis(5));
+    1
+}
+
+fn wvsprintf(c: &mut Cpu) -> u32 {
+    let (buf, fmt, va) = (arg(c, 0), cstr(arg(c, 1)), arg(c, 2));
+    let s = super::printf(&fmt, |k| mem().rd32(va + 4 * k));
+    put_cstr(buf, &s, s.len() as u32 + 1)
+}
+
+/// CharNextA: the next character (single-byte code page).
+fn char_next(c: &mut Cpu) -> u32 {
+    let p = arg(c, 0);
+    if mem().rd8(p) == 0 { p } else { p + 1 }
+}
+
+/// CharUpperA: a string in place, or one character in the low word.
+fn char_upper(c: &mut Cpu) -> u32 {
+    let p = arg(c, 0);
+    if p <= 0xffff {
+        return (p as u8).to_ascii_uppercase() as u32;
+    }
+    let m = mem();
+    let mut a = p;
+    loop {
+        let b = m.rd8(a);
+        if b == 0 {
+            return p;
+        }
+        m.wr8(a, b.to_ascii_uppercase());
+        a += 1;
+    }
+}
+
+fn read_rect(p: u32) -> [i32; 4] {
+    std::array::from_fn(|k| mem().rd32(p + 4 * k as u32) as i32)
+}
+
+fn copy_rect(c: &mut Cpu) -> u32 {
+    write_rect(arg(c, 0), read_rect(arg(c, 1)));
+    1
+}
+
+fn set_rect_empty(c: &mut Cpu) -> u32 {
+    write_rect(arg(c, 0), [0; 4]);
+    1
+}
+
+fn is_rect_empty(c: &mut Cpu) -> u32 {
+    let r = read_rect(arg(c, 0));
+    (r[2] <= r[0] || r[3] <= r[1]) as u32
+}
+
+fn equal_rect(c: &mut Cpu) -> u32 {
+    (read_rect(arg(c, 0)) == read_rect(arg(c, 1))) as u32
+}
+
+fn offset_rect(c: &mut Cpu) -> u32 {
+    let (p, dx, dy) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32);
+    let r = read_rect(p);
+    write_rect(p, [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+    1
+}
+
+fn inflate_rect(c: &mut Cpu) -> u32 {
+    let (p, dx, dy) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32);
+    let r = read_rect(p);
+    write_rect(p, [r[0] - dx, r[1] - dy, r[2] + dx, r[3] + dy]);
+    1
+}
+
+fn intersect_rect(c: &mut Cpu) -> u32 {
+    let (a, b) = (read_rect(arg(c, 1)), read_rect(arg(c, 2)));
+    let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
+    let empty = r[2] <= r[0] || r[3] <= r[1];
+    write_rect(arg(c, 0), if empty { [0; 4] } else { r });
+    !empty as u32
+}
+
+fn union_rect(c: &mut Cpu) -> u32 {
+    let (a, b) = (read_rect(arg(c, 1)), read_rect(arg(c, 2)));
+    write_rect(arg(c, 0), [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+    1
+}
+
+/// PtInRect(rect, POINT by value: x, y).
+fn pt_in_rect(c: &mut Cpu) -> u32 {
+    let (r, x, y) = (read_rect(arg(c, 0)), arg(c, 1) as i32, arg(c, 2) as i32);
+    (x >= r[0] && x < r[2] && y >= r[1] && y < r[3]) as u32
+}
+
+
 fn ret0(_: &mut Cpu) -> u32 {
     0
 }
@@ -785,7 +1109,7 @@ const WH_KEYBOARD: u32 = 2;
 
 fn set_hook(c: &mut Cpu) -> u32 {
     let (kind, proc_) = (arg(c, 0), arg(c, 1));
-    if kind != WH_KEYBOARD {
+    if kind != WH_KEYBOARD && kind != WH_CBT {
         log!("warn: SetWindowsHookExA({kind}) not supported");
     }
     let mut s = st();
@@ -814,7 +1138,65 @@ fn show_cursor(c: &mut Cpu) -> u32 {
 }
 
 pub const IMPORTS: &[Import] = &[
-    ("RegisterClassA", 1, register_class),
+    ("RegisterWindowMessageA", 1, register_window_message),
+    ("DrawTextA", 5, super::gdi32::draw_text_a),
+    ("GetSysColor", 1, super::gdi32::get_sys_color),
+    ("GetSysColorBrush", 1, super::gdi32::get_sys_color_brush),
+    ("RegisterClipboardFormatA", 1, register_window_message),
+    ("GetClassInfoA", 3, get_class_info),
+    ("BeginDeferWindowPos", 1, begin_defer_window_pos),
+    ("DeferWindowPos", 8, defer_window_pos),
+    ("EndDeferWindowPos", 1, ret1),
+    ("MoveWindow", 6, move_window),
+    ("LoadBitmapA", 2, super::gdi32::load_bitmap),
+    ("LoadStringA", 4, load_string),
+    ("CallWindowProcA", 5, call_window_proc),
+    ("SetPropA", 3, set_prop),
+    ("GetPropA", 2, get_prop),
+    ("RemovePropA", 2, remove_prop),
+    ("GetDesktopWindow", 0, get_desktop_window),
+    ("GetParent", 1, get_parent),
+    ("IsWindow", 1, is_window),
+    ("IsWindowVisible", 1, is_window_visible),
+    ("IsWindowEnabled", 1, ret1),
+    ("IsChild", 2, is_child),
+    ("IsZoomed", 1, ret0),
+    ("GetWindow", 2, get_window),
+    ("GetTopWindow", 1, ret0),
+    ("GetLastActivePopup", 1, first_arg),
+    ("GetFocus", 0, get_focus),
+    ("GetActiveWindow", 0, get_active_window),
+    ("GetForegroundWindow", 0, get_active_window),
+    ("GetCapture", 0, ret0),
+    ("SetCapture", 1, ret0),
+    ("ReleaseCapture", 0, ret1),
+    ("ClipCursor", 1, ret1),
+    ("GetClassNameA", 3, get_class_name),
+    ("GetWindowTextA", 3, get_window_text),
+    ("GetWindowTextLengthA", 1, get_window_text_length),
+    ("GetDlgCtrlID", 1, get_dlg_ctrl_id),
+    ("GetCursorPos", 1, get_cursor_pos),
+    ("GetMessagePos", 0, get_message_pos),
+    ("GetMessageTime", 0, get_message_time),
+    ("GetWindowThreadProcessId", 2, get_window_thread_process_id),
+    ("InSendMessage", 0, ret0),
+    ("WaitMessage", 0, wait_message),
+    ("MessageBeep", 1, ret1),
+    ("IsDialogMessageA", 2, ret0),
+    ("TranslateAcceleratorA", 3, ret0),
+    ("LoadAcceleratorsA", 2, load_resource_handle),
+    ("wvsprintfA", 3, wvsprintf),
+    ("CharNextA", 1, char_next),
+    ("CharUpperA", 1, char_upper),
+    ("CopyRect", 2, copy_rect),
+    ("SetRectEmpty", 1, set_rect_empty),
+    ("IsRectEmpty", 1, is_rect_empty),
+    ("EqualRect", 2, equal_rect),
+    ("OffsetRect", 3, offset_rect),
+    ("InflateRect", 3, inflate_rect),
+    ("IntersectRect", 3, intersect_rect),
+    ("UnionRect", 3, union_rect),
+    ("PtInRect", 3, pt_in_rect),    ("RegisterClassA", 1, register_class),
     ("UnregisterClassA", 2, ret1),
     ("CreateWindowExA", 12, create_window_ex),
     ("DestroyWindow", 1, destroy_window),

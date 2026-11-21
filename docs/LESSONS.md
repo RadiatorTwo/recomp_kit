@@ -190,6 +190,17 @@ White. Most apply to any game of that time. Add new ones here.
   lowest trigger value seen (the first read to start with) and count 30% of the travel beyond
   that rest as pressed (future_rust_cop `dinput.rs` `trigger_down`; the kit's `dinput.rs` still
   has the fixed 0.3).
+- Glide draws at the window's resolution, so a mouse position in the shown picture's pixels
+  is not in the game's (Recoil: 1280x960 against 640x480). grSstWinOpen calls
+  `window::set_screen`: input positions are then in the game's screen pixels.
+- Games that move their own cursor by DirectInput's mouse motion (times a sensitivity: Recoil
+  ~1.2) drift away from the system pointer in a window. Hook the cursor update: in the menus
+  put the cursor where the pointer is (`user32::mouse_pos`) and keep the motion for the game.
+- Videos drawn as textures (Recoil's menu) that cannot be opened (no decoder) may have zero
+  frames, and the game's `time * rate % frames` divides by zero: leave such textures out.
+- MFC 4.2 games: load the game's own MFC42 / MSVCRT / MSVCP50 as guest DLLs and compile them
+  with the EXE (`Game::dlls`, `platform/module.rs`) instead of writing MFC in Rust. MFC
+  subclasses windows in a WH_CBT hook called inside CreateWindowExA before WM_NCCREATE.
 
 ## Discovery
 

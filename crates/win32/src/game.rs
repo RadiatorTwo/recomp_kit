@@ -85,6 +85,13 @@ pub trait Game: Sync {
         Vec::new()
     }
 
+    /// DLLs from the game folder recompiled with the EXE (file name, base): the MFC and C
+    /// runtime the game shipped with, its own DLLs. Their exports answer the imports of the EXE
+    /// and of each other; their imports are bound like the EXE's (`platform::module`).
+    fn dlls(&self) -> &'static [(&'static str, u32)] {
+        &[]
+    }
+
     /// An import of the game's own (checked before ours): e.g. a DLL only it uses.
     fn import(&self, _dll: &str, _name: &str) -> Option<&'static Import> {
         None

@@ -663,8 +663,21 @@ pub fn set_video(frame: VideoFrame) {
     *VIDEO.lock().unwrap() = Some(frame);
 }
 
-/// Size of the last frame shown (input positions are in its pixels).
+/// The game's own screen size while it draws through a 3D API at the window's resolution
+/// (Glide): input positions are in its pixels, not the picture's.
+static SCREEN: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+/// Set while a Glide screen is open (`None` when closed).
+pub fn set_screen(size: Option<(u32, u32)>) {
+    *SCREEN.lock().unwrap() = size;
+}
+
+/// Size of the last frame shown, or the game's screen (`set_screen`): input positions are in
+/// its pixels.
 pub fn frame_size() -> (u32, u32) {
+    if let Some(s) = *SCREEN.lock().unwrap() {
+        return s;
+    }
     if !on_main() {
         return (640, 480);
     }
@@ -841,8 +854,14 @@ impl App {
         let size = win.inner_size();
         let (w, h) = self.gl.as_ref().map_or((640, 480), |g| (g.shown.1, g.shown.2));
         let (ox, oy, s) = fit(w, h, size.width.max(1), size.height.max(1));
-        let x = ((self.cursor.x - ox) / s).clamp(0.0, w as f64 - 1.0);
-        let y = ((self.cursor.y - oy) / s).clamp(0.0, h as f64 - 1.0);
+        let x = (self.cursor.x - ox) / s;
+        let y = (self.cursor.y - oy) / s;
+        // a picture rendered at the window's resolution: the game's screen is in its middle,
+        // as tall as the picture
+        let (sw, sh) = SCREEN.lock().unwrap().unwrap_or((w, h));
+        let k = sh as f64 / h as f64;
+        let x = (x * k - (w as f64 * k - sw as f64) / 2.0).clamp(0.0, sw as f64 - 1.0);
+        let y = (y * k).clamp(0.0, sh as f64 - 1.0);
         (x as i32, y as i32)
     }
 }

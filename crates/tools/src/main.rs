@@ -8,7 +8,8 @@
 //! rtools at       <exe> <addr>...           the instruction at each address
 //! rtools smc      <exe> [options]           self-modifying code: fields and rewritten code
 //! rtools dialogs  <exe>                     dialog templates and their controls
-//! rtools iso      <image>                   the files of a CD image (.iso, .bin)
+//! rtools iso      <image> [--extract <dir>] the files of a CD image (.iso, .bin), or copy them out
+//! rtools iscab    <data1.hdr|data1.cab> [--extract <dir>]   an InstallShield 5/6 cabinet's files
 //! rtools movie    <file.mpg> [out dir]      decode an MPEG-1 movie (frames.rgb, audio.raw)
 //! rtools vermap   <reference exe> <other exe> <functions.json>   address map between versions
 //!
@@ -92,10 +93,11 @@ fn main() {
         Some("smc") => smc(&args),
         Some("dialogs") => dialogs(&args),
         Some("iso") => iso(&args),
+        Some("iscab") => iscab(&args),
         Some("movie") => movie(&args),
         Some("vermap") => vermap::run(&args),
         _ => {
-            eprintln!("usage: rtools imports|missing|dis|at|smc|dialogs|iso|movie|vermap ... (see the source's head)");
+            eprintln!("usage: rtools imports|missing|dis|at|smc|dialogs|iso|iscab|movie|vermap ... (see the source's head)");
             std::process::exit(2);
         }
     }
@@ -228,7 +230,61 @@ fn iso(args: &[String]) {
     }
     let mut iso = Iso::open(args[1].as_ref()).expect("not a CD image");
     let root = iso.root();
+    if let (Some("--extract"), Some(to)) = (args.get(2).map(String::as_str), args.get(3)) {
+        iso.extract(&root, to.as_ref()).expect("cannot extract the image");
+        return;
+    }
     show(&mut iso, &root, 0);
+}
+
+fn iscab(args: &[String]) {
+    use win32::iscab::{self, Header, INVALID};
+    let p = plain(args);
+    let path = Path::new(p.get(1).expect("path to data1.hdr or data1.cab"));
+    let hdr = std::fs::read(path).expect("cannot read the header");
+    let head = Header::parse(&hdr).unwrap_or_else(|e| panic!("{e}"));
+    let to = opt(args, "--extract").map(Path::new);
+    println!("InstallShield {}: {} files, {} groups", head.major, head.files.len(), head.groups.len());
+    // the cabs by volume: data1.cab, data2.cab, ... beside the header (the header itself when
+    // it is data1.cab)
+    let mut cabs: std::collections::HashMap<u16, Vec<u8>> = Default::default();
+    let (mut done, mut failed) = (0, 0);
+    for g in &head.groups {
+        println!("{} ({}..={}) {}", g.name, g.first, g.last, g.dest);
+        for k in g.first..=g.last {
+            let Some(f) = head.files.get(k as usize) else { continue };
+            if f.flags & INVALID != 0 {
+                continue;
+            }
+            let name = if f.dir.is_empty() { f.name.clone() } else { format!("{}\\{}", f.dir, f.name) };
+            println!("  {name} {}", f.size);
+            let Some(to) = to else { continue };
+            if f.beside() {
+                println!("    (beside the cabs on the disc)");
+                continue;
+            }
+            let cab = cabs.entry(f.volume).or_insert_with(|| {
+                let file = path.with_file_name(format!("data{}.cab", f.volume));
+                if file == path { hdr.clone() } else { std::fs::read(&file).expect("cannot read the cab") }
+            });
+            let packed = cab.get(f.offset as usize..(f.offset + f.packed) as usize).unwrap_or(&[]);
+            match iscab::unpack(f, packed) {
+                Ok(data) => {
+                    let out = name.split('\\').fold(to.join(&g.name), |p, s| p.join(s));
+                    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+                    std::fs::write(&out, data).unwrap();
+                    done += 1;
+                }
+                Err(e) => {
+                    println!("    {e}");
+                    failed += 1;
+                }
+            }
+        }
+    }
+    if to.is_some() {
+        println!("{done} files written, {failed} failed");
+    }
 }
 
 fn movie(args: &[String]) {

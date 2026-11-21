@@ -43,7 +43,47 @@ struct State {
     linear: bool,
     clamp: (bool, bool),
     clip: [i32; 4],
+    /// grDepthBufferMode (0 off, 1 z, 2 w, 3 z / 4 w compared to the bias), grDepthBufferFunction
+    /// (GR_CMP_*), grDepthMask, grDepthBiasLevel
+    depth_mode: u32,
+    depth_func: u32,
+    depth_mask: bool,
+    depth_bias: i32,
+    /// grFogMode, grFogColorValue (ARGB)
+    fog: u32,
+    fog_color: u32,
+    /// grColorMask: rgb, alpha
+    color_mask: (bool, bool),
 }
+
+/// What grGlideGetState saves: everything drawing depends on.
+#[derive(Clone, Copy)]
+struct Saved {
+    state: State,
+    cc: [u32; 5],
+    ac: [u32; 5],
+    constant: u32,
+    tex: Option<u32>,
+    alpha_test: (u32, u32),
+    cull: u32,
+    lower_left: bool,
+}
+
+/// A locked linear frame buffer: a guest buffer of the Glide screen's pixels (16-bit 565),
+/// written by the game and drawn over the picture at grLfbUnlock where it changed.
+struct Lfb {
+    buf: u32,
+    write: bool,
+    /// GR_LFBWRITEMODE_565 (0), 555 (1), 1555 (2)
+    mode: u32,
+    /// rows from the bottom (GR_ORIGIN_LOWER_LEFT)
+    lower: bool,
+}
+
+/// LFB pixels handed out for writing start as this value: words the game leaves are not drawn.
+const LFB_UNTOUCHED: u16 = 0x0821;
+/// Bytes per row of a locked buffer (Glide's Voodoo: 1024 pixels of 16 bits).
+const LFB_STRIDE: u32 = 2048;
 
 /// Where the following drawing goes in the frame.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -158,7 +198,7 @@ struct Glide {
     /// with MSAA: the multisampled renderbuffer drawn into, its samples and its number (a
     /// thread's framebuffer for it is found by that, not by the GL name, which may come again);
     /// resolved into `color` at grBufferSwap
-    ms: Option<(glow::Renderbuffer, u32, u64)>,
+    ms: Option<(glow::Renderbuffer, u32, u64, glow::Renderbuffer)>,
     made: u64,
     ms_max: u32,
     prog: glow::Program,
@@ -202,6 +242,17 @@ struct Glide {
     batch: Vec<u32>,
     batch_mode: u32,
     gamma: f32,
+    /// the depth buffer of `color` (its storage follows the target's size)
+    depth_rb: glow::Renderbuffer,
+    /// grCullMode: 0 none, 1 negative, 2 positive (triangles are culled as they are added)
+    cull: u32,
+    /// grSstOrigin: lower left (y up) instead of upper left
+    lower_left: bool,
+    /// grGlideGetState's saves, by the guest address of their GrState
+    saved: HashMap<u32, Saved>,
+    lfb: Option<Lfb>,
+    /// drawing LFB pixels over the picture: a program and a texture
+    blit: (glow::Program, glow::Texture),
 }
 
 /// Glide's state, global: a game may draw from more than one thread (Nuclear Strike: its game
@@ -216,6 +267,8 @@ unsafe impl Send for Glide {}
 /// renderbuffer (false, by its number) drawn into, two for copies.
 struct Local {
     vao: glow::VertexArray,
+    /// without attributes, for drawing LFB pixels
+    empty: glow::VertexArray,
     fbos: HashMap<(bool, u64), glow::Framebuffer>,
     copy: [glow::Framebuffer; 2],
 }
@@ -227,8 +280,9 @@ impl Local {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
             vertex_layout(gl);
+            let empty = gl.create_vertex_array().expect("GL vertex array");
             let fbo = || gl.create_framebuffer().expect("GL framebuffer");
-            Local { vao, fbos: HashMap::new(), copy: [fbo(), fbo()] }
+            Local { vao, empty, fbos: HashMap::new(), copy: [fbo(), fbo()] }
         }
     }
 
@@ -236,6 +290,7 @@ impl Local {
     fn delete(self, gl: &glow::Context) {
         unsafe {
             gl.delete_vertex_array(self.vao);
+            gl.delete_vertex_array(self.empty);
             for f in self.fbos.into_values().chain(self.copy) {
                 gl.delete_framebuffer(f);
             }
@@ -246,14 +301,12 @@ impl Local {
 /// The batched vertices' layout (see `VERTEX`), for the vertex array bound.
 fn vertex_layout(gl: &glow::Context) {
     unsafe {
-        for (loc, n, off) in [(0, 2, 0), (1, 4, 8), (2, 2, 24), (3, 4, 32)] {
+        for (loc, n, off) in [(0, 2, 0), (1, 4, 8), (2, 3, 24), (3, 4, 36), (5, 4, 68), (6, 2, 84)] {
             gl.enable_vertex_attrib_array(loc);
             gl.vertex_attrib_pointer_f32(loc, n, glow::FLOAT, false, 4 * VERTEX as i32, off);
         }
         gl.enable_vertex_attrib_array(4);
-        gl.vertex_attrib_pointer_i32(4, 4, glow::UNSIGNED_INT, 4 * VERTEX as i32, 48);
-        gl.enable_vertex_attrib_array(5);
-        gl.vertex_attrib_pointer_f32(5, 4, glow::FLOAT, false, 4 * VERTEX as i32, 64);
+        gl.vertex_attrib_pointer_i32(4, 4, glow::UNSIGNED_INT, 4 * VERTEX as i32, 52);
     }
 }
 
@@ -270,12 +323,14 @@ const VS: &str = r#"
 uniform vec2 space;
 layout(location = 0) in vec2 pos;
 layout(location = 1) in vec4 col;
-layout(location = 2) in vec2 tc;
+layout(location = 2) in vec3 tc;
 layout(location = 3) in vec4 kc;
 layout(location = 4) in uvec4 mode;
 layout(location = 5) in vec4 box;
+layout(location = 6) in vec2 dz;
 out vec4 vcol;
-noperspective out vec2 st;
+noperspective out vec3 stq;
+noperspective out vec2 depth;
 flat out vec4 konst;
 flat out uvec4 vmode;
 flat out vec4 st_box;
@@ -284,7 +339,9 @@ void main() {
     konst = kc;
     st_box = box;
     vmode = mode;
-    st = tc;
+    // s/w, t/w and 1/w go linearly over the screen: divided per pixel (perspective-correct)
+    stq = tc;
+    depth = dz;
     gl_Position = vec4(pos.x / space.x * 2.0 - 1.0, 1.0 - pos.y / space.y * 2.0, 0.0, 1.0);
 }
 "#;
@@ -299,8 +356,14 @@ uniform int chroma;
 uniform vec3 key;
 uniform int linear_filter;
 uniform int edge;      // how the chroma key's soft edge is applied (see `flush`)
+uniform int depth_mode;   // 0 off, 1 z-buffer (ooz), 2 w-buffer (1/oow)
+uniform float depth_bias; // grDepthBiasLevel
+uniform int fog_mode;     // grFogMode: 1 iterated alpha, | 0x100 mult2, | 0x200 add2
+uniform vec3 fog_color;
 in vec4 vcol;
-noperspective in vec2 st;
+noperspective in vec3 stq;
+noperspective in vec2 depth;  // ooz, oow
+vec2 st;
 flat in vec4 konst;    // the constant colour
 flat in uvec4 vmode;   // combine units and texture, packed by `add`
 flat in vec4 st_box;   // the primitive's texture rectangle
@@ -420,6 +483,12 @@ void main() {
     layer = int((vmode.z >> 8) & 255u);
     hd_layer = int(vmode.z >> 16) - 1;
     tex_size = ivec2(vmode.w & 0x3ffu, (vmode.w >> 10) & 0x3ffu);
+    st = stq.z != 0.0 ? stq.xy / stq.z : stq.xy;
+    // the depth compared: z-buffer ooz / 65535 (larger nearer); w-buffer 1 / (w + 1) (larger
+    // nearer, exact far away; the depth functions are turned around for it, see `flush`)
+    if (depth_mode == 1) gl_FragDepth = clamp((depth.x + depth_bias) / 65535.0, 0.0, 1.0);
+    else if (depth_mode == 2) gl_FragDepth = 1.0 / (1.0 / max(depth.y, 1e-30) + depth_bias + 1.0);
+    else gl_FragDepth = 0.5;
     float cover = 1.0;
     vec4 t = use_tex != 0 ? sample_tex(cover) : vec4(1.0);
     // alpha first: colour factors may use it
@@ -447,12 +516,42 @@ void main() {
     if (edge == 2) a *= cover;
     if (edge == 3) c *= cover;
     if (cover <= 0.0) discard;
+    // fog after the combine units: the factor is the iterated alpha
+    if ((fog_mode & 0xff) == 1) {
+        float f = clamp(vcol.a, 0.0, 1.0);
+        if ((fog_mode & 0x100) != 0) c = (1.0 - f) * c;
+        else if ((fog_mode & 0x200) != 0) c = f * fog_color;
+        else c = mix(c, fog_color, f);
+    }
     color = vec4(c, a);
 }
 "#;
 
-/// Words per batched vertex.
-const VERTEX: usize = 20;
+/// LFB pixels drawn over the picture: a rectangle (GL coordinates x0 y0 x1 y1) of a texture,
+/// its transparent texels left out.
+const BLIT_VS: &str = r#"
+uniform vec4 rect;
+out vec2 uv;
+void main() {
+    vec2 c = vec2(gl_VertexID & 1, gl_VertexID >> 1);
+    uv = vec2(c.x, 1.0 - c.y);
+    gl_Position = vec4(mix(rect.xy, rect.zw, c), 0.0, 1.0);
+}
+"#;
+
+const BLIT_FS: &str = r#"
+uniform sampler2D img;
+in vec2 uv;
+out vec4 color;
+void main() {
+    color = texture(img, uv);
+    if (color.a == 0.0) discard;
+}
+"#;
+
+/// Words per batched vertex: x y, r g b a, sow tow oow, constant r g b a, the mode (4 words),
+/// the texture rectangle s0 t0 s1 t1, ooz oow.
+const VERTEX: usize = 23;
 
 /// The shaders' uniforms, looked up once.
 struct Uniforms {
@@ -466,6 +565,10 @@ struct Uniforms {
     key: Option<glow::UniformLocation>,
     linear_filter: Option<glow::UniformLocation>,
     edge: Option<glow::UniformLocation>,
+    depth_mode: Option<glow::UniformLocation>,
+    depth_bias: Option<glow::UniformLocation>,
+    fog_mode: Option<glow::UniformLocation>,
+    fog_color: Option<glow::UniformLocation>,
 }
 
 impl Uniforms {
@@ -482,6 +585,10 @@ impl Uniforms {
             key: u("key"),
             linear_filter: u("linear_filter"),
             edge: u("edge"),
+            depth_mode: u("depth_mode"),
+            depth_bias: u("depth_bias"),
+            fog_mode: u("fog_mode"),
+            fog_color: u("fog_color"),
         }
     }
 }
@@ -584,6 +691,22 @@ fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
     out
 }
 
+/// 0xRRGGBB as a 565 pixel.
+fn to_565(c: u32) -> u16 {
+    ((c >> 8 & 0xf800) | (c >> 5 & 0x07e0) | (c >> 3 & 0x1f)) as u16
+}
+
+/// A 16-bit LFB pixel (GR_LFBWRITEMODE_565 0, 555 1, 1555 2) as opaque RGBA.
+fn pixel16(v: u16, mode: u32) -> [u8; 4] {
+    let v = v as u32;
+    let e5 = |x: u32| ((x << 3) | (x >> 2)) as u8;
+    let e6 = |x: u32| ((x << 2) | (x >> 4)) as u8;
+    match mode {
+        1 | 2 => [e5(v >> 10 & 31), e5(v >> 5 & 31), e5(v & 31), 255],
+        _ => [e5(v >> 11), e6(v >> 5 & 63), e5(v & 31), 255],
+    }
+}
+
 fn bytes_per_texel(format: u32) -> u32 {
     if format >= 8 { 2 } else { 1 }
 }
@@ -671,6 +794,10 @@ impl Glide {
             };
             let array = layers(glow::RGBA8);
             let alpha = layers(glow::RG8);
+            let depth_rb = gl.create_renderbuffer().expect("GL renderbuffer");
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth_rb));
+            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT32F, target.0 as i32, target.1 as i32);
+            let blit = (compile(gl, BLIT_VS, BLIT_FS), texture(gl, false));
             Glide {
                 res: (w, h),
                 target,
@@ -706,10 +833,23 @@ impl Glide {
                     linear: false,
                     clamp: (true, true),
                     clip: [0, 0, w as i32, h as i32],
+                    depth_mode: 0,
+                    depth_func: 1,
+                    depth_mask: true,
+                    depth_bias: 0,
+                    fog: 0,
+                    fog_color: 0,
+                    color_mask: (true, true),
                 },
                 batch: Vec::new(),
                 batch_mode: glow::TRIANGLES,
                 gamma: 1.0,
+                depth_rb,
+                cull: 0,
+                lower_left: false,
+                saved: HashMap::new(),
+                lfb: None,
+                blit,
             }
         }
     }
@@ -722,22 +862,24 @@ impl Glide {
 
     /// This thread's framebuffer drawing into `color`.
     fn color_fbo(&mut self, gl: &glow::Context) -> glow::Framebuffer {
-        let color = self.color;
+        let (color, depth) = (self.color, self.depth_rb);
         *self.local(gl).fbos.entry((true, color.0.get() as u64)).or_insert_with(|| unsafe {
             let f = gl.create_framebuffer().expect("GL framebuffer");
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
             gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(color), 0);
+            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(depth));
             f
         })
     }
 
     /// This thread's framebuffer drawing into the multisampled renderbuffer, if there is one.
     fn ms_fbo(&mut self, gl: &glow::Context) -> Option<glow::Framebuffer> {
-        let (rb, _, n) = self.ms?;
+        let (rb, _, n, depth) = self.ms?;
         Some(*self.local(gl).fbos.entry((false, n)).or_insert_with(|| unsafe {
             let f = gl.create_framebuffer().expect("GL framebuffer");
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
             gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::RENDERBUFFER, Some(rb));
+            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(depth));
             f
         }))
     }
@@ -784,11 +926,15 @@ impl Glide {
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.color));
             gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(self.depth_rb));
+            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT32F, w as i32, h as i32);
             let fbo = self.color_fbo(gl);
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
             gl.disable(glow::SCISSOR_TEST);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
+            gl.depth_mask(true);
+            gl.clear_depth_f32(0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         }
         self.multisample(gl, true);
     }
@@ -802,26 +948,33 @@ impl Glide {
             return;
         }
         unsafe {
-            if let Some((rb, _, n)) = self.ms.take() {
+            if let Some((rb, _, n, depth)) = self.ms.take() {
                 // this thread's framebuffer for it (other threads' stay unused)
                 if let Some(f) = self.local(gl).fbos.remove(&(false, n)) {
                     gl.delete_framebuffer(f);
                 }
                 gl.delete_renderbuffer(rb);
+                gl.delete_renderbuffer(depth);
             }
             if samples == 0 {
                 return;
             }
+            let (w, h) = (self.target.0 as i32, self.target.1 as i32);
             let rb = gl.create_renderbuffer().expect("GL renderbuffer");
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(rb));
-            gl.renderbuffer_storage_multisample(glow::RENDERBUFFER, samples as i32, glow::RGBA8, self.target.0 as i32, self.target.1 as i32);
+            gl.renderbuffer_storage_multisample(glow::RENDERBUFFER, samples as i32, glow::RGBA8, w, h);
+            let depth = gl.create_renderbuffer().expect("GL renderbuffer");
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
+            gl.renderbuffer_storage_multisample(glow::RENDERBUFFER, samples as i32, glow::DEPTH_COMPONENT32F, w, h);
             self.made += 1;
-            self.ms = Some((rb, samples, self.made));
+            self.ms = Some((rb, samples, self.made, depth));
             let fbo = self.ms_fbo(gl).unwrap();
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
             gl.disable(glow::SCISSOR_TEST);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
+            gl.depth_mask(true);
+            gl.clear_depth_f32(0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         }
     }
 
@@ -942,12 +1095,45 @@ impl Glide {
                     gl.blend_func(src, dst);
                 }
             }
+            // the depth buffer: z (1, 3) or w (2, 4); compared values grow towards the viewer
+            // for z, and the stored w values too (1 / (w + 1)): Glide's functions on w turn round
+            let depth = match s.depth_mode {
+                1 | 3 => 1,
+                2 | 4 => 2,
+                _ => 0,
+            };
+            gl.uniform_1_i32(u.depth_mode.as_ref(), depth);
+            gl.uniform_1_f32(u.depth_bias.as_ref(), s.depth_bias as f32);
+            if depth == 0 {
+                gl.disable(glow::DEPTH_TEST);
+            } else {
+                gl.enable(glow::DEPTH_TEST);
+                let w = depth == 2;
+                gl.depth_func(match s.depth_func & 7 {
+                    0 => glow::NEVER,
+                    1 => if w { glow::GREATER } else { glow::LESS },
+                    2 => glow::EQUAL,
+                    3 => if w { glow::GEQUAL } else { glow::LEQUAL },
+                    4 => if w { glow::LESS } else { glow::GREATER },
+                    5 => glow::NOTEQUAL,
+                    6 => if w { glow::LEQUAL } else { glow::GEQUAL },
+                    _ => glow::ALWAYS,
+                });
+            }
+            gl.depth_mask(depth != 0 && s.depth_mask);
+            gl.color_mask(s.color_mask.0, s.color_mask.0, s.color_mask.0, s.color_mask.1);
+            gl.uniform_1_i32(u.fog_mode.as_ref(), s.fog as i32);
+            let fc = s.fog_color;
+            gl.uniform_3_f32(u.fog_color.as_ref(), (fc >> 16 & 0xff) as f32 / 255.0, (fc >> 8 & 0xff) as f32 / 255.0, (fc & 0xff) as f32 / 255.0);
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
             let bytes = std::slice::from_raw_parts(self.batch.as_ptr() as *const u8, self.batch.len() * 4);
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
             gl.draw_arrays(self.batch_mode, 0, (self.batch.len() / VERTEX) as i32);
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::BLEND);
+            gl.disable(glow::DEPTH_TEST);
+            gl.depth_mask(true);
+            gl.color_mask(true, true, true, true);
         }
         self.batch.clear();
     }
@@ -964,11 +1150,20 @@ impl Glide {
 
     /// Add vertices (GrVertex at guest addresses) as primitives of `mode`.
     fn add(&mut self, gl: &glow::Context, mode: u32, verts: &[u32]) {
+        let m = mem();
+        if let (1 | 2, &[a, b, c]) = (self.cull, verts) {
+            // Glide's signed area (in its own y direction): negative or positive ones are culled
+            let p = |v: u32| (f32::from_bits(m.rd32(v)), f32::from_bits(m.rd32(v + 4)));
+            let (a, b, c) = (p(a), p(b), p(c));
+            let area = (a.0 - b.0) * (b.1 - c.1) - (b.0 - c.0) * (a.1 - b.1);
+            if self.cull == 1 && area < 0.0 || self.cull == 2 && area > 0.0 {
+                return;
+            }
+        }
         if mode != self.batch_mode {
             self.flush(gl);
             self.batch_mode = mode;
         }
-        let m = mem();
         let k = self.constant;
         let ch = |sh: u32| ((k >> sh & 0xff) as f32 / 255.0).to_bits();
         let konst = [ch(16), ch(8), ch(0), ch(24)];
@@ -997,15 +1192,29 @@ impl Glide {
             b = [b[0].min(s), b[1].min(t), b[2].max(s), b[3].max(t)];
         }
         let b = b.map(f32::to_bits);
-        let xy = |v: u32| (f32::from_bits(m.rd32(v)), f32::from_bits(m.rd32(v + 4)));
+        // with the origin at the lower left, y counts up from the bottom
+        let flip = self.lower_left.then_some(self.space.1 as f32);
+        let xy = |v: u32| {
+            let y = f32::from_bits(m.rd32(v + 4));
+            (f32::from_bits(m.rd32(v)), flip.map_or(y, |h| h - y))
+        };
         // a line: a quad as wide as the game's line at its resolution
         let quad = if let [v0, v1] = *verts { Some(self.line_offsets(xy(v0), xy(v1))) } else { None };
         let mut put = |v: u32, (x, y): (f32, f32)| {
-            let (s, t) = st(v);
-            self.batch.extend([x.to_bits(), y.to_bits(), m.rd32(v + 0xc), m.rd32(v + 0x10), m.rd32(v + 0x14), m.rd32(v + 0x1c), s.to_bits(), t.to_bits()]);
+            // tmu 0's sow tow oow (its oow, else the vertex's), interpolated linearly on the
+            // screen and divided per pixel
+            let q = match f32::from_bits(m.rd32(v + 0x2c)) {
+                0.0 => f32::from_bits(m.rd32(v + 0x20)),
+                q => q,
+            };
+            let q = if q != 0.0 { q } else { 1.0 };
+            self.batch.extend([x.to_bits(), y.to_bits(), m.rd32(v + 0xc), m.rd32(v + 0x10), m.rd32(v + 0x14), m.rd32(v + 0x1c)]);
+            self.batch.extend([m.rd32(v + 0x24), m.rd32(v + 0x28), q.to_bits()]);
             self.batch.extend(konst);
             self.batch.extend(mode);
             self.batch.extend(b);
+            // ooz, oow for the depth buffer
+            self.batch.extend([m.rd32(v + 0x18), m.rd32(v + 0x20)]);
         };
         if let (Some([n0, n1, n2, n3]), &[v0, v1]) = (quad, verts) {
             put(v0, n0);
@@ -1036,6 +1245,117 @@ impl Glide {
         // along (u) and across (n = u turned) in pixels, back to the space's units
         let p = |o: (f32, f32), along: f32, across: f32| (o.0 + (ux * along - uy * across) / kx, o.1 + (uy * along + ux * across) / ky);
         [p(a, -h, -h), p(a, -h, h), p(b, h, -h), p(b, h, h)]
+    }
+
+    /// The picture so far at the Glide screen's size, rows from the top, as 0xRRGGBB.
+    fn read_screen(&mut self, gl: &glow::Context) -> Vec<u32> {
+        self.flush(gl);
+        self.resolve(gl);
+        let (tw, th) = self.target;
+        let mut px = vec![0u8; (tw * th * 4) as usize];
+        let fbo = self.color_fbo(gl);
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.read_pixels(0, 0, tw as i32, th as i32, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(&mut px)));
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        // nearest target pixel of each screen pixel, in the view's rectangle (GL rows from
+        // the bottom)
+        let ([vx, vy, vw, vh], _) = self.view_rect();
+        let (w, h) = self.res;
+        let mut out = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            let ty = (vy + (y as f32 + 0.5) * vh / h as f32) as u32;
+            let row = th - 1 - ty.min(th - 1);
+            for x in 0..w {
+                let tx = ((vx + (x as f32 + 0.5) * vw / w as f32) as u32).min(tw - 1);
+                let p = ((row * tw + tx) * 4) as usize;
+                out.push((px[p] as u32) << 16 | (px[p + 1] as u32) << 8 | px[p + 2] as u32);
+            }
+        }
+        out
+    }
+
+    /// RGBA pixels (`w` x `h`, rows from the top) over the picture at screen position `x`, `y`
+    /// (from the top); transparent ones are left out.
+    fn draw_pixels(&mut self, gl: &glow::Context, (x, y): (i32, i32), (w, h): (u32, u32), rgba: &[u8]) {
+        self.flush(gl);
+        let fbo = self.draw_fbo(gl);
+        let empty = self.local(gl).empty;
+        let (sw, sh) = (self.res.0 as f32, self.res.1 as f32);
+        let (prog, tex) = self.blit;
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            self.scissor(gl, [0, 0, self.res.0 as i32, self.res.1 as i32]);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(Some(rgba)));
+            gl.use_program(Some(prog));
+            gl.uniform_1_i32(gl.get_uniform_location(prog, "img").as_ref(), 0);
+            let nx = |v: f32| v / sw * 2.0 - 1.0;
+            let ny = |v: f32| 1.0 - v / sh * 2.0;
+            let r = [nx(x as f32), ny((y + h as i32) as f32), nx((x + w as i32) as f32), ny(y as f32)];
+            gl.uniform_4_f32(gl.get_uniform_location(prog, "rect").as_ref(), r[0], r[1], r[2], r[3]);
+            gl.bind_vertex_array(Some(empty));
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            gl.disable(glow::SCISSOR_TEST);
+        }
+    }
+
+    /// grLfbLock: the guest buffer of the Glide screen (read: the picture so far; write:
+    /// `LFB_UNTOUCHED`, drawn where changed at grLfbUnlock).
+    fn lfb_lock(&mut self, gl: &glow::Context, write: bool, mode: u32, lower: bool) -> u32 {
+        static BUF: AtomicU32 = AtomicU32::new(0);
+        let (w, h) = self.res;
+        let mut buf = BUF.load(Ordering::Relaxed);
+        if buf == 0 {
+            // the largest Glide screen
+            buf = super::alloc(LFB_STRIDE * 1200);
+            BUF.store(buf, Ordering::Relaxed);
+        }
+        let m = mem();
+        if write {
+            for y in 0..h {
+                for x in 0..w {
+                    m.wr16(buf + y * LFB_STRIDE + 2 * x, LFB_UNTOUCHED);
+                }
+            }
+        } else {
+            let px = self.read_screen(gl);
+            for y in 0..h {
+                let row = if lower { h - 1 - y } else { y };
+                for x in 0..w {
+                    m.wr16(buf + row * LFB_STRIDE + 2 * x, to_565(px[(y * w + x) as usize]));
+                }
+            }
+        }
+        self.lfb = Some(Lfb { buf, write, mode, lower });
+        buf
+    }
+
+    fn lfb_unlock(&mut self, gl: &glow::Context) {
+        let Some(l) = self.lfb.take() else { return };
+        if !l.write {
+            return;
+        }
+        let (w, h) = self.res;
+        let m = mem();
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        let mut any = false;
+        for y in 0..h {
+            let row = if l.lower { h - 1 - y } else { y };
+            for x in 0..w {
+                let v = m.rd16(l.buf + row * LFB_STRIDE + 2 * x);
+                if v != LFB_UNTOUCHED {
+                    let p = ((y * w + x) * 4) as usize;
+                    rgba[p..p + 4].copy_from_slice(&pixel16(v, l.mode));
+                    any = true;
+                }
+            }
+        }
+        if any {
+            self.draw_pixels(gl, (0, 0), (w, h), &rgba);
+        }
     }
 
     /// Texels into the texture at TMU address `addr` (rows `rows` of its top level, or all).
@@ -1234,6 +1554,7 @@ fn sst_win_open(c: &mut Cpu) -> u32 {
         _ => (640, 480),
     };
     log!("glide: grSstWinOpen {w}x{h}");
+    super::window::set_screen(Some((w, h)));
     if !super::window::gl_here() {
         return 0;
     }
@@ -1258,14 +1579,19 @@ fn sst_win_open(c: &mut Cpu) -> u32 {
 }
 
 fn sst_win_close(_: &mut Cpu) -> u32 {
+    super::window::set_screen(None);
     with(|g, gl| unsafe {
         // this thread's objects; other threads' are left (their contexts are not current here)
         if let Some(l) = g.locals.remove(&thread_id()) {
             l.delete(gl);
         }
-        if let Some((rb, _, _)) = g.ms.take() {
+        if let Some((rb, _, _, depth)) = g.ms.take() {
             gl.delete_renderbuffer(rb);
+            gl.delete_renderbuffer(depth);
         }
+        gl.delete_renderbuffer(g.depth_rb);
+        gl.delete_program(g.blit.0);
+        gl.delete_texture(g.blit.1);
         gl.delete_texture(g.color);
         gl.delete_texture(g.array);
         gl.delete_texture(g.alpha);
@@ -1277,17 +1603,189 @@ fn sst_win_close(_: &mut Cpu) -> u32 {
 
 
 fn buffer_clear(c: &mut Cpu) -> u32 {
-    let color = arg(c, 0);
+    let (color, depth) = (arg(c, 0), arg(c, 2) & 0xffff);
     with(|g, gl| {
         g.flush(gl);
         let fbo = g.draw_fbo(gl);
+        let s = g.state;
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-            g.scissor(gl, g.state.clip);
+            g.scissor(gl, s.clip);
             let ch = |sh: u32| (color >> sh & 0xff) as f32 / 255.0;
             gl.clear_color(ch(16), ch(8), ch(0), 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
+            gl.color_mask(s.color_mask.0, s.color_mask.0, s.color_mask.0, s.color_mask.1);
+            let mut bits = glow::COLOR_BUFFER_BIT;
+            // the depth buffer when it is on and written: z as it is, w turned round (0xffff
+            // the farthest)
+            if s.depth_mode != 0 && s.depth_mask {
+                let d = depth as f32 / 65535.0;
+                gl.clear_depth_f32(if matches!(s.depth_mode, 2 | 4) { 1.0 - d } else { d });
+                gl.depth_mask(true);
+                bits |= glow::DEPTH_BUFFER_BIT;
+            }
+            gl.clear(bits);
+            gl.color_mask(true, true, true, true);
             gl.disable(glow::SCISSOR_TEST);
+        }
+    });
+    0
+}
+
+fn cull_mode(c: &mut Cpu) -> u32 {
+    let mode = arg(c, 0);
+    with(|g, _| g.cull = mode);
+    0
+}
+
+/// grSstOrigin(GR_ORIGIN_UPPER_LEFT 0, LOWER_LEFT 1).
+fn sst_origin(c: &mut Cpu) -> u32 {
+    let lower = arg(c, 0) == 1;
+    with(|g, _| g.lower_left = lower);
+    0
+}
+
+fn depth_buffer_mode(c: &mut Cpu) -> u32 {
+    let v = arg(c, 0);
+    with(|g, gl| g.set(gl, |s| s.depth_mode = v));
+    0
+}
+
+fn depth_buffer_function(c: &mut Cpu) -> u32 {
+    let v = arg(c, 0);
+    with(|g, gl| g.set(gl, |s| s.depth_func = v));
+    0
+}
+
+fn depth_mask(c: &mut Cpu) -> u32 {
+    let v = arg(c, 0) != 0;
+    with(|g, gl| g.set(gl, |s| s.depth_mask = v));
+    0
+}
+
+fn depth_bias_level(c: &mut Cpu) -> u32 {
+    let v = arg(c, 0) as i16 as i32;
+    with(|g, gl| g.set(gl, |s| s.depth_bias = v));
+    0
+}
+
+fn fog_mode(c: &mut Cpu) -> u32 {
+    let v = arg(c, 0);
+    if v & 0xff > 1 {
+        log!("warn: grFogMode({v:#x}): only iterated alpha fog is done");
+    }
+    with(|g, gl| g.set(gl, |s| s.fog = v));
+    0
+}
+
+fn fog_color_value(c: &mut Cpu) -> u32 {
+    let v = arg(c, 0);
+    with(|g, gl| g.set(gl, |s| s.fog_color = v));
+    0
+}
+
+fn color_mask(c: &mut Cpu) -> u32 {
+    let v = (arg(c, 0) != 0, arg(c, 1) != 0);
+    with(|g, gl| g.set(gl, |s| s.color_mask = v));
+    0
+}
+
+/// grGlideGetState(GrState*): our state, kept by the address of the game's GrState.
+fn glide_get_state(c: &mut Cpu) -> u32 {
+    let p = arg(c, 0);
+    with(|g, _| {
+        let s = Saved { state: g.state, cc: g.cc, ac: g.ac, constant: g.constant, tex: g.tex, alpha_test: g.alpha_test, cull: g.cull, lower_left: g.lower_left };
+        g.saved.insert(p, s);
+    });
+    0
+}
+
+fn glide_set_state(c: &mut Cpu) -> u32 {
+    let p = arg(c, 0);
+    with(|g, gl| {
+        let Some(s) = g.saved.get(&p).copied() else { return };
+        g.set(gl, |st| *st = s.state);
+        (g.cc, g.ac, g.constant, g.tex, g.alpha_test, g.cull, g.lower_left) = (s.cc, s.ac, s.constant, s.tex, s.alpha_test, s.cull, s.lower_left);
+    });
+    0
+}
+
+/// grLfbLock(type, buffer, write mode, origin, pixel pipeline, GrLfbInfo*): type bit 0 is
+/// write. GrLfbInfo: size, pointer, stride, write mode, origin.
+fn lfb_lock(c: &mut Cpu) -> u32 {
+    let (ty, mode, origin, info) = (arg(c, 0), arg(c, 2), arg(c, 3), arg(c, 5));
+    let write = ty & 1 != 0;
+    let mode = if mode == 0xff { 0 } else { mode };
+    if write && mode > 2 {
+        log!("warn: grLfbLock write mode {mode:#x} not supported");
+    }
+    let lower = origin == 1;
+    let Some(buf) = with(|g, gl| g.lfb_lock(gl, write, mode, lower)) else { return 0 };
+    let m = mem();
+    m.wr32(info + 4, buf);
+    m.wr32(info + 8, LFB_STRIDE);
+    m.wr32(info + 12, mode);
+    m.wr32(info + 16, origin);
+    1
+}
+
+fn lfb_unlock(_: &mut Cpu) -> u32 {
+    with(|g, gl| g.lfb_unlock(gl));
+    1
+}
+
+/// grLfbWriteRegion(buffer, x, y, source format, w, h, stride, data): source formats 565 (0),
+/// 555 (1), 1555 (2), 888 (4), 8888 (5).
+fn lfb_write_region(c: &mut Cpu) -> u32 {
+    let (x, y, fmt, w, h, stride, data) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6), arg(c, 7));
+    let m = mem();
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for r in 0..h {
+        let row = data + r * stride;
+        for k in 0..w {
+            rgba.extend(match fmt {
+                0..=2 => pixel16(m.rd16(row + 2 * k), fmt),
+                4 | 5 => {
+                    let v = m.rd32(row + 4 * k);
+                    [(v >> 16) as u8, (v >> 8) as u8, v as u8, 255]
+                }
+                _ => [255, 0, 255, 255],
+            });
+        }
+    }
+    with(|g, gl| {
+        let y = if g.lower_left { g.res.1 as i32 - (y + h) as i32 } else { y as i32 };
+        let rgba = if g.lower_left { rgba.chunks((w * 4) as usize).rev().flatten().copied().collect() } else { rgba };
+        g.draw_pixels(gl, (x as i32, y), (w, h), &rgba);
+    });
+    1
+}
+
+/// grLfbReadRegion(buffer, x, y, w, h, stride, data): the picture so far as 565.
+fn lfb_read_region(c: &mut Cpu) -> u32 {
+    let (x, y, w, h, stride, data) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6));
+    with(|g, gl| {
+        let px = g.read_screen(gl);
+        let (sw, sh) = g.res;
+        let m = mem();
+        for r in 0..h {
+            let sy = if g.lower_left { sh.saturating_sub(1 + y + r) } else { y + r };
+            for k in 0..w {
+                let (sx, sy) = ((x + k).min(sw - 1), sy.min(sh - 1));
+                m.wr16(data + r * stride + 2 * k, to_565(px[(sy * sw + sx) as usize]));
+            }
+        }
+    })
+    .is_some() as u32
+}
+
+/// grDrawPolygonVertexList(n, GrVertex[n]): a convex polygon, as a fan of triangles.
+fn draw_polygon_vertex_list(c: &mut Cpu) -> u32 {
+    let (n, list) = (arg(c, 0), arg(c, 1));
+    // GrVertex: x y z r g b ooz a oow, two TMUs' sow tow oow
+    let v = |k: u32| list + 0x3c * k;
+    with(|g, gl| {
+        for k in 1..n.saturating_sub(1) {
+            g.add(gl, glow::TRIANGLES, &[v(0), v(k), v(k + 1)]);
         }
     });
     0
@@ -1355,7 +1853,12 @@ fn draw_point(c: &mut Cpu) -> u32 {
 
 fn clip_window(c: &mut Cpu) -> u32 {
     let r = [arg(c, 0) as i32, arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3) as i32];
-    with(|g, gl| g.set(gl, |s| s.clip = r));
+    with(|g, gl| {
+        // kept from the top (with the origin at the lower left, y counts up)
+        let h = g.res.1 as i32;
+        let r = if g.lower_left { [r[0], h - r[3], r[2], h - r[1]] } else { r };
+        g.set(gl, |s| s.clip = r)
+    });
     0
 }
 
@@ -1547,7 +2050,23 @@ const FUNCTIONS: &[(&str, fn(&mut Cpu) -> u32)] = &[
     ("grTexFilterMode", tex_filter_mode),
     ("grTexClampMode", tex_clamp_mode),
     ("grTexMipMapMode", ret0),
-    ("grDepthBufferMode", ret0),
+    ("grDepthBufferMode", depth_buffer_mode),
+    ("grDepthBufferFunction", depth_buffer_function),
+    ("grDepthMask", depth_mask),
+    ("grDepthBiasLevel", depth_bias_level),
+    ("grCullMode", cull_mode),
+    ("grSstOrigin", sst_origin),
+    ("grFogMode", fog_mode),
+    ("grFogColorValue", fog_color_value),
+    ("grColorMask", color_mask),
+    ("grRenderBuffer", ret0),
+    ("grGlideGetState", glide_get_state),
+    ("grGlideSetState", glide_set_state),
+    ("grDrawPolygonVertexList", draw_polygon_vertex_list),
+    ("grLfbLock", lfb_lock),
+    ("grLfbUnlock", lfb_unlock),
+    ("grLfbWriteRegion", lfb_write_region),
+    ("grLfbReadRegion", lfb_read_region),
     ("grDitherMode", ret0),
     ("grGammaCorrectionValue", gamma_value),
     ("grTexMinAddress", tex_min_address),

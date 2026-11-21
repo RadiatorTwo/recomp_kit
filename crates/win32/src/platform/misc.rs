@@ -69,7 +69,41 @@ fn ret0(_: &mut Cpu) -> u32 {
     0
 }
 
+/// mciSendCommandA: no MCI devices yet (CD audio comes from the CD image later):
+/// MCIERR_INVALID_DEVICE_NAME.
+fn mci_send_command(c: &mut Cpu) -> u32 {
+    super::log!("mciSendCommandA({:#x}, {:#x}, {:#x}): no device", arg(c, 0), arg(c, 1), arg(c, 2));
+    263
+}
+
+fn mci_get_error_string(c: &mut Cpu) -> u32 {
+    let (buf, n) = (arg(c, 1), arg(c, 2));
+    super::put_cstr(buf, "The device is not available.", n);
+    1
+}
+
+fn aux_ret0(_: &mut Cpu) -> u32 {
+    0
+}
+
+/// AVIStreamOpenFromFileA and AVIFileOpenA: no AVI videos yet (Indeo needs a decoder):
+/// AVIERR_FILEOPEN, the game goes on without the video.
+fn avi_open(c: &mut Cpu) -> u32 {
+    super::log!("AVI {}: not played (no decoder yet)", super::cstr(arg(c, 1)));
+    if arg(c, 0) != 0 {
+        mem().wr32(arg(c, 0), 0);
+    }
+    0x8004_4067
+}
+
 pub const IMPORTS: &[Import] = &[
+    ("AVIFileInit", 0, aux_ret0),
+    ("AVIFileExit", 0, aux_ret0),
+    ("AVIStreamOpenFromFileA", 6, avi_open),
+    ("AVIFileOpenA", 4, avi_open),
+    ("mciSendCommandA", 4, mci_send_command),
+    ("mciGetErrorStringA", 3, mci_get_error_string),
+    ("auxGetNumDevs", 0, aux_ret0),
     ("timeGetTime", 0, time_get_time),
     ("timeGetDevCaps", 2, time_get_dev_caps),
     ("timeBeginPeriod", 1, ret0),

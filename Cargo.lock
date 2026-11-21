@@ -1155,6 +1155,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2457,6 +2467,7 @@ dependencies = [
 name = "win32"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "cpal",
  "gilrs",
  "glow",
@@ -2464,12 +2475,15 @@ dependencies = [
  "glutin-winit",
  "iced-x86",
  "libc",
+ "md-5",
+ "miniz_oxide 0.8.9",
  "png",
  "raw-window-handle",
  "recomp",
  "serde",
  "serde_json",
  "sha2",
+ "ttf-parser",
  "windows-sys 0.61.2",
  "winit",
 ]

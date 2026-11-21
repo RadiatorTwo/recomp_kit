@@ -68,6 +68,14 @@
   savestates and new threads' stacks, depth buffer, shadow map and its ring, tone mapping
   targets; the user's rules (glitches fixed regardless of the original, no environment
   variables for hand tests, replays with the user's settings).
+- From rustcoil (Recoil, 2026-11-21): game DLLs loaded and compiled with the EXE
+  (`Game::dlls`, `platform/module.rs`: MFC 4.2, MSVCRT), the MFC window layer in user32 (WH_CBT
+  hook in CreateWindowExA, classes, properties, menus from MENU resources: `platform/menu.rs`),
+  gdi32 DC state, DIB sections, GetObjectA of them, TrueType text (`platform/text.rs`,
+  ab_glyph), DrawTextA; Glide for real 3D games (perspective-correct textures, depth buffer,
+  culling, fog, color mask, Get/SetState, polygon lists, the linear frame buffer); mouse
+  positions in Glide's screen pixels (`window::set_screen`); AVI stubs (open fails, the game
+  goes on); InstallShield 5/6 cabs (`iscab.rs`, `rtools iscab`), `rtools iso --extract`.
 
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 

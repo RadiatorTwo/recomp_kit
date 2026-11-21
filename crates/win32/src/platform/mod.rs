@@ -21,10 +21,13 @@ pub mod glide;
 pub mod hd;
 pub mod kernel32;
 pub mod menupad;
+pub mod menu;
 pub mod misc;
+pub mod module;
 pub mod record;
 pub mod sample;
 pub mod stats;
+pub mod text;
 pub mod savestate;
 pub mod setting;
 pub mod tween;
@@ -980,13 +983,29 @@ pub fn host_path(guest: &str) -> PathBuf {
 
 // ---- process start -------------------------------------------------------------------------------
 
-fn find_import(dll: &str, name: &str) -> Option<&'static Import> {
+/// The names of system DLL exports some games import by ordinal.
+fn ordinal_name(dll: &str, name: &str) -> Option<&'static str> {
+    let n: u32 = name.strip_prefix('#')?.parse().ok()?;
+    Some(match (dll.to_ascii_uppercase().as_str(), n) {
+        ("DSOUND.DLL", 1) => "DirectSoundCreate",
+        ("DSOUND.DLL", 2) => "DirectSoundEnumerateA",
+        ("DPLAYX.DLL", 1) => "DirectPlayCreate",
+        ("DPLAYX.DLL", 2) => "DirectPlayEnumerateA",
+        ("DPLAYX.DLL", 4) => "DirectPlayLobbyCreateA",
+        ("WS2_32.DLL" | "WSOCK32.DLL", 115) => "WSAStartup",
+        ("WS2_32.DLL" | "WSOCK32.DLL", 116) => "WSACleanup",
+        _ => return None,
+    })
+}
+
+pub(crate) fn find_import(dll: &str, name: &str) -> Option<&'static Import> {
+    let name = ordinal_name(dll, name).unwrap_or(name);
     if let Some(i) = crate::game::game().import(dll, name) {
         return Some(i);
     }
     let tables: &[&[Import]] = match dll.to_ascii_uppercase().as_str() {
         "KERNEL32.DLL" => &[kernel32::IMPORTS],
-        "USER32.DLL" => &[dialog::IMPORTS, user32::IMPORTS],
+        "USER32.DLL" => &[dialog::IMPORTS, user32::IMPORTS, menu::IMPORTS],
         "GDI32.DLL" => &[gdi32::IMPORTS],
         "ADVAPI32.DLL" => &[advapi32::IMPORTS],
         "DDRAW.DLL" => &[ddraw::IMPORTS],
@@ -999,22 +1018,65 @@ fn find_import(dll: &str, name: &str) -> Option<&'static Import> {
     tables.iter().flat_map(|t| t.iter()).find(|i| i.0 == name)
 }
 
-/// Load the EXE into a new guest address space, bind its imports, and run it on this thread
-/// (which needs a large stack: guest calls nest on it). Returns the exit code.
-pub fn run_game(img: &Image, game_dir: PathBuf) -> u32 {
-    let _ = GAME_DIR.set(game_dir);
-    reserve_memory();
+/// Copy a PE image into guest memory at its base (headers and sections); its pages go to
+/// `ranges` (what a savestate keeps).
+fn map_image(img: &Image, ranges: &mut Vec<(u32, u32)>) {
     let m = mem();
-    m.map(IMAGE_BASE, IMAGE_BASE + 0x1000);
+    m.map(img.base, img.base + 0x1000);
     let hdr = &img.data[..0x1000.min(img.data.len())];
-    m.slice(IMAGE_BASE, hdr.len()).copy_from_slice(hdr);
-    let mut ranges = vec![(IMAGE_BASE, IMAGE_BASE + 0x1000), (TIB, TIB + 0x1000), (STACK_LO, STACK_HI)];
+    m.slice(img.base, hdr.len()).copy_from_slice(hdr);
+    ranges.push((img.base, img.base + 0x1000));
     for sec in &img.sections {
         let size = sec.vsize.max(sec.rsize);
         m.map(sec.va, sec.va + size);
         ranges.push((sec.va & !0xfff, (sec.va + size + 0xfff) & !0xfff));
         let bytes = img.read(sec.va, size as usize).unwrap();
         m.slice(sec.va, bytes.len()).copy_from_slice(&bytes);
+    }
+}
+
+/// Fill an image's import slots: game DLLs' imports with their exports, the others with
+/// thunks to our functions. The ones we do not have go to `missing`.
+fn bind_imports(img: &Image, missing: &mut Vec<String>) {
+    let m = mem();
+    for i in img.imports() {
+        let full = format!("{}!{}", i.dll, i.name);
+        if i.dll.eq_ignore_ascii_case("glide2x.dll") {
+            // imported by its decorated names (_grBufferSwap@4)
+            m.wr32(i.iat, glide::proc_address(&i.name));
+            continue;
+        }
+        let a = match module::module(&i.dll) {
+            Some(dll) => match dll.export(&i.name) {
+                0 => {
+                    missing.push(full.clone());
+                    thunk_add(full, 0, None)
+                }
+                a => a,
+            },
+            None => match find_import(&i.dll, &i.name) {
+                Some(&(name, n, f)) => thunk(name, n, f),
+                None => {
+                    missing.push(full.clone());
+                    thunk_add(full, 0, None)
+                }
+            },
+        };
+        m.wr32(i.iat, a);
+    }
+}
+
+/// Load the EXE and the game's DLLs (`dlls`, as `module::load` gave them) into a new guest
+/// address space, bind their imports, run the DLLs' DllMain and then the EXE on this thread
+/// (which needs a large stack: guest calls nest on it). Returns the exit code.
+pub fn run_game(img: &Image, dlls: &[Image], game_dir: PathBuf) -> u32 {
+    let _ = GAME_DIR.set(game_dir);
+    reserve_memory();
+    let m = mem();
+    let mut ranges = vec![(TIB, TIB + 0x1000), (STACK_LO, STACK_HI)];
+    map_image(img, &mut ranges);
+    for d in dlls {
+        map_image(d, &mut ranges);
     }
     let _ = FIXED.set(ranges);
     glide::init();
@@ -1026,16 +1088,12 @@ pub fn run_game(img: &Image, game_dir: PathBuf) -> u32 {
     init_tib(TIB, STACK_LO, STACK_HI);
 
     let mut missing = Vec::new();
-    for i in img.imports() {
-        let a = match find_import(&i.dll, &i.name) {
-            Some(&(name, n, f)) => thunk(name, n, f),
-            None => {
-                missing.push(i.name.clone());
-                thunk_add(format!("{}!{}", i.dll, i.name), 0, None)
-            }
-        };
-        m.wr32(i.iat, a);
+    for d in dlls {
+        bind_imports(d, &mut missing);
     }
+    bind_imports(img, &mut missing);
+    missing.sort();
+    missing.dedup();
     if !missing.is_empty() {
         log!("{} imports not implemented yet: {}", missing.len(), missing.join(" "));
     }
@@ -1078,6 +1136,7 @@ pub fn run_game(img: &Image, game_dir: PathBuf) -> u32 {
     c.fs_base = TIB;
     c.r[ESP] = STACK_HI - 64;
     turn_take();
+    module::attach_imports(&mut c, img);
     c.r[ESP] -= 4;
     m.wr32(c.r[ESP], RET_MAGIC);
     rt::run(&mut c, img.entry);
@@ -1193,6 +1252,30 @@ pub fn printf(fmt: &str, mut arg: impl FnMut(u32) -> u32) -> String {
 
 /// A resource of the loaded EXE (first language): guest address and size of its data.
 pub fn resource(ty: ResId, id: ResId) -> Option<(u32, u32)> {
+    resource_in(IMAGE_BASE, ty, id)
+}
+
+/// A resource of the module at `base` (the EXE or a game DLL; 0 is the EXE).
+pub fn resource_in(base: u32, ty: ResId, id: ResId) -> Option<(u32, u32)> {
+    let base = if base == 0 { IMAGE_BASE } else { base };
+    if base != IMAGE_BASE && module::module_at(base).is_none() {
+        return None;
+    }
     let m = mem();
-    recomp::image::find_resource(&|a| m.rd8(a), IMAGE_BASE, ty, id)
+    recomp::image::find_resource(&|a| m.rd8(a), base, ty, id)
+}
+
+/// String `id` of a module's string table (RT_STRING blocks of 16 counted UTF-16 strings).
+pub fn load_string(base: u32, id: u32) -> Option<String> {
+    let (mut at, _) = resource_in(base, ResId::Id(6), ResId::Id(id / 16 + 1))?;
+    let m = mem();
+    for _ in 0..id % 16 {
+        at += 2 + 2 * m.rd16(at) as u32;
+    }
+    let n = m.rd16(at) as u32;
+    if n == 0 {
+        return None;
+    }
+    let units: Vec<u16> = (0..n).map(|k| m.rd16(at + 2 + 2 * k)).collect();
+    Some(String::from_utf16_lossy(&units))
 }

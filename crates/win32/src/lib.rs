@@ -6,6 +6,7 @@
 //! A game crate describes itself with `game::Game` and calls `run`.
 
 pub mod game;
+pub mod iscab;
 pub mod iso;
 pub mod mpeg;
 pub mod platform;
