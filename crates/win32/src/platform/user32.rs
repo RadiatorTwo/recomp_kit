@@ -141,6 +141,12 @@ pub fn post(hwnd: u32, msg: u32, wp: u32, lp: u32) {
     st().queue.push_back(Msg { hwnd, msg, wp, lp });
 }
 
+/// Fetch the window system's input now (DirectInput reads: they get input without the game's
+/// message loop, as in Windows).
+pub fn poll_input() {
+    poll(Duration::ZERO);
+}
+
 /// Turn window-system input into messages and key state; due timers post WM_TIMER.
 fn poll(wait: Duration) {
     super::ddraw::show_pending();

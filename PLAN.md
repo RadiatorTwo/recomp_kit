@@ -76,6 +76,10 @@
   culling, fog, color mask, Get/SetState, polygon lists, the linear frame buffer); mouse
   positions in Glide's screen pixels (`window::set_screen`); AVI stubs (open fails, the game
   goes on); InstallShield 5/6 cabs (`iscab.rs`, `rtools iscab`), `rtools iso --extract`.
+- From rustcoil (2026-11-22): Glide texture arrays grow (64 .. 2048 layers), mipmaps made per
+  texture on the CPU, s/t scaled by the texture's size / 256, tmu oow 0 falls back to the
+  vertex's for the texture rectangle too, repeated textures wrapped inside the texture with
+  mipmaps; DirectInput reads fetch the window's input; a scripted run does not catch the mouse.
 
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 

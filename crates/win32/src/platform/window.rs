@@ -827,7 +827,8 @@ impl App {
     /// the focus (Windows and X11 confine it; Wayland and macOS only lock it in place).
     fn catch_cursor(&mut self) {
         let Some(win) = &self.window else { return };
-        let catch = self.focused && CURSOR_HIDDEN.load(Ordering::Relaxed);
+        // a scripted run (<PREFIX>_INPUT, tests) leaves the user's mouse free
+        let catch = self.focused && CURSOR_HIDDEN.load(Ordering::Relaxed) && script_text().is_empty();
         // hidden while a gamepad chooses in the menu too (`menupad`)
         let hide = catch || self.focused && self.pad_focus;
         if hide != self.cursor_hidden {

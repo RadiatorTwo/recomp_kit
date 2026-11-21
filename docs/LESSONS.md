@@ -190,6 +190,18 @@ White. Most apply to any game of that time. Add new ones here.
   lowest trigger value seen (the first read to start with) and count 30% of the travel beyond
   that rest as pressed (future_rust_cop `dinput.rs` `trigger_down`; the kit's `dinput.rs` still
   has the fixed 0.3).
+- DirectInput gets input without the game's message loop: a game may wait for a key with
+  Sleep and GetDeviceData only (Recoil's briefing). DirectInput reads fetch the window's input
+  (`user32::poll_input`), else such a wait never ends.
+- Scripted runs (`<PREFIX>_INPUT`) never catch the cursor: the window takes the focus and would
+  lock the user's mouse while Claude tests.
+- Glide textures: s and t go 0..256 over the longer side for every texture size (scale by
+  size / 256); a tmu's oow may be 0 (use the vertex's, also for the texture rectangle); small
+  textures repeat over a primitive (wrap inside the texture, its layer is larger). A game may
+  download hundreds of small textures at once (Recoil 621 at a mission's start): the layer
+  array grows. Never glGenerateMipmap a large array per download: hundreds of them at a
+  mission's start took the NVIDIA driver down ("Unable to recover from a kernel exception",
+  exit 0xC0000409, in the Application event log); mipmaps per texture on the CPU.
 - Glide draws at the window's resolution, so a mouse position in the shown picture's pixels
   is not in the game's (Recoil: 1280x960 against 640x480). grSstWinOpen calls
   `window::set_screen`: input positions are then in the game's screen pixels.

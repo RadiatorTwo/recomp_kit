@@ -125,8 +125,11 @@ struct Texture {
     pending: Option<(u32, u32)>,
 }
 
-/// Layers of the texture array: TMU memory holds 64 textures of 256x256 at 8 bits.
+/// Layers of the texture array at first: TMU memory holds 64 textures of 256x256 at 8 bits.
+/// Small textures fit many more (Recoil downloads 621 at a mission's start): the array then
+/// grows (`grow`), up to `MAX_LAYERS` or the driver's limit.
 const LAYERS: u32 = 64;
+const MAX_LAYERS: u32 = 2048;
 /// Levels of a 256x256 texture: 256 ... 1.
 const LEVELS: i32 = 9;
 /// Layers of the replacements' array.
@@ -213,8 +216,9 @@ struct Glide {
     array: glow::Texture,
     /// the textures' alpha: its share in covered texels, and in keyed ones
     alpha: glow::Texture,
-    /// a download changed level 0: the mipmaps are built before the next draw
-    stale: bool,
+    /// the arrays' layers now, and the most they grow to
+    layers: u32,
+    max_layers: u32,
     /// replacement textures, when there are any
     hd: Option<Hd>,
     /// the anisotropy set on the arrays, and the most the driver takes
@@ -395,6 +399,13 @@ vec4 sample_mip(out float cover) {
     vec2 size = vec2(textureSize(tex, 0).xy);
     vec2 dx = dFdx(st), dy = dFdy(st);
     vec2 lo = st_box.xy, hi = st_box.zw;
+    // a texture repeated over the primitive (its rectangle leaves the texture): the place in
+    // the texture, inside the whole texture
+    vec2 ts = vec2(tex_size);
+    bvec2 wrap = bvec2(clamp_st.x == 0 && (lo.x < 0.0 || hi.x > ts.x), clamp_st.y == 0 && (lo.y < 0.0 || hi.y > ts.y));
+    vec2 q = st;
+    if (wrap.x) { lo.x = 0.0; hi.x = ts.x; q.x = mod(st.x, ts.x); }
+    if (wrap.y) { lo.y = 0.0; hi.y = ts.y; q.y = mod(st.y, ts.y); }
     float lod = log2(max(max(length(dx), length(dy)), 1e-8));
     float top = max(log2(max(min(hi.x - lo.x, hi.y - lo.y), 1.0)) - 2.0, 0.0);
     if (lod > top) {
@@ -404,7 +415,7 @@ vec4 sample_mip(out float cover) {
         lod = top;
     }
     vec2 m = vec2(0.5 * exp2(max(lod, 0.0)));
-    vec2 p = clamp(st, lo + min(m, (hi - lo) * 0.5), hi - min(m, (hi - lo) * 0.5));
+    vec2 p = clamp(q, lo + min(m, (hi - lo) * 0.5), hi - min(m, (hi - lo) * 0.5));
     vec3 uv = vec3(p / size, float(layer));
     vec4 c = textureGrad(tex, uv, dx / size, dy / size);
     vec4 a = textureGrad(tex_a, uv, dx / size, dy / size);
@@ -641,6 +652,43 @@ fn f32_arg(c: &Cpu, n: u32) -> f32 {
 }
 
 /// Size of a texture level: LOD 0 is 256, 8 is 1; aspect 0..6 is 8:1 .. 1:8.
+/// Pixels of `ch` bytes, w x h, at half the size (a box of 2x2, or 2 where a side is 1).
+fn half(px: &[u8], w: usize, h: usize, ch: usize) -> (Vec<u8>, usize, usize) {
+    let (hw, hh) = ((w / 2).max(1), (h / 2).max(1));
+    let (sx, sy) = (if w > 1 { 2 } else { 1 }, if h > 1 { 2 } else { 1 });
+    let mut out = vec![0u8; hw * hh * ch];
+    for y in 0..hh {
+        for x in 0..hw {
+            for c in 0..ch {
+                let mut sum = 0u32;
+                for dy in 0..sy {
+                    for dx in 0..sx {
+                        sum += px[((y * sy + dy) * w + x * sx + dx) * ch + c] as u32;
+                    }
+                }
+                let n = (sx * sy) as u32;
+                out[(y * hw + x) * ch + c] = ((sum + n / 2) / n) as u8;
+            }
+        }
+    }
+    (out, hw, hh)
+}
+
+/// A texture array of `n` layers of 256x256 with mipmaps, filtered trilinear, clamped.
+unsafe fn layer_array(gl: &glow::Context, format: u32, n: u32) -> glow::Texture {
+    unsafe {
+        let t = gl.create_texture().expect("GL texture");
+        gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(t));
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        for p in [glow::TEXTURE_WRAP_S, glow::TEXTURE_WRAP_T] {
+            gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, p, glow::CLAMP_TO_EDGE as i32);
+        }
+        gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, LEVELS, format, 256, 256, n as i32);
+        t
+    }
+}
+
 fn lod_size(lod: u32, aspect: u32) -> (u32, u32) {
     let l = 256 >> lod.min(8);
     match aspect {
@@ -781,19 +829,9 @@ impl Glide {
             } else {
                 1.0
             };
-            let layers = |format: u32| {
-                let t = gl.create_texture().expect("GL texture");
-                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(t));
-                gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
-                gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-                for p in [glow::TEXTURE_WRAP_S, glow::TEXTURE_WRAP_T] {
-                    gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, p, glow::CLAMP_TO_EDGE as i32);
-                }
-                gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, LEVELS, format, 256, 256, LAYERS as i32);
-                t
-            };
-            let array = layers(glow::RGBA8);
-            let alpha = layers(glow::RG8);
+            let array = layer_array(gl, glow::RGBA8, LAYERS);
+            let alpha = layer_array(gl, glow::RG8, LAYERS);
+            let max_layers = (gl.get_parameter_i32(glow::MAX_ARRAY_TEXTURE_LAYERS).max(LAYERS as i32) as u32).min(MAX_LAYERS);
             let depth_rb = gl.create_renderbuffer().expect("GL renderbuffer");
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth_rb));
             gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT32F, target.0 as i32, target.1 as i32);
@@ -814,7 +852,8 @@ impl Glide {
                 swaps: 0,
                 array,
                 alpha,
-                stale: false,
+                layers: LAYERS,
+                max_layers,
                 hd: Hd::open(gl),
                 aniso: 0.0,
                 aniso_max,
@@ -1023,8 +1062,6 @@ impl Glide {
             gl.uniform_1_i32(u.tex.as_ref(), 0);
             gl.uniform_1_i32(u.tex_hd.as_ref(), 2);
             let aniso = (filter.max(1) as f32).min(self.aniso_max);
-            // replacements are always drawn with mipmaps, and read the originals' alpha with them
-            let levels = mipmaps || self.hd.is_some();
             if let Some(hd) = &mut self.hd {
                 gl.active_texture(glow::TEXTURE2);
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(hd.array));
@@ -1039,15 +1076,9 @@ impl Glide {
             for (k, t) in [(glow::TEXTURE1, self.alpha), (glow::TEXTURE0, self.array)] {
                 gl.active_texture(k);
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(t));
-                if levels && self.stale {
-                    gl.generate_mipmap(glow::TEXTURE_2D_ARRAY);
-                }
                 if aniso != self.aniso && self.aniso_max > 1.0 {
                     gl.tex_parameter_f32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAX_ANISOTROPY_EXT, aniso);
                 }
-            }
-            if levels {
-                self.stale = false;
             }
             self.aniso = aniso;
             gl.uniform_2_i32(u.clamp_st.as_ref(), s.clamp.0 as i32, s.clamp.1 as i32);
@@ -1180,11 +1211,21 @@ impl Glide {
             (self.cc[4] & 1) | (self.ac[4] & 1) << 1 | (tex.is_some() as u32) << 2 | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 16),
             tex.map_or(0, |t| t.w | t.h << 10) | self.alpha_test.0 << 20 | self.alpha_test.1 << 24,
         ];
-        // x y z r g b ooz a oow, then tmu 0: sow tow oow
+        // x y z r g b ooz a oow, then tmu 0: sow tow oow. Glide's s and t go 0..256 over the
+        // texture's longer side whatever its size: in texels times its size / 256
+        let k = tex.map_or(1.0, |t| t.w.max(t.h) as f32 / 256.0);
+        let sow = |v: u32| (f32::from_bits(m.rd32(v + 0x24)) * k, f32::from_bits(m.rd32(v + 0x28)) * k);
+        // tmu 0's oow, else the vertex's (games that leave it 0: Recoil)
+        let q = |v: u32| match f32::from_bits(m.rd32(v + 0x2c)) {
+            0.0 => match f32::from_bits(m.rd32(v + 0x20)) {
+                0.0 => 1.0,
+                q => q,
+            },
+            q => q,
+        };
         let st = |v: u32| {
-            let oow = f32::from_bits(m.rd32(v + 0x2c));
-            let oow = if oow != 0.0 { oow } else { 1.0 };
-            (f32::from_bits(m.rd32(v + 0x24)) / oow, f32::from_bits(m.rd32(v + 0x28)) / oow)
+            let (s, t) = sow(v);
+            (s / q(v), t / q(v))
         };
         let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
         for &v in verts {
@@ -1201,15 +1242,11 @@ impl Glide {
         // a line: a quad as wide as the game's line at its resolution
         let quad = if let [v0, v1] = *verts { Some(self.line_offsets(xy(v0), xy(v1))) } else { None };
         let mut put = |v: u32, (x, y): (f32, f32)| {
-            // tmu 0's sow tow oow (its oow, else the vertex's), interpolated linearly on the
-            // screen and divided per pixel
-            let q = match f32::from_bits(m.rd32(v + 0x2c)) {
-                0.0 => f32::from_bits(m.rd32(v + 0x20)),
-                q => q,
-            };
-            let q = if q != 0.0 { q } else { 1.0 };
+            // tmu 0's sow tow oow, interpolated linearly on the screen and divided per pixel
+            let q = q(v);
             self.batch.extend([x.to_bits(), y.to_bits(), m.rd32(v + 0xc), m.rd32(v + 0x10), m.rd32(v + 0x14), m.rd32(v + 0x1c)]);
-            self.batch.extend([m.rd32(v + 0x24), m.rd32(v + 0x28), q.to_bits()]);
+            let (s, t) = sow(v);
+            self.batch.extend([s.to_bits(), t.to_bits(), q.to_bits()]);
             self.batch.extend(konst);
             self.batch.extend(mode);
             self.batch.extend(b);
@@ -1390,7 +1427,10 @@ impl Glide {
                 // what it overwrites in TMU memory is gone; then a free layer, or the one
                 // downloaded longest ago
                 self.textures.retain(|&a, t| a + t.bytes <= addr || addr + bytes <= a);
-                let layer = (0..LAYERS).find(|l| self.textures.values().all(|t| t.layer != *l)).unwrap_or_else(|| {
+                if self.textures.len() as u32 >= self.layers && self.layers < self.max_layers {
+                    self.grow(gl);
+                }
+                let layer = (0..self.layers).find(|l| self.textures.values().all(|t| t.layer != *l)).unwrap_or_else(|| {
                     let (&a, t) = self.textures.iter().min_by_key(|t| t.1.stamp).unwrap();
                     let l = t.layer;
                     self.textures.remove(&a);
@@ -1433,6 +1473,26 @@ impl Glide {
         }
     }
 
+    /// Twice the layers (all textures in use, TMU memory not full): new arrays, every texture
+    /// uploaded again from its staged texels at its next draw.
+    fn grow(&mut self, gl: &glow::Context) {
+        self.flush(gl);
+        let n = (self.layers * 2).min(self.max_layers);
+        log!("glide: texture array grows to {n} layers");
+        unsafe {
+            gl.delete_texture(self.array);
+            gl.delete_texture(self.alpha);
+            self.array = layer_array(gl, glow::RGBA8, n);
+            self.alpha = layer_array(gl, glow::RG8, n);
+        }
+        self.layers = n;
+        // the filter is set on the new arrays at the next draw
+        self.aniso = 0.0;
+        for t in self.textures.values_mut() {
+            t.pending = Some((0, t.h - 1));
+        }
+    }
+
     /// Upload the rows of the texture at `addr` downloaded since its last upload into its
     /// layer, what was batched before drawn first (with the old texels).
     fn commit(&mut self, gl: &glow::Context, addr: u32) {
@@ -1443,7 +1503,7 @@ impl Glide {
         }
         let t = self.textures.get_mut(&addr).unwrap();
         t.pending = None;
-        let (w, layer) = (t.w as usize, t.layer);
+        let (w, h, layer) = (t.w as usize, t.h as usize, t.layer);
         let rows = r0 as usize * w..(r1 as usize + 1) * w;
         unsafe {
             for (tex, format, px) in [(self.array, glow::RGBA, &t.staged[rows.start * 4..rows.end * 4]), (self.alpha, glow::RG, &t.staged_alpha[rows.start * 2..rows.end * 2])] {
@@ -1462,8 +1522,33 @@ impl Glide {
                     glow::PixelUnpackData::Slice(Some(px)),
                 );
             }
+            // its mipmaps, from the whole texture (the GPU's generate_mipmap would build every
+            // layer's: with hundreds of textures downloaded at a mission's start that took the
+            // driver down)
+            for (tex, format, ch, px) in [(self.array, glow::RGBA, 4, &t.staged), (self.alpha, glow::RG, 2, &t.staged_alpha)] {
+                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(tex));
+                let (mut px, mut lw, mut lh) = (px[..w * h * ch].to_vec(), w, h);
+                for level in 1..LEVELS {
+                    if lw == 1 && lh == 1 {
+                        break;
+                    }
+                    (px, lw, lh) = half(&px, lw, lh, ch);
+                    gl.tex_sub_image_3d(
+                        glow::TEXTURE_2D_ARRAY,
+                        level,
+                        0,
+                        0,
+                        layer as i32,
+                        lw as i32,
+                        lh as i32,
+                        1,
+                        format,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&px)),
+                    );
+                }
+            }
         }
-        self.stale = true;
     }
 
     /// After a download of rows `r0..=r1` (known by `key`) into the texture at `addr`: its
@@ -2087,5 +2172,20 @@ pub fn proc_address(name: &str) -> u32 {
     match FUNCTIONS.iter().find(|e| e.0 == base) {
         Some(&(_, f)) => thunk(&name, (bytes / 4) as i32, f),
         None => thunk_not_implemented(&name, (bytes / 4) as i32),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::half;
+
+    #[test]
+    fn half_averages_boxes() {
+        // 2x2, one byte a pixel: one pixel, the average (rounded)
+        assert_eq!(half(&[0, 10, 20, 31], 2, 2, 1), (vec![15], 1, 1));
+        // 4x1: a side of 1 stays 1, pairs averaged
+        assert_eq!(half(&[0, 2, 4, 8], 4, 1, 1), (vec![1, 6], 2, 1));
+        // two bytes a pixel: each averaged on its own
+        assert_eq!(half(&[0, 100, 2, 100, 4, 100, 6, 100], 2, 2, 2), (vec![3, 100], 1, 1));
     }
 }

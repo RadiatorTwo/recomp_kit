@@ -784,6 +784,9 @@ fn km_acquire(c: &mut Cpu) -> u32 {
 /// GetDeviceState: the keyboard's 256 key bytes, or DIMOUSESTATE (motion since the last read,
 /// 4 buttons).
 fn km_device_state(c: &mut Cpu) -> u32 {
+    // a game may wait for a key without reading messages (Recoil's briefing: Sleep and
+    // GetDeviceData)
+    super::user32::poll_input();
     let (d, size, out) = (arg(c, 0), arg(c, 1) as usize, arg(c, 2));
     let m = mem();
     let mut s = KM.lock().unwrap();
@@ -806,6 +809,9 @@ fn km_device_state(c: &mut Cpu) -> u32 {
 /// GetDeviceData(object size, DIDEVICEOBJECTDATA[], in/out count, flags): buffered events
 /// (offset, data, time, sequence); no array: only removes them (DIGDD_PEEK = 1 keeps them).
 fn km_device_data(c: &mut Cpu) -> u32 {
+    // a game may wait for a key without reading messages (Recoil's briefing: Sleep and
+    // GetDeviceData)
+    super::user32::poll_input();
     let (d, size, out, count_p, flags) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
     let m = mem();
     let want = m.rd32(count_p) as usize;
