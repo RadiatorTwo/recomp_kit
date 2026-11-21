@@ -31,7 +31,16 @@ EXE's function list belongs in the game's repository, not here).
     is identical (checked by a switch running both, GUIDE 8a);
   - limits of the technology of the time may be lifted (fixed logic rate with pictures
     between, widescreen, resolution, depth buffer, resolution locks, idle loops).
+  - visual glitches (sorting, z-fighting, flicker) are fixed whether or not the original has
+    them: do not spend time proving it does, never offer it as a reason to leave one. Two
+    things reported are two issues unless the user says otherwise.
 - Speed before modern effects (GUIDE 8a, then 11).
+- No environment variables for what the user tests by hand (cheat keys, comparison switches):
+  a Cargo feature (`cheats`, never in a release), a menu box or the registry. Environment
+  variables only for scripted tests run by Claude.
+- Replay the user's recordings with exactly their settings (no window size or renderer
+  overrides; only screenshots, input, savestate).
+- Never suggest DXGI swap chains or NVIDIA's "layered on DXGI" present method (LESSONS Speed).
 - With these old games the GPU is never the limit: a low frame rate is always CPU side
   (game code, our code, draw calls, driver). Never blame the GPU (GUIDE 8a, LESSONS Speed).
 

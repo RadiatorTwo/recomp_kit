@@ -151,6 +151,15 @@ White. Most apply to any game of that time. Add new ones here.
   framebuffer per level (14 switches a picture): one framebuffer, the levels attached in turn,
   ~135 -> ~114 µs a picture. Lifting longer x87 runs under 0xc7f (over
   branches) gained nothing: the renderers' cost was their size, not the rounding.
+- Upload each batch's vertices with glBufferSubData, not by mapping the buffer's range: every
+  map made NVIDIA's driver thread catch up first (Future Cop with its effects on: 23-31% of the
+  frame; 354 -> ~555 fps together with the next two points).
+- No set lookups inside a sort's comparison: Future Cop's walker sorted the display list by
+  "is terrain" / "is cast-only" with a std HashSet looked up in every comparison (~15% of the
+  frame). Look each record's key up once, then one stable sort by it; sets of guest addresses
+  take a fast hash (Fibonacci / multiply-shift), not SipHash.
+- Ask the driver nothing per picture: a blit's uniform locations asked every picture waited for
+  the driver too (even a few calls). Cache them (`gl::uniform`).
 
 ## Windows
 
@@ -176,6 +185,11 @@ White. Most apply to any game of that time. Add new ones here.
   Show blits to the primary at the next message poll, a Flip, or 50 ms after the first unshown
   change: showing every blit makes menus flicker while they build up.
 - Keyboard hooks (WH_KEYBOARD) get only the four key messages, not WM_CHAR.
+- Gamepad triggers do not all rest at 0: a "HID-compliant game controller" through gilrs rests
+  at ~0.45, and a fixed threshold (0.3) fired the heavy weapon all the time. Note each pad's
+  lowest trigger value seen (the first read to start with) and count 30% of the travel beyond
+  that rest as pressed (future_rust_cop `dinput.rs` `trigger_down`; the kit's `dinput.rs` still
+  has the fixed 0.3).
 
 ## Discovery
 
@@ -219,6 +233,21 @@ White. Most apply to any game of that time. Add new ones here.
   `lift.rs` `div` and its event handler; the kit's lifter still stops).
 - Generated code must not hold host addresses as constants if it is cached: statics move from
   run to run.
+- A logic frame found late (a picture or a sleep ran past its start) must not become a longer
+  frame: Future Cop's frame wait took the 9 ticks it found as frame time and game time, but
+  its logic moves player and camera as far in every frame, so things went slower for that
+  frame (~1% of frames, a stutter every few seconds). Return the due tick for frames 1...7 ticks
+  late; the next frames catch up. Leave larger delays (a whole frame or more) to the game.
+- Keep the pictures' own schedule across logic frames: started again at each frame, only whole
+  pictures fit into a frame (60 fps gave 75, 100 gave 112.5 at 37.5 logic frames). The frame's
+  own picture counts as one of the rate's and waits for its slot (else at 100 fps pictures came
+  1, 5, 3, 3, 2, 4 ticks apart); the schedule runs at most 2 periods ahead, since the game's
+  clock goes back after a pause and starts again with each level.
+- Log a line per picture shown with the game time it shows, not only its frame time: uneven
+  steps of the shown time stutter even when every picture comes on time (future_rust_cop
+  `framelog.rs`, `examples/framelog.rs`, `tools/framegraph.html`, which also reads CapFrameX
+  captures). Count a hitch at 1.5 times the median and 4 ms over it (1.5 times alone counts
+  noise at high rates).
 
 ## Widescreen
 
@@ -273,6 +302,14 @@ White. Most apply to any game of that time. Add new ones here.
 - In a window the desktop's compositor already keeps tearing away; vsync matters in
   (borderless) fullscreen. With G-Sync/FreeSync there is no tearing below the display's
   maximum anyway: make vsync a setting of its own (off: no cap), not tied to a frame rate.
+- At a chosen rate near the display's refresh (97% of it or above) or unlimited, with vsync
+  on, let the swap pace the pictures: draw one after another. Our clock beside the screen's
+  missed refreshes: at 120 fps on 120 Hz a picture 1.4 ms late after the game's own frame was
+  shown twice or replaced unseen, ~2 a second. Only CapFrameX (display changes) showed it; our
+  own frame log showed 10 then 6.6 ms and looked fine.
+- At 480 Hz Future Cop showed ~472 fps with vsync: our work between swaps was ~0.75 ms, the
+  loss was inside SwapBuffers (~10 swaps a second waited two refreshes). Not the pacing's
+  fault: do not tune it for that. Overlays (RTSS) hook SwapBuffers too.
 
 ## Modern effects
 
@@ -290,9 +327,64 @@ White. Most apply to any game of that time. Add new ones here.
   file and are the same in every level.
 - Keep a log of the effects by kind with their counts (`NSTRIKE_LIGHT_LOG=1`) and an
   environment override of the list: the user names what misbehaves, the log says its kind.
+- A primitive finds its display list record by its first vertex through a sorted index, not by
+  looking a few records ahead: with the terrain moved to the front a window of 16 lost the
+  fog's smoke (not lit, dark).
+
+## Depth buffer
+
+- Games of the time sort by depth buckets, not a depth buffer: ground tiles painted over
+  decals, faces in the wrong order. A depth buffer of our own (Future Cop `zbuffer.rs`), depth
+  from each vertex's z taken from the game's projections. Draw the terrain's records first,
+  keeping their order and the rest's; semi-transparent decals (oil) go after the terrain, not
+  among its tiles (they flickered there).
+- Only solid primitives write depth, in a depth-only draw first that discards what is not
+  opaque (alpha < 0.75: keyed holes, lattices, and translucent surfaces: the PlayStation's
+  semi-transparency at alpha 0x80; a pipe dipping into a translucent pool was cut at its
+  surface). Writers write a little farther (0.1%: inside it the game's order decides, coplanar
+  surfaces fought under a strict test), test-only primitives (blended, darkening) are pulled
+  0.4% nearer.
+- A ground point and a model point can land on the same screen place: keep both z with their
+  kind, and give a vertex the kind its primitive's other corners have (else a ground tile
+  tipped forward over a pickup box).
+
+## Shadows
+
+- A shadow map of the game's own triangles (those that write depth) beats a screen-space ray
+  march: in the ray march the casters' shapes could not be made out.
+- Only what the game draws casts, so the map lacks: faces the game culls as turned away (hook
+  its winding test, keep them as cast-only records while the display list has room), things
+  just off the screen (draw them again with the projection zoomed out, cast-only: actors,
+  static objects, terrain; test each with its sphere swept away from the sun against the
+  view), and faces off the screen of things crossing the screen's edge (the game left them out:
+  a shed's roof above the picture cast nothing until walked toward). Never cull cast-only
+  records by the screen's box (every off-screen caster was lost), draw them after the rest
+  (their state changes split batches: 250 -> 350 fps), keep the caster buffer's storage.
+  Flat ground never casts.
+- Casters out to 40000 units (12000 faded the upper half of the usual view: shadows faded in
+  walking forward).
+- Fit the map to what is seen (the casters' corners on the screen; depth from all casters):
+  texels ~2.8 instead of ~4.5 units. Against crawling edges: the square's side in steps of
+  2^(1/4), its corner on texels of a grid fixed in the world, its axes fixed in the world.
+
+## HDR and tone mapping
+
+- A render target made anew when a setting changes (RGBA16F for tone mapping, MSAA samples):
+  the post passes' copies and passes must follow the format the target was made in, not the
+  setting. A curve chosen mid-frame changed the copies before the target: a multisample blit
+  between mismatched formats, one black frame.
 
 ## Process
 
 - Back up the game's settings files (key bindings!) before tests that start the game; some
   games rewrite them when they are missing.
 - A savestate (`platform::savestate`) is the fastest way back to a bug deep in a level.
+- Savestates: give a new guest thread its TIB and stack in CreateThread / timeSetEvent, not when
+  it first runs: that timing moved every heap block after them, and the check against the saved
+  heap failed at random (future_rust_cop `thread_stack`; the kit's `new_thread_cpu` still runs
+  in the new thread).
+- Replay a user's recording (`<PREFIX>_RECORD`) with exactly their settings: another window
+  size or renderer switch makes the replay diverge and a savestate not match.
+- Things the user tests by hand (cheat keys, comparison switches) must work without an
+  environment variable: a Cargo feature (`cheats`, never in a release), a menu box or the
+  registry. Environment variables are for scripted tests only.

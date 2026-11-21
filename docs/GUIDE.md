@@ -275,6 +275,18 @@ Rauch, und der Autopilot des Hakens machte nie einen Schritt (`256 / 0x114 = 0`)
    vor (in ganzen Ticks des Spiels), und die Startzeiten, von denen das Spiel seine Zeit
    abzieht (Missionsstart, letzter Tick), rücken um dieselbe Pause weiter. Testen: eigenes
    Menü auf und zu, danach das Pausenmenü des Spiels auf und zu.
+9. **Ein verspäteter Logik-Frame bleibt gleich lang.** Findet die Warte-Schleife des Spiels
+   ihren Frame ein paar Ticks zu spät (ein Bild oder ein Sleep lief drüber), nimmt das Spiel
+   die längere Zeit als Zeitschritt, bewegt Spieler und Kamera aber pro Frame gleich weit:
+   ein Ruckler. Die Uhr gibt für leicht verspätete Frames den fälligen Tick zurück, die
+   nächsten holen auf (Future Cop `fps.rs`: 1...7 Ticks zu spät).
+10. **Bilder behalten ihren eigenen Takt.** Den Zeitplan der Zwischenbilder nicht bei jedem
+    Logik-Frame neu starten (sonst passen nur ganze Bilder hinein: 60 fps wurden 75). Das
+    Bild des Logik-Frames zählt als eines der Rate und wartet auf seinen Platz; höchstens 2
+    Perioden Vorlauf (die Uhr des Spiels springt nach einer Pause zurück).
+11. **Messen mit einem Bild-Log.** Pro gezeigtem Bild: Bildzeit *und* die Spielzeit, die es
+    zeigt. Ungleichmäßige Schritte der Spielzeit ruckeln auch bei pünktlichen Bildern
+    (future_rust_cop `framelog.rs`, `tools/framegraph.html`, liest auch CapFrameX).
 
 Fehlerbilder: Schlieren (etwas wird in Zwischenbildern nicht gezeichnet, das Spiel löscht den
 Bildschirm nicht), Fächer (Matrix elementweise gemischt), fehlende Töne (Änderungen anderer
@@ -343,7 +355,10 @@ kompilierten Code nicht.
 `gl::set_vsync(true)` setzt das Swap-Intervall 1 (ab dem nächsten Swap). Eigene Einstellung,
 nicht an die Bildrate gekoppelt (mit G-Sync will man es oft aus). Das Takten bleibt beim
 Port: der Treiber puffert Bilder, der Swap kehrt sofort zurück, solange das Spiel langsamer
-als der Bildschirm ist (LESSONS, Vsync).
+als der Bildschirm ist (LESSONS, Vsync). Ausnahme: liegt die gewählte Rate bei 97 % der
+Bildwiederholrate oder darüber (oder unbegrenzt), Bilder direkt nacheinander zeichnen und den
+Swap takten lassen; die eigene Uhr neben der des Bildschirms verpasst sonst Refreshes (nur in
+CapFrameX sichtbar).
 
 ## 9. Ton, Video, Netzwerk, Installation
 
@@ -368,6 +383,17 @@ Vorbilder: future_rust_cop und nuclear_rust_strike (`ao.rs`, `lights.rs`, `shado
 (Glide-Vertices haben meist keine: aus den Projektionen des Spiels holen). Effekte erkennt man
 an den Funktionen des Spiels, nie an der Farbe (LESSONS, Modern effects). Jeder Effekt ist
 eine Einstellung, die man ausschalten kann, und wird einzeln gemessen.
+
+Reihenfolge in Future Cop: perspektivisch korrekte Texturen (aus derselben Tiefe), Tiefenpuffer
+(das Spiel sortiert nur grob: Gelände zuerst, nur Deckendes schreibt Tiefe; LESSONS, Depth
+buffer), SSAO, dynamische Lichter, Schatten (Shadow Map aus den Dreiecken des Spiels, mit
+"Ring" für Dinge knapp außerhalb des Bildes; LESSONS, Shadows), Hitzeflimmern, Bloom, HDR mit
+Tone Mapping. Grafikfehler werden behoben, auch wenn das Original sie hat; nicht erst
+nachweisen, dass es sie hat.
+
+Einstellungen, die der Spieler (oder der Nutzer beim Testen) von Hand umschaltet, brauchen
+keine Umgebungsvariable: Menü-Box, Registry oder ein Cargo-Feature für Test-Builds
+(`--features cheats`). Umgebungsvariablen nur für Skript-Tests.
 
 ---
 

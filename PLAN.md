@@ -62,6 +62,19 @@
 - LESSONS from future_rust_cop (2026-11-14): the fixed base's gain without large functions,
   integer-only game functions ported exactly (terrain pass), check `rt_fpu_round` in the profile
   before the x87 work, framebuffer switches' driver cost (bloom).
+- LESSONS / GUIDE from future_rust_cop (2026-11-21): batch uploads with glBufferSubData, no set
+  lookups in sort comparisons, frame pacing (late frames keep their length, pictures keep their
+  schedule, frame logs with the shown game time), vsync near the refresh, gamepad trigger rest,
+  savestates and new threads' stacks, depth buffer, shadow map and its ring, tone mapping
+  targets; the user's rules (glitches fixed regardless of the original, no environment
+  variables for hand tests, replays with the user's settings).
+
+## Open code fixes (known from future_rust_cop, not yet in the kit)
+
+- `dinput.rs`: triggers pressed at 30% beyond each pad's rest (fixed 0.3 now).
+- `kernel32.rs` / `misc.rs`: a new thread's TIB and stack made in CreateThread / timeSetEvent,
+  not in the new thread (`new_thread_cpu`), for savestates.
+- `glide.rs`: check how batches are uploaded (glBufferSubData, no map per batch).
 
 ## Next
 

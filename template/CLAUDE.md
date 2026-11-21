@@ -18,6 +18,10 @@ boundaries (`data/functions.json`) and our notes by address (`data/symbols.txt`)
 - Clean Rust first, performance later.
 - The GPU is never the limit with this old game: a low frame rate is CPU side (game code,
   our code, draw calls, driver). Measure (recomp_kit GUIDE 8a).
+- Better than the original: glitches are fixed whether or not the original has them.
+- No environment variables for what the user tests by hand (cheat keys: Cargo feature
+  `cheats`, never in a release; settings: menu or registry). Replay the user's recordings with
+  exactly their settings.
 
 ## How it works
 
