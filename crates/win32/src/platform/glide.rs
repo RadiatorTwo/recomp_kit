@@ -64,6 +64,7 @@ struct Saved {
     ac: [u32; 5],
     constant: u32,
     tex: Option<u32>,
+    tex_alpha_zero: bool,
     alpha_test: (u32, u32),
     cull: u32,
     lower_left: bool,
@@ -234,6 +235,8 @@ struct Glide {
     ac: [u32; 5],
     constant: u32,
     tex: Option<u32>,
+    /// grTexCombine's alpha function is ZERO: the texture's alpha reads 0 (Recoil)
+    tex_alpha_zero: bool,
     /// the alpha test: function (GR_CMP_*, 7 always) and reference value. A vertex attribute
     /// too: games change it between almost all primitives (Nuclear Strike: one draw each, the
     /// driver's draw calls ~10% of its game thread as uniforms)
@@ -494,6 +497,7 @@ void main() {
     cc_inv = int(vmode.z & 1u);
     ac_inv = int((vmode.z >> 1) & 1u);
     use_tex = int((vmode.z >> 2) & 1u);
+    bool tex_alpha_zero = ((vmode.z >> 3) & 1u) != 0u;
     layer = int((vmode.z >> 8) & 4095u);
     hd_layer = int(vmode.z >> 20) - 1;
     tex_size = ivec2(vmode.w & 0x3ffu, (vmode.w >> 10) & 0x3ffu);
@@ -505,6 +509,7 @@ void main() {
     else gl_FragDepth = 0.5;
     float cover = 1.0;
     vec4 t = use_tex != 0 ? sample_tex(cover) : vec4(1.0);
+    if (tex_alpha_zero) t.a = 0.0;
     // alpha first: colour factors may use it
     float a_local = ac.z == 0 ? vcol.a : konst.a;
     float a_other = ac.w == 0 ? vcol.a : ac.w == 1 ? t.a : konst.a;
@@ -866,6 +871,7 @@ impl Glide {
                 ac: [1, 0, 0, 0, 0],
                 constant: 0xffff_ffff,
                 tex: None,
+                tex_alpha_zero: false,
                 alpha_test: (7, 0),
                 uniforms: Uniforms::new(gl, prog),
                 state: State {
@@ -1211,7 +1217,7 @@ impl Glide {
         let mode = [
             bytes(self.cc),
             bytes(self.ac),
-            (self.cc[4] & 1) | (self.ac[4] & 1) << 1 | (tex.is_some() as u32) << 2 | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 20),
+            (self.cc[4] & 1) | (self.ac[4] & 1) << 1 | (tex.is_some() as u32) << 2 | (self.tex_alpha_zero as u32) << 3 | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 20),
             tex.map_or(0, |t| t.w | t.h << 10) | self.alpha_test.0 << 20 | self.alpha_test.1 << 24,
         ];
         // x y z r g b ooz a oow, then tmu 0: sow tow oow. Glide's s and t go 0..256 over the
@@ -1781,7 +1787,7 @@ fn color_mask(c: &mut Cpu) -> u32 {
 fn glide_get_state(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
     with(|g, _| {
-        let s = Saved { state: g.state, cc: g.cc, ac: g.ac, constant: g.constant, tex: g.tex, alpha_test: g.alpha_test, cull: g.cull, lower_left: g.lower_left };
+        let s = Saved { state: g.state, cc: g.cc, ac: g.ac, constant: g.constant, tex: g.tex, tex_alpha_zero: g.tex_alpha_zero, alpha_test: g.alpha_test, cull: g.cull, lower_left: g.lower_left };
         g.saved.insert(p, s);
     });
     0
@@ -1792,7 +1798,7 @@ fn glide_set_state(c: &mut Cpu) -> u32 {
     with(|g, gl| {
         let Some(s) = g.saved.get(&p).copied() else { return };
         g.set(gl, |st| *st = s.state);
-        (g.cc, g.ac, g.constant, g.tex, g.alpha_test, g.cull, g.lower_left) = (s.cc, s.ac, s.constant, s.tex, s.alpha_test, s.cull, s.lower_left);
+        (g.cc, g.ac, g.constant, g.tex, g.tex_alpha_zero, g.alpha_test, g.cull, g.lower_left) = (s.cc, s.ac, s.constant, s.tex, s.tex_alpha_zero, s.alpha_test, s.cull, s.lower_left);
     });
     0
 }
@@ -1968,11 +1974,14 @@ fn alpha_combine(c: &mut Cpu) -> u32 {
 
 fn tex_combine(c: &mut Cpu) -> u32 {
     // grTexCombine(tmu, rgb function, factor, alpha function, factor, rgb invert, alpha invert):
-    // the game passes the texture through (LOCAL, NONE)
+    // one TMU, so LOCAL passes the texture through and ZERO gives 0 (Recoil: rgb LOCAL, alpha
+    // ZERO, for every texture). Other functions need a second TMU: taken as LOCAL.
     let (rgb, alpha) = (arg(c, 1), arg(c, 3));
-    if rgb != 1 || alpha != 1 {
-        log!("warn: grTexCombine({rgb}, {alpha}) taken as LOCAL");
+    if rgb != 1 || alpha > 1 {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| log!("warn: grTexCombine({rgb}, {alpha}) taken as LOCAL"));
     }
+    with(|g, _| g.tex_alpha_zero = alpha == 0);
     0
 }
 
