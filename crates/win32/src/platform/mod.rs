@@ -7,7 +7,9 @@
 //! puts its result in eax and removes the return address and (stdcall) arguments.
 
 pub mod advapi32;
+pub mod avi;
 pub mod cdaudio;
+pub mod cinepak;
 pub mod cheats;
 pub mod ddraw;
 pub mod dialog;
@@ -1014,6 +1016,7 @@ pub(crate) fn find_import(dll: &str, name: &str) -> Option<&'static Import> {
         "WINMM.DLL" => &[dsound::IMPORTS, misc::IMPORTS],
         "OLE32.DLL" => &[dshow::IMPORTS, misc::IMPORTS],
         "DINPUT.DLL" => &[dinput::IMPORTS],
+        "AVIFIL32.DLL" | "MSVFW32.DLL" => &[avi::IMPORTS],
         _ => &[misc::IMPORTS],
     };
     tables.iter().flat_map(|t| t.iter()).find(|i| i.0 == name)

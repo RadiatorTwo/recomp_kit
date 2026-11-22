@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 recomp = { path = "../recomp" }
+# Indeo 5 videos: a port of FFmpeg's decoder, LGPL-2.1-or-later (crates/indeo/COPYING)
+indeo = { path = "../indeo" }
 iced-x86.workspace = true
 serde.workspace = true
 serde_json.workspace = true

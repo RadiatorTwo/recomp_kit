@@ -1,0 +1,12 @@
+[package]
+name = "indeo"
+description = "Intel Indeo Video 5 (IV50) decoder, a port of FFmpeg's"
+version.workspace = true
+edition.workspace = true
+# a port of FFmpeg code (indeo5.c, ivi.c, ivi_dsp.c): LGPL, not the workspace's MIT
+license = "LGPL-2.1-or-later"
+
+[dependencies]
+
+[dev-dependencies]
+png = "0.18"

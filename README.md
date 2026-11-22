@@ -27,4 +27,6 @@ fn main() {
 
 Only code is here. Games and their files belong to their owners; players bring their own copy.
 
-MIT license. The MPEG-1 decoder is a Rust port of pl_mpeg by Dominic Szablewski (MIT).
+MIT license. The MPEG-1 decoder is a Rust port of pl_mpeg by Dominic Szablewski (MIT). The
+Indeo 5 decoder (`crates/indeo`) is a port of FFmpeg's and stays LGPL-2.1-or-later
+(`crates/indeo/COPYING`); it is a crate of its own so the rest stays MIT.

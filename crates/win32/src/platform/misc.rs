@@ -75,10 +75,6 @@ fn mci_get_error_string(c: &mut Cpu) -> u32 {
     1
 }
 
-fn aux_ret0(_: &mut Cpu) -> u32 {
-    0
-}
-
 /// AVIStreamOpenFromFileA and AVIFileOpenA: no AVI videos yet (Indeo needs a decoder):
 /// AVIERR_FILEOPEN, the game goes on without the video.
 fn avi_open(c: &mut Cpu) -> u32 {
@@ -90,9 +86,6 @@ fn avi_open(c: &mut Cpu) -> u32 {
 }
 
 pub const IMPORTS: &[Import] = &[
-    ("AVIFileInit", 0, aux_ret0),
-    ("AVIFileExit", 0, aux_ret0),
-    ("AVIStreamOpenFromFileA", 6, avi_open),
     ("AVIFileOpenA", 4, avi_open),
     ("mciSendCommandA", 4, super::cdaudio::mci_send_command),
     ("mciGetErrorStringA", 3, mci_get_error_string),

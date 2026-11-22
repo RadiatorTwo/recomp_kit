@@ -951,6 +951,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "indeo"
+version = "0.1.0"
+dependencies = [
+ "png",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2474,6 +2481,7 @@ dependencies = [
  "glutin",
  "glutin-winit",
  "iced-x86",
+ "indeo",
  "libc",
  "md-5",
  "miniz_oxide 0.8.9",
