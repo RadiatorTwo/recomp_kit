@@ -7,6 +7,7 @@
 //! puts its result in eax and removes the return address and (stdcall) arguments.
 
 pub mod advapi32;
+pub mod cdaudio;
 pub mod cheats;
 pub mod ddraw;
 pub mod dialog;

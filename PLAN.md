@@ -102,7 +102,8 @@ Grow the kit for future games, one piece at a time, with tests:
    - black_white: ~90 kernel32 imports (INI, file mapping, Find*, CreateProcess, date/time),
      ~37 user32, advapi32 RegEnum*/RegCreate/RegDelete, DLL loading (`Module`, DllMain,
      `run_library`), winsock stub, small DLLs (IMM32, COMCTL32, SHELL32, VERSION), mscab/iscab;
-   - rustschweine: gdi32 bitmap DCs, DirectDraw 7, Direct3D 7 (`d3d.rs`), CD audio from .cue;
+   - rustschweine: gdi32 bitmap DCs, DirectDraw 7, Direct3D 7 (`d3d.rs`), the mixer* CD volume (CD audio from
+     .cue is in the kit since Recoil: `cdaudio.rs`, MCI and aux*);
    - rust_metal: Direct3D 9, COM passthrough, ole32 class registry, winmm timers, crash
      reports, sampling profiler, Media Foundation music; speed work in the lifter (flag
      crossings, cmp+jcc fusion, x87 values in variables, inline string ops, Direct dispatch);

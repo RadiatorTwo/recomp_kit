@@ -69,13 +69,6 @@ fn ret0(_: &mut Cpu) -> u32 {
     0
 }
 
-/// mciSendCommandA: no MCI devices yet (CD audio comes from the CD image later):
-/// MCIERR_INVALID_DEVICE_NAME.
-fn mci_send_command(c: &mut Cpu) -> u32 {
-    super::log!("mciSendCommandA({:#x}, {:#x}, {:#x}): no device", arg(c, 0), arg(c, 1), arg(c, 2));
-    263
-}
-
 fn mci_get_error_string(c: &mut Cpu) -> u32 {
     let (buf, n) = (arg(c, 1), arg(c, 2));
     super::put_cstr(buf, "The device is not available.", n);
@@ -101,9 +94,12 @@ pub const IMPORTS: &[Import] = &[
     ("AVIFileExit", 0, aux_ret0),
     ("AVIStreamOpenFromFileA", 6, avi_open),
     ("AVIFileOpenA", 4, avi_open),
-    ("mciSendCommandA", 4, mci_send_command),
+    ("mciSendCommandA", 4, super::cdaudio::mci_send_command),
     ("mciGetErrorStringA", 3, mci_get_error_string),
-    ("auxGetNumDevs", 0, aux_ret0),
+    ("auxGetNumDevs", 0, super::cdaudio::aux_get_num_devs),
+    ("auxGetDevCapsA", 3, super::cdaudio::aux_get_dev_caps),
+    ("auxGetVolume", 2, super::cdaudio::aux_get_volume),
+    ("auxSetVolume", 2, super::cdaudio::aux_set_volume),
     ("timeGetTime", 0, time_get_time),
     ("timeGetDevCaps", 2, time_get_dev_caps),
     ("timeBeginPeriod", 1, ret0),

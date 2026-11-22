@@ -4,7 +4,7 @@
 //! from the audio thread. Play positions advance in real time with the output, so the music,
 //! which the game streams into a looping buffer behind the play cursor, keeps going. Without
 //! an audio device a timer thread advances them instead. A stream of host samples (`stream_*`)
-//! carries the videos' sound.
+//! carries the videos' sound, and `cd_*` the CD's music tracks (`cdaudio.rs`).
 
 use super::{Import, ResId, alloc, arg, com_new, cstr, free, guest_call, host_path, log, mem, new_cstr, resource};
 use recomp::rt::Cpu;
@@ -139,12 +139,76 @@ struct Mixer {
     wave: Option<Voice>,
     /// a video's sound
     stream: Option<Stream>,
+    /// CD audio (`cdaudio.rs`), and its volume (0...1)
+    cd: Option<Cd>,
+    cd_gain: f32,
     out_rate: u32,
     started: bool,
 }
 
 static MIX: Mutex<Mixer> =
-    Mutex::new(Mixer { voices: BTreeMap::new(), data_refs: BTreeMap::new(), wave: None, stream: None, out_rate: 44100, started: false });
+    Mutex::new(Mixer { voices: BTreeMap::new(), data_refs: BTreeMap::new(), wave: None, stream: None, cd: None, cd_gain: 1.0, out_rate: 44100, started: false });
+
+/// CD audio being played: 44.1 kHz 16-bit stereo, interleaved.
+struct Cd {
+    samples: std::sync::Arc<Vec<i16>>,
+    /// position in frames
+    pos: f64,
+    paused: bool,
+}
+
+impl Cd {
+    fn frames(&self) -> usize {
+        self.samples.len() / 2
+    }
+
+    fn mix(&mut self, out: &mut [[f32; 2]], out_rate: u32, gain: f32) {
+        let n = self.frames();
+        if self.paused || n == 0 {
+            return;
+        }
+        let step = 44100.0 / out_rate as f64;
+        let s = |i: usize, ch: usize| self.samples[2 * i.min(n - 1) + ch] as f32 / 32768.0;
+        for o in out.iter_mut() {
+            let i = self.pos as usize;
+            if i >= n {
+                break;
+            }
+            let f = (self.pos - i as f64) as f32;
+            for (ch, o) in o.iter_mut().enumerate() {
+                let (a, b) = (s(i, ch), s(i + 1, ch));
+                *o += (a + (b - a) * f) * gain;
+            }
+            self.pos += step;
+        }
+    }
+}
+
+/// Play CD audio samples (replaces what plays).
+pub fn cd_play(samples: std::sync::Arc<Vec<i16>>) {
+    mixer().cd = Some(Cd { samples, pos: 0.0, paused: false });
+}
+
+pub fn cd_pause(paused: bool) {
+    if let Some(c) = &mut mixer().cd {
+        c.paused = paused;
+    }
+}
+
+/// The CD audio's volume, 0...1.
+pub fn cd_volume(v: f32) {
+    mixer().cd_gain = v.clamp(0.0, 1.0);
+}
+
+pub fn cd_stop() {
+    mixer().cd = None;
+}
+
+/// The CD audio's position and length in frames, and whether it is paused; None when nothing
+/// plays.
+pub fn cd_state() -> Option<(usize, usize, bool)> {
+    mixer().cd.as_ref().map(|c| ((c.pos as usize).min(c.frames()), c.frames(), c.paused))
+}
 
 /// Samples the host gives (a video's sound), played once.
 struct Stream {
@@ -246,6 +310,9 @@ impl Mixer {
         }
         if let Some(s) = &mut self.stream {
             s.mix(out, rate);
+        }
+        if let Some(c) = &mut self.cd {
+            c.mix(out, rate, self.cd_gain);
         }
     }
 }
