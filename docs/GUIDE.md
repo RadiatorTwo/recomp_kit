@@ -190,6 +190,17 @@ Reihenfolge:
    (`Path::exists` öffnet unter Windows die Datei), `<PREFIX>_SAMPLE=1` loggt auch die Bilder
    pro Sekunde. Zum Messen ein Spielschalter, der das Takten abschaltet (Recoil:
    `RUSTCOIL_UNPACED=1`), und ein Replay, das in die Mission führt.
+   Ist das Profil nach Funktionen flach, nach Gast-Instruktionen messen:
+   `<PREFIX>_SAMPLE=insn` loggt die heißesten Instruktionen (der Lifter merkt sich zu jedem
+   Stück Maschinencode die Gast-Adresse, `jit::guest_at`), `<PREFIX>_DUMP=<hex>` zeigt den
+   Maschinencode einer Funktion mit den Gast-Adressen (`<PREFIX>_DUMP_CLIF=1` auch das IR).
+   Bei Recoil lag die Zeit dann fast nie im Spiel-Code selbst, sondern in dem, was der Lifter
+   daraus machte: x87-Läufe haben jetzt eine eigene Version für die üblichen Steuerwörter
+   (53/64 Bit, nächste Rundung; `<PREFIX>_NO_USUAL87=1` aus), Flags werden nur berechnet,
+   wo sie gelesen werden (`<PREFIX>_FLAGS_ALL=1` aus). Ungebremst erlaubt `LogicClock::frame`
+   64 Bilder pro Logik-Frame. Ein Bubble-Sort im Spiel (Recoil 0x4b13b0) ist ein Fall für
+   Punkt 4: in Rust stabil sortieren, dann im Spiel-Code dahinter weiterlaufen (die Adresse
+   als eigener Funktions-Einsprung, Stack und Register wie das Spiel sie dort hat).
 3. **Kosten pro Aufruf im eigenen Code.** Bei Hunderttausenden Aufrufen pro Sekunde zählt
    alles: keine Locks, keine `Arc`-Klone, keine Hash-Maps mit SipHash, kein `Vec` pro
    Primitiv, keine Umgebungsvariable pro Aufruf (einmal lesen), keine Systemaufrufe

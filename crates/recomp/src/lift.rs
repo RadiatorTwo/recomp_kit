@@ -290,6 +290,13 @@ pub struct Lifter<'a, 'f> {
     /// while lifting a straight run's version for the control word 0xc7f (see `versions`):
     /// the SSE control register as it was before, put back when the run ends
     rz: Option<Value>,
+    /// while lifting a straight run's version for the usual control words (53 or 64 bits, to
+    /// nearest): x87 arithmetic is the double operation, without the other cases' branches
+    usual87: bool,
+    /// the flags live after each instruction (`flag_liveness`; `ALL_FLAGS` where unknown)
+    live: HashMap<u32, u8>,
+    /// the current instruction's: a flag no later instruction reads is not computed
+    out: u8,
 }
 
 fn mf() -> MemFlagsData {
@@ -348,6 +355,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
             xc: x87::Cache::default(),
             joins: std::collections::HashSet::new(),
             rz: None,
+            usual87: false,
+            live: HashMap::new(),
+            out: ALL_FLAGS,
         };
         l.load_state();
         l
@@ -412,13 +422,26 @@ impl<'a, 'f> Lifter<'a, 'f> {
     fn flag(&mut self, v: Variable) -> Value {
         self.b.use_var(v)
     }
+    /// The bit of a flag variable in a flag set (`flag_liveness`).
+    fn flag_bit(&self, var: Variable) -> u8 {
+        [self.cf, self.pf, self.zf, self.sf, self.of]
+            .iter()
+            .position(|&v| v == var)
+            .map_or(ALL_FLAGS, |k| 1 << k)
+    }
+    /// A flag no later instruction reads becomes 0 (left as it was, the old value stayed
+    /// alive across the function and the code was slower).
     fn set_flag(&mut self, var: Variable, v: Value) {
+        let v = match self.out & self.flag_bit(var) {
+            0 => self.iconst(I8, 0),
+            _ => v,
+        };
         self.b.def_var(var, v);
     }
     fn zero_flags(&mut self, vars: &[Variable]) {
         let z = self.iconst(I8, 0);
         for &v in vars {
-            self.b.def_var(v, z);
+            self.set_flag(v, z);
         }
     }
 
@@ -764,6 +787,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
             .any(|&a| code.at(a).unwrap().flow_control() == FlowControl::IndirectBranch);
         // nor with rewritten instructions (each version is lifted in its own branch)
         let variants = addrs.iter().any(|a| self.smc.variants.contains_key(a));
+        if !variants && crate::config::env("FLAGS_ALL").is_none() {
+            self.live = flag_liveness(code, &addrs);
+        }
         self.xc.enabled =
             !indirect && !variants && X87_CACHE.load(std::sync::atomic::Ordering::Relaxed);
         self.joins = addrs
@@ -939,8 +965,33 @@ impl<'a, 'f> Lifter<'a, 'f> {
             "a version's run ends with the cache written back"
         );
         self.blocks.extend(kept);
-        // the usual version: the first instruction here, the others as the loop comes to them
         self.b.switch_to_block(other);
+        if crate::config::env("NO_USUAL87").is_none() {
+            // the usual control words: a version of their own (the general one's branches
+            // spread its code: Recoil's vertex loop of ~40 instructions became ~7700)
+            let m = self.b.ins().band_imm_u(cw, 0xe00);
+            let usual = self.b.ins().icmp_imm_u(IntCC::Equal, m, 0x200);
+            let (u_blk, general) = (self.b.create_block(), self.b.create_block());
+            self.b.ins().brif(usual, u_blk, &[], general, &[]);
+            self.b.switch_to_block(u_blk);
+            self.usual87 = true;
+            let kept: Vec<(u32, Block)> = run[1..]
+                .iter()
+                .map(|&a| (a, self.blocks.insert(a, self.b.create_block()).unwrap()))
+                .collect();
+            for (n, &a) in run.iter().enumerate() {
+                if n > 0 {
+                    let blk = self.blocks[&a];
+                    self.b.switch_to_block(blk);
+                }
+                self.emit(&code.at(a).unwrap());
+            }
+            assert!(!self.usual87, "a version's run ends with the cache written back");
+            self.blocks.extend(kept);
+            self.b.switch_to_block(general);
+        }
+        // the general version: the first instruction here, the others as the loop comes to
+        // them
         self.emit(&code.at(run[0]).unwrap());
     }
 
@@ -952,13 +1003,20 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let (slow, on) = (self.b.create_block(), self.b.create_block());
         self.b.ins().brif(v, slow, &[], on, &[]);
         self.b.switch_to_block(slow);
-        self.helper(self.refs.yield_, None);
+        // the state stays in its variables: nothing reads a waiting thread's registers, and
+        // storing them made every flag live at every loop head (all computed in each pass)
+        self.b.ins().call(self.refs.yield_, &[self.cpu]);
         self.b.ins().jump(on, &[]);
         self.b.switch_to_block(on);
     }
 
     /// One instruction, continuing at the next unless it ends its block.
     fn emit(&mut self, i: &Instruction) {
+        self.out = self.live.get(&i.ip32()).copied().unwrap_or(ALL_FLAGS);
+        // the guest instruction of the code made from here (`jit::guest_at`: profiles by
+        // instruction)
+        self.b
+            .set_srcloc(cranelift_codegen::ir::SourceLoc::new(i.ip32()));
         let ends = match unsupported(i) {
             Some(why) => {
                 self.missing.push(why);
@@ -2061,4 +2119,99 @@ impl<'a, 'f> Lifter<'a, 'f> {
 /// eax..edi -> 0..7 for any size of the register
 fn gpr(r: Register) -> usize {
     r.full_register32() as usize - Register::EAX as usize
+}
+
+/// CF, PF, ZF, SF, OF: bits 0 to 4 of a flag set.
+const ALL_FLAGS: u8 = 0x1f;
+
+/// A flag set from iced's RFLAGS bits.
+fn flag_set(bits: u32) -> u8 {
+    use iced_x86::RflagsBits as R;
+    [R::CF, R::PF, R::ZF, R::SF, R::OF]
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| bits & **b != 0)
+        .fold(0, |s, (k, _)| s | 1 << k)
+}
+
+/// The flags live after each instruction of a function (its instructions `addrs`): read by a
+/// later one before written. Flags were computed after every instruction that sets them,
+/// where only a branch reads a few: in loops each became a block parameter Cranelift keeps,
+/// all computed in every pass (parity by popcnt, sign, overflow). Calls, returns, jumps out of
+/// the function or through a table count as reading all (code may pass flags across them);
+/// a shift or rotate by a count that may be 0 leaves the flags it sets (reads them too).
+fn flag_liveness(code: &mut crate::discover::Code, addrs: &[u32]) -> HashMap<u32, u8> {
+    use Mnemonic::*;
+    let inside: std::collections::HashSet<u32> = addrs.iter().copied().collect();
+    let mut info: Vec<(u32, u8, u8, [Option<u32>; 2])> = Vec::with_capacity(addrs.len());
+    for &a in addrs {
+        let i = code.at(a).unwrap();
+        let mut uses = flag_set(i.rflags_read());
+        let defs = flag_set(i.rflags_modified());
+        let counted = matches!(
+            i.mnemonic(),
+            Shl | Sal | Shr | Sar | Rol | Ror | Rcl | Rcr | Shld | Shrd
+        );
+        if counted {
+            let last = i.op_count() - 1;
+            let sure = matches!(i.op_kind(last), OpKind::Immediate8) && i.immediate8() & 0x1f != 0;
+            if !sure {
+                uses |= defs;
+            }
+        }
+        let next = Some(i.next_ip32()).filter(|n| inside.contains(n));
+        let target = direct_target(&i);
+        let succ = match i.flow_control() {
+            FlowControl::Next => [next, None],
+            FlowControl::UnconditionalBranch => match target.filter(|t| inside.contains(t)) {
+                Some(t) => [Some(t), None],
+                None => {
+                    uses = ALL_FLAGS;
+                    [None, None]
+                }
+            },
+            FlowControl::ConditionalBranch => match target.filter(|t| inside.contains(t)) {
+                Some(t) => [Some(t), next],
+                None => {
+                    uses = ALL_FLAGS;
+                    [next, None]
+                }
+            },
+            _ => {
+                uses = ALL_FLAGS;
+                [next, None]
+            }
+        };
+        // on past the function's end (into the next one)
+        if matches!(
+            i.flow_control(),
+            FlowControl::Next | FlowControl::ConditionalBranch
+        ) && next.is_none()
+        {
+            uses = ALL_FLAGS;
+        }
+        info.push((a, uses, defs, succ));
+    }
+    let index: HashMap<u32, usize> = info.iter().enumerate().map(|(k, x)| (x.0, k)).collect();
+    let mut live_in = vec![0u8; info.len()];
+    let mut out = vec![0u8; info.len()];
+    loop {
+        let mut changed = false;
+        for k in (0..info.len()).rev() {
+            let (_, uses, defs, succ) = info[k];
+            let o = succ
+                .iter()
+                .flatten()
+                .fold(0, |s, t| s | live_in[index[t]]);
+            let l = uses | (o & !defs);
+            if (o, l) != (out[k], live_in[k]) {
+                (out[k], live_in[k]) = (o, l);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    info.iter().zip(out).map(|(x, o)| (x.0, o)).collect()
 }

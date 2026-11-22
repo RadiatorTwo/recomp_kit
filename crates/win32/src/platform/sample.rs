@@ -67,6 +67,9 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
         starts.last().map_or(0, |s| s.0) + 0x10000,
     );
     let mut counts: HashMap<String, u32> = HashMap::new();
+    // `<PREFIX>_SAMPLE=insn`: by guest instruction too (`jit::guest_at`)
+    let by_insn = recomp::config::env("SAMPLE").is_some_and(|v| v == "insn");
+    let mut insns: HashMap<u32, u32> = HashMap::new();
     let mut modules = HashMap::new();
     let mut total = 0u32;
     let mut stack = vec![0u8; 64 << 10];
@@ -178,6 +181,11 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
             }
         }
         *counts.entry(key).or_default() += 1;
+        if by_insn && (lo..hi).contains(&rip) {
+            if let Some(g) = recomp::jit::guest_at(rip) {
+                *insns.entry(g).or_default() += 1;
+            }
+        }
         total += 1;
         if last.elapsed().as_secs() >= 2 {
             last = std::time::Instant::now();
@@ -196,9 +204,31 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
             for (name, n) in v.iter().take(25) {
                 log!("sample: {:5.1}% {name}", *n as f64 * 100.0 / total as f64);
             }
+            if by_insn {
+                let mut v: Vec<_> = insns.drain().collect();
+                v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+                for (g, n) in v.iter().take(40) {
+                    log!(
+                        "sample: insn {:5.1}% {g:#x} in {}",
+                        *n as f64 * 100.0 / total as f64,
+                        function_of(&starts, *g)
+                    );
+                }
+            }
             total = 0;
         }
     }
+}
+
+/// The name of the recompiled function holding guest address `g` (the nearest start below).
+fn function_of(starts: &[(usize, u32)], g: u32) -> String {
+    let mut best = None;
+    for &(_, a) in starts {
+        if a <= g && best.is_none_or(|b| a > b) {
+            best = Some(a);
+        }
+    }
+    best.map_or("?".into(), recomp::image::named)
 }
 
 /// The host module an address is in, with the offset in 4 KB pages for our own (".exe+page").

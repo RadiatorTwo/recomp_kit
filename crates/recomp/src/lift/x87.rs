@@ -165,6 +165,7 @@ impl Lifter<'_, '_> {
         self.xc.d = 0;
         self.xc.cw = None;
         self.xc.mode = None;
+        self.usual87 = false;
         // the end of a run's 0xc7f version: the SSE rounding as it was
         if let Some(old) = self.rz.take() {
             self.b.ins().call(self.refs.mxcsr_set, &[old]);
@@ -412,6 +413,9 @@ impl Lifter<'_, '_> {
         } else {
             fast
         };
+        if self.usual87 {
+            return fast;
+        }
         let md = self.mode();
         let (cw, usual) = (md.cw, md.usual);
         let (slow, edge, call_blk, done) = (

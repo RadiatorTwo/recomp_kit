@@ -59,6 +59,8 @@ struct Blob {
     align: u64,
     bytes: Vec<u8>,
     relocs: Vec<ModuleReloc>,
+    /// where the code of each guest instruction starts: (offset in `bytes`, guest address)
+    locs: Vec<(u32, u32)>,
 }
 
 /// Compile every function; `hooks` replace guest functions by host functions (the recompiled
@@ -337,6 +339,15 @@ pub fn compile_cached(
         .collect();
     let mut table: Vec<(u32, usize)> = fns.iter().map(|(&a, &p)| (a, p as usize)).collect();
     table.sort_unstable();
+    if crate::config::env_on("SAMPLE") {
+        let mut locs = Vec::new();
+        for b in &blobs {
+            let p = module.get_finalized_function(b.id) as usize;
+            locs.extend(b.locs.iter().map(|&(o, g)| (p + o as usize, g)));
+        }
+        locs.sort_unstable();
+        let _ = GUEST_LOCS.set(locs);
+    }
     let foreign_stub = module.get_finalized_function(foreign_id) as usize;
     let enter = unsafe {
         std::mem::transmute::<*const u8, extern "C" fn(*mut Cpu, *const u8)>(
@@ -395,14 +406,26 @@ fn compile_all(
                     }
                     let (addr, id, func) = work[k].lock().unwrap().take().unwrap();
                     let mut ctx = cranelift_codegen::Context::for_function(func);
+                    if dump_of(addr) && crate::config::env("DUMP_CLIF").is_some() {
+                        eprintln!("{}", ctx.func.display());
+                    }
                     let r = match ctx.compile(isa, &mut ControlPlane::default()) {
                         Ok(_) => {
                             let c = ctx.compiled_code().unwrap();
+                            let base = ctx.func.params.base_srcloc();
+                            let mut locs: Vec<(u32, u32)> = Vec::new();
+                            for l in c.buffer.get_srclocs_sorted() {
+                                let g = if l.loc.is_abs() { l.loc.as_abs() } else { l.loc.relocate(base) };
+                                if !g.is_default() && locs.last().is_none_or(|x| x.1 != g.bits()) {
+                                    locs.push((l.start, g.bits()));
+                                }
+                            }
                             if dump_of(addr) {
-                                dump(addr, c.code_buffer());
+                                dump(addr, c.code_buffer(), &locs);
                             }
                             Ok(Blob {
                                 id,
+                                locs,
                                 align: c.buffer.min_alignment as u64,
                                 bytes: c.code_buffer().to_vec(),
                                 relocs: c
@@ -426,12 +449,12 @@ fn compile_all(
 }
 
 // ---- the cache file ---------------------------------------------------------------------------
-// "RCMPJIT1", the key (32 bytes), the number of functions; for each: its id, alignment and code
+// "RCMPJIT2", the key (32 bytes), the number of functions; for each: its id, alignment and code
 // (length, bytes), its relocations (number; each: offset, kind, target, addend). Numbers are
 // little-endian u32 (addends i64). Targets: 0 a function or data object (namespace, index),
 // 1 a libcall (its number in `LibCall::all_libcalls`), 2 a place in a function (id, offset).
 
-const MAGIC: &[u8; 8] = b"RCMPJIT1";
+const MAGIC: &[u8; 8] = b"RCMPJIT2";
 
 /// The relocation kinds the x86-64 code uses (their numbers in the file).
 const RELOCS: [Reloc; 6] = [
@@ -494,12 +517,28 @@ fn save(path: &Path, key: &[u8; 32], blobs: &[Blob]) {
             }
             out.extend_from_slice(&r.addend.to_le_bytes());
         }
+        u32_(&mut out, b.locs.len() as u32);
+        for &(o, g) in &b.locs {
+            u32_(&mut out, o);
+            u32_(&mut out, g);
+        }
     }
     // written beside it first: a game started meanwhile never reads half a file
     let tmp = path.with_extension("tmp");
     if let Err(e) = std::fs::write(&tmp, &out).and_then(|_| std::fs::rename(&tmp, path)) {
         eprintln!("{}: compiled code not kept: {e}", path.display());
     }
+}
+
+/// Where the code of each guest instruction starts (host address, guest address), sorted;
+/// with `<PREFIX>_SAMPLE` only.
+static GUEST_LOCS: std::sync::OnceLock<Vec<(usize, u32)>> = std::sync::OnceLock::new();
+
+/// The guest instruction whose compiled code holds host address `host`, if known.
+pub fn guest_at(host: usize) -> Option<u32> {
+    let locs = GUEST_LOCS.get()?;
+    let k = locs.partition_point(|l| l.0 <= host).checked_sub(1)?;
+    Some(locs[k].1)
 }
 
 /// Reads the cache file's numbers in turn.
@@ -557,8 +596,14 @@ fn load(path: &Path, key: &[u8; 32]) -> Option<Vec<Blob>> {
                 addend: r.i64()?,
             });
         }
+        let count = r.u32()?;
+        let mut locs = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            locs.push((r.u32()?, r.u32()?));
+        }
         blobs.push(Blob {
             id,
+            locs,
             align,
             bytes,
             relocs,
@@ -578,7 +623,7 @@ pub fn dump_of(addr: u32) -> bool {
     }) == Some(addr)
 }
 
-fn dump(addr: u32, code: &[u8]) {
+fn dump(addr: u32, code: &[u8], locs: &[(u32, u32)]) {
     use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
     let mut out = format!(
         "== {addr:#x}: {} bytes
@@ -588,6 +633,11 @@ fn dump(addr: u32, code: &[u8]) {
     let mut f = IntelFormatter::new();
     let mut d = Decoder::with_ip(64, code, 0, DecoderOptions::NONE);
     for i in &mut d {
+        // the guest instructions whose code starts here
+        for &(_, g) in locs.iter().filter(|l| l.0 as u64 == i.ip()) {
+            out += &format!("; {g:#x}
+");
+        }
         let mut t = String::new();
         f.format(&i, &mut t);
         out += &format!(

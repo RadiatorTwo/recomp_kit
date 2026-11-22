@@ -89,8 +89,10 @@ impl LogicClock {
                 Some((start, n)) => start + frame * (n + 1) as u32,
             }
         };
+        // unpaced (to measure): up to 64 pictures a logic frame, else 16
+        let most = if period.is_zero() { 64 } else { 16 };
         let period = if period.is_zero() { frame / 4 } else { period };
-        for _ in 0..16 {
+        for _ in 0..most {
             if pacer.next_shown() >= due {
                 break;
             }
