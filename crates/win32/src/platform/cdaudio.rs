@@ -135,9 +135,33 @@ struct State {
     format: u32,
     /// the track playing (1-based) and the sector of it where the samples start
     from: (u32, u32),
+    /// the window told when the play ends (MCI_NOTIFY): MM_MCINOTIFY
+    notify: Option<u32>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { open: false, format: FORMAT_MSF, from: (1, 0) });
+static STATE: Mutex<State> = Mutex::new(State { open: false, format: FORMAT_MSF, from: (1, 0), notify: None });
+
+const MCI_NOTIFY: u32 = 1;
+const MM_MCINOTIFY: u32 = 0x3b9;
+const MCI_NOTIFY_SUCCESSFUL: u32 = 1;
+const MCI_NOTIFY_SUPERSEDED: u32 = 2;
+const MCI_NOTIFY_ABORTED: u32 = 4;
+
+/// Tell the window waiting for the play's end (if one is) how it ended.
+fn notify(st: &mut State, how: u32) {
+    if let Some(hwnd) = st.notify.take() {
+        super::user32::post(hwnd, MM_MCINOTIFY, how, DEVICE);
+    }
+}
+
+/// From the message loop: a play with MCI_NOTIFY that has reached its end tells its window
+/// (Recoil plays its music one track at a time and starts it again on this).
+pub fn poll() {
+    let mut st = state();
+    if st.notify.is_some() && super::dsound::cd_state().is_none_or(|(pos, len, _)| pos >= len) {
+        notify(&mut st, MCI_NOTIFY_SUCCESSFUL);
+    }
+}
 
 fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -202,6 +226,9 @@ pub fn mci_send_command(c: &mut Cpu) -> u32 {
     };
     let m = mem();
     let mut st = state();
+    if super::trace_api() {
+        log!("CD audio: MCI message {msg:#x} flags {flags:#x}");
+    }
     match msg {
         MCI_OPEN => {
             st.open = true;
@@ -210,6 +237,7 @@ pub fn mci_send_command(c: &mut Cpu) -> u32 {
         }
         MCI_CLOSE => {
             st.open = false;
+            notify(&mut st, MCI_NOTIFY_ABORTED);
             super::dsound::cd_stop();
         }
         MCI_SET => {
@@ -229,11 +257,19 @@ pub fn mci_send_command(c: &mut Cpu) -> u32 {
             if from.0 == 0 || from.0 as usize > tracks.len() {
                 return MCIERR_OUTOFRANGE;
             }
-            log!("CD audio: play track {} at {} to track {} at {}", from.0, from.1, to.0, to.1);
+            log!("CD audio: play track {} at {} to track {} at {} ({} s)", from.0, from.1, to.0, to.1, super::kernel32::ms_since_start() / 1000);
             st.from = from;
+            notify(&mut st, if flags & MCI_NOTIFY != 0 { MCI_NOTIFY_SUPERSEDED } else { MCI_NOTIFY_ABORTED });
             super::dsound::cd_play(Arc::new(read(tracks, from, to)));
+            if flags & MCI_NOTIFY != 0 {
+                st.notify = Some(m.rd32(p));
+            }
+            return 0;
         }
-        MCI_SEEK | MCI_STOP => super::dsound::cd_stop(),
+        MCI_SEEK | MCI_STOP => {
+            notify(&mut st, MCI_NOTIFY_ABORTED);
+            super::dsound::cd_stop();
+        }
         MCI_PAUSE => super::dsound::cd_pause(true),
         MCI_RESUME => super::dsound::cd_pause(false),
         MCI_STATUS if flags & MCI_STATUS_ITEM != 0 => {
@@ -286,6 +322,10 @@ pub fn mci_send_command(c: &mut Cpu) -> u32 {
             log!("warn: MCI message {msg:#x} (flags {flags:#x}) not supported");
             return MCIERR_UNRECOGNIZED_COMMAND;
         }
+    }
+    // the other commands are done at once
+    if flags & MCI_NOTIFY != 0 {
+        super::user32::post(m.rd32(p), MM_MCINOTIFY, MCI_NOTIFY_SUCCESSFUL, DEVICE);
     }
     0
 }

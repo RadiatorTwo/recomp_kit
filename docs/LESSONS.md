@@ -229,6 +229,9 @@ White. Most apply to any game of that time. Add new ones here.
 - MFC 4.2 games: load the game's own MFC42 / MSVCRT / MSVCP50 as guest DLLs and compile them
   with the EXE (`Game::dlls`, `platform/module.rs`) instead of writing MFC in Rust. MFC
   subclasses windows in a WH_CBT hook called inside CreateWindowExA before WM_NCCREATE.
+- MCI CD audio with MCI_NOTIFY: post MM_MCINOTIFY (wParam 1, lParam the device) when the play
+  ends. Games that loop their music one track at a time wait for it (Recoil) and fall silent
+  after one piece without it (`cdaudio::poll` from the message loop).
 
 ## Discovery
 
@@ -236,6 +239,11 @@ White. Most apply to any game of that time. Add new ones here.
 - Code addresses stored in data (function pointer tables, a renderer's jump targets) must be
   entry points too.
 - Other code jumps into the middle of functions: those places become extra entries.
+- A word of data can point at the last bytes of a real instruction (a backward jne's ff),
+  which then decode as `call far [edi+5Eh]`: taken as a function, it pushes out the real
+  function around it, and a callback known only from `mov edx, imm` became "call to unknown
+  address" (Recoil's save game, 0x41f6f0). Far calls and jumps through memory count as not
+  compiled code (`plausible`).
 
 ## Game logic and frame rate
 

@@ -160,3 +160,41 @@ fn build_stops_at_table() {
     assert!(func.ins.range(TEXT + 0x24..TEXT + 0x2c).next().is_none(), "decoded into the table");
     assert!(func.ins.contains(&case0) && func.ins.contains(&case1) && func.ins.contains(&(f + 19)));
 }
+
+/// A word of data that points at the last byte of a backward `jne rel32` (ff) reads as
+/// `call far [edi+5Eh]` (ff 5f 5e) with the `pop edi; pop esi` after it: compiled 32-bit code
+/// has no far calls, so it is no function, and the real function around it (known only from
+/// a later operand) is not pushed out. Recoil's 0x41f6f0 (a save game callback) and the
+/// data word 0x41f886.
+#[test]
+fn far_call_is_no_function() {
+    let (f, g) = (TEXT + 0x10, TEXT + 0x80);
+    let mut text = vec![0xcc; 0x1000];
+    text[0] = 0xc3; // the entry: ret
+    let mut put = |at: u32, x: &[u8]| text[(at - TEXT) as usize..][..x.len()].copy_from_slice(x);
+    // f: push ebx; push esi; push edi; sub esp, 80h; mov eax, 1
+    put(f, &[0x53, 0x56, 0x57, 0x81, 0xec, 0x80, 0, 0, 0, 0xb8, 1, 0, 0, 0]);
+    // loop: dec eax; jne loop (rel32 -7: f9 ff ff ff); pop edi; pop esi; pop ebx; add esp, 80h; ret
+    let lp = f + 14;
+    put(lp, &[0x48, 0x0f, 0x85, 0xf9, 0xff, 0xff, 0xff, 0x5f, 0x5e, 0x5b, 0x81, 0xc4, 0x80, 0, 0, 0, 0xc3]);
+    let tail = lp + 6; // the jne's last byte
+    // g: mov edx, f; ret
+    put(g, &[0xba]);
+    put(g + 1, &f.to_le_bytes());
+    put(g + 5, &[0xc3]);
+    let mut data = [tail.to_le_bytes(), g.to_le_bytes()].concat();
+    data.resize(0x100, 0);
+    let n = data.len() as u32;
+    let img = Image {
+        data: [text, data].concat(),
+        base: 0x400000,
+        entry: TEXT,
+        sections: vec![
+            Section { name: ".text".into(), va: TEXT, vsize: 0x1000, raw: 0, rsize: 0x1000, exec: true },
+            Section { name: ".data".into(), va: DATA, vsize: n, raw: 0x1000, rsize: n, exec: false },
+        ],
+    };
+    let mut code = Code::new(&img);
+    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())]).iter().map(|f| f.0).collect();
+    assert_eq!(found, vec![TEXT, f, g]);
+}

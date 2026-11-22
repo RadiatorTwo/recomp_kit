@@ -152,6 +152,7 @@ pub fn poll_input() {
 fn poll(wait: Duration) {
     super::ddraw::show_pending();
     window::pump(wait);
+    super::cdaudio::poll();
     let mut guard = st();
     let s = &mut *guard;
     let hwnd = s.main;
