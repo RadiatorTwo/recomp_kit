@@ -83,6 +83,28 @@ struct Lfb {
 
 /// LFB pixels handed out for writing start as this value: words the game leaves are not drawn.
 const LFB_UNTOUCHED: u16 = 0x0821;
+/// Rows apart that grLfbUnlock still draws in one band.
+const LFB_BAND_GAP: u32 = 8;
+
+/// The pixels of a locked buffer's row (16 bits each) the game wrote: from the first to past
+/// the last, or None. Compared four at a time.
+fn touched(row: &[u8]) -> Option<(usize, usize)> {
+    let four = u64::from_ne_bytes([LFB_UNTOUCHED.to_le_bytes(); 4].concat().try_into().unwrap());
+    let differs = |c: &[u8]| u64::from_ne_bytes(c.try_into().unwrap()) != four;
+    let px = |x: &usize| u16::from_le_bytes([row[2 * x], row[2 * x + 1]]) != LFB_UNTOUCHED;
+    let n = row.len() / 2;
+    let mut chunks = row.chunks_exact(8);
+    let whole = chunks.len();
+    let from = chunks.clone().position(differs).unwrap_or(whole);
+    let a = (4 * from..n).find(px)?;
+    let end = match chunks.remainder().is_empty() {
+        true => 4 * chunks.rposition(differs).unwrap() + 4,
+        false => n,
+    };
+    let b = (a..end).rev().find(px).unwrap();
+    Some((a, b + 1))
+}
+
 /// Bytes per row of a locked buffer (Glide's Voodoo: 1024 pixels of 16 bits).
 const LFB_STRIDE: u32 = 2048;
 
@@ -268,6 +290,8 @@ struct Glide {
     /// grGlideGetState's saves, by the guest address of their GrState
     saved: HashMap<u32, Saved>,
     lfb: Option<Lfb>,
+    /// grLfbUnlock's pixels (kept, not made anew each picture)
+    lfb_rgba: Vec<u8>,
     /// drawing LFB pixels over the picture: a program and a texture
     blit: (glow::Program, glow::Texture),
 }
@@ -1024,6 +1048,7 @@ impl Glide {
                 lower_left: false,
                 saved: HashMap::new(),
                 lfb: None,
+                lfb_rgba: Vec::new(),
                 blit,
             }
         }
@@ -1656,7 +1681,7 @@ impl Glide {
                 glow::PixelUnpackData::Slice(Some(rgba)),
             );
             gl.use_program(Some(prog));
-            gl.uniform_1_i32(gl.get_uniform_location(prog, "img").as_ref(), 0);
+            gl.uniform_1_i32(super::gl::uniform(gl, prog, "img").as_ref(), 0);
             let nx = |v: f32| v / sw * 2.0 - 1.0;
             let ny = |v: f32| 1.0 - v / sh * 2.0;
             let r = [
@@ -1666,7 +1691,7 @@ impl Glide {
                 ny(y as f32),
             ];
             gl.uniform_4_f32(
-                gl.get_uniform_location(prog, "rect").as_ref(),
+                super::gl::uniform(gl, prog, "rect").as_ref(),
                 r[0],
                 r[1],
                 r[2],
@@ -1691,9 +1716,10 @@ impl Glide {
         }
         let m = mem();
         if write {
+            let untouched = LFB_UNTOUCHED.to_le_bytes();
             for y in 0..h {
-                for x in 0..w {
-                    m.wr16(buf + y * LFB_STRIDE + 2 * x, LFB_UNTOUCHED);
+                for p in m.slice(buf + y * LFB_STRIDE, 2 * w as usize).chunks_exact_mut(2) {
+                    p.copy_from_slice(&untouched);
                 }
             }
         } else {
@@ -1724,22 +1750,44 @@ impl Glide {
         }
         let (w, h) = self.res;
         let m = mem();
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
-        let mut any = false;
-        for y in 0..h {
+        let row_of = |y: u32| {
             let row = if l.lower { h - 1 - y } else { y };
-            for x in 0..w {
-                let v = m.rd16(l.buf + row * LFB_STRIDE + 2 * x);
-                if v != LFB_UNTOUCHED {
-                    let p = ((y * w + x) * 4) as usize;
-                    rgba[p..p + 4].copy_from_slice(&pixel16(v, l.mode));
-                    any = true;
+            &*m.slice(l.buf + row * LFB_STRIDE, 2 * w as usize)
+        };
+        let px = |r: &[u8], x: usize| u16::from_le_bytes([r[2 * x], r[2 * x + 1]]);
+        // only what the game wrote is drawn, in bands of rows (a HUD: a few parts of the
+        // screen, ~5000 pixels; the whole screen cost ~0.6 ms a picture, one rectangle around
+        // them all ~0.25 ms)
+        let mut bands: Vec<(usize, usize, u32, u32)> = Vec::new();
+        for y in 0..h {
+            let Some((a, b)) = touched(row_of(y)) else {
+                continue;
+            };
+            match bands.last_mut() {
+                Some(band) if y - band.3 <= LFB_BAND_GAP => {
+                    *band = (band.0.min(a), band.1.max(b), band.2, y + 1);
                 }
+                _ => bands.push((a, b, y, y + 1)),
             }
         }
-        if any {
-            self.draw_pixels(gl, (0, 0), (w, h), &rgba);
+        let mut rgba = std::mem::take(&mut self.lfb_rgba);
+        for (x0, x1, y0, y1) in bands {
+            let bw = x1 - x0;
+            rgba.clear();
+            rgba.resize(bw * (y1 - y0) as usize * 4, 0);
+            for (i, y) in (y0..y1).enumerate() {
+                let r = row_of(y);
+                for x in x0..x1 {
+                    let v = px(r, x);
+                    if v != LFB_UNTOUCHED {
+                        let p = (i * bw + x - x0) * 4;
+                        rgba[p..p + 4].copy_from_slice(&pixel16(v, l.mode));
+                    }
+                }
+            }
+            self.draw_pixels(gl, (x0 as i32, y0 as i32), (bw as u32, y1 - y0), &rgba);
         }
+        self.lfb_rgba = rgba;
     }
 
     /// Texels into the texture at TMU address `addr` (rows `rows` of its top level, or all).

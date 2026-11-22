@@ -183,7 +183,7 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
             last = std::time::Instant::now();
             let mut v: Vec<_> = counts.drain().collect();
             v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-            log!("sample: {total} samples");
+            log!("sample: {total} samples, {}", super::stats::summary());
             if let Some(path) = recomp::config::env("SAMPLE_RAW") {
                 // every sample's name, for symbolising our own addresses against the link map
                 let _ = std::fs::write(

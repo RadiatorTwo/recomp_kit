@@ -121,6 +121,22 @@ pub fn picture() {
     }
 }
 
+/// The last second's frames a second, mean and longest frame time (the sampler's log).
+pub fn summary() -> String {
+    let s = STATS.lock().unwrap();
+    let n = s.times.len();
+    if n == 0 {
+        return "no pictures".into();
+    }
+    let long = s.times.iter().copied().fold(0.0, f32::max);
+    format!(
+        "{:.0} fps, {:.2} ms mean, {:.2} ms longest",
+        n as f32 * 1000.0 / s.total.max(1.0),
+        s.total / n as f32,
+        long
+    )
+}
+
 /// The display's new pixels (ARGB words, W x H) when they are due.
 pub fn pixels() -> Option<Vec<u32>> {
     let s = &mut *STATS.lock().unwrap();

@@ -185,6 +185,11 @@ Reihenfolge:
    rufen `rt_yield` nicht, solange die Scheibe läuft), Sleep(0) ohne Spinnen, unveränderte
    Texturzeilen werden nicht neu geladen, Zwischenbilder schreiben nur die Seiten zurück, die
    sie geändert haben (`tween::Statics`, Write-Watch).
+   grLfbUnlock zeichnet nur die Zeilenbänder, in die das Spiel geschrieben hat (Recoils HUD:
+   ganzer Puffer ~0,6 ms pro Bild), die Font-Datei wird pro Schrift einmal gesucht
+   (`Path::exists` öffnet unter Windows die Datei), `<PREFIX>_SAMPLE=1` loggt auch die Bilder
+   pro Sekunde. Zum Messen ein Spielschalter, der das Takten abschaltet (Recoil:
+   `RUSTCOIL_UNPACED=1`), und ein Replay, das in die Mission führt.
 3. **Kosten pro Aufruf im eigenen Code.** Bei Hunderttausenden Aufrufen pro Sekunde zählt
    alles: keine Locks, keine `Arc`-Klone, keine Hash-Maps mit SipHash, kein `Vec` pro
    Primitiv, keine Umgebungsvariable pro Aufruf (einmal lesen), keine Systemaufrufe

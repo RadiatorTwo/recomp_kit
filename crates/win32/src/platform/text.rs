@@ -20,6 +20,8 @@ pub struct Spec {
 
 struct Fonts {
     specs: Vec<Spec>,
+    /// the file picked for each font of `specs` (picking looks at files: once)
+    picked: Vec<Option<Option<Arc<FontVec>>>>,
     /// loaded files, by path (None: could not be read)
     files: BTreeMap<PathBuf, Option<Arc<FontVec>>>,
     /// the game folder's fonts: family name (lower case), bold, path
@@ -28,6 +30,7 @@ struct Fonts {
 
 static FONTS: Mutex<Fonts> = Mutex::new(Fonts {
     specs: Vec::new(),
+    picked: Vec::new(),
     files: BTreeMap::new(),
     found: None,
 });
@@ -129,7 +132,17 @@ struct Sized {
 fn sized(k: u32) -> Option<Sized> {
     let mut f = fonts();
     let spec = f.specs.get(k as usize)?.clone();
-    let font = file_for(&mut f, &spec)?;
+    if f.picked.len() <= k as usize {
+        f.picked.resize(k as usize + 1, None);
+    }
+    let font = match f.picked[k as usize].clone() {
+        Some(font) => font?,
+        None => {
+            let font = file_for(&mut f, &spec);
+            f.picked[k as usize] = Some(font.clone());
+            font?
+        }
+    };
     // ab_glyph's scale is the cell height (ascent - descent); a negative LOGFONT height is the
     // em height
     let px = match spec.height {
