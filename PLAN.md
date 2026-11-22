@@ -83,6 +83,9 @@
   Then: the texture layer in 12 bits (black textures past 256 layers), clamp at the texture's
   edge, a scripted run ignores the user's mouse and keys over the window. Open: with SHOT and the
   present thread pictures sometimes stop while the game goes on (PRESENT=0 meanwhile).
+  And: setup never removes anything (its cleanup put a game's files and CD image into the
+  recycle bin), DeleteFileA only inside the game folder, no writes outside it; a hidden cursor
+  the game draws itself is not caught (`window::cursor_drawn`); ShowOwnedPopups, WinHelpA.
 
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 

@@ -21,14 +21,12 @@ use std::path::{Path, PathBuf};
 use crate::game::id;
 
 const VIDEO: &str = "Video";
-/// replacement textures (`platform::hd`), the player's
-const TEXTURES: &str = "Textures";
 /// The game folder's name in `game_files`.
 fn folder() -> &'static str {
     id().folder
 }
 
-/// What stays in the game folder: the game's files and ours.
+/// What is moved into the game folder from where the game was found: the game's files and ours.
 fn kept() -> Vec<&'static str> {
     let i = id();
     let mut v = vec![i.exe, "registry.txt", COMPILED, SAVESTATE];
@@ -45,8 +43,6 @@ fn program() -> String {
 pub const SAVESTATE: &str = "savestate.bin";
 /// the game's compiled code, kept for the next start (`jit::compile_cached`)
 pub const COMPILED: &str = "compiled.bin";
-/// our note in `game_files` (in the release)
-const NOTE: &str = "README.txt";
 
 /// The folder with the game files: `game_files` next to our program, else in the current folder.
 /// When there is neither, the one next to our program (made when a CD image is found there).
@@ -105,15 +101,9 @@ pub fn game_exe(root: &Path) -> Result<PathBuf, String> {
     }
     writable(&game);
     writable(&video);
-    // what the game does not need
-    let mut rest = others(root, &[folder(), VIDEO, TEXTURES, NOTE]);
-    rest.extend(others(&game, &kept()));
-    for p in rest {
-        eprintln!("setup: not needed, removed: {}", p.display());
-        if let Err(e) = trash(&p) {
-            eprintln!("setup: cannot remove {}: {e}", p.display());
-        }
-    }
+    // Nothing is ever removed: the folder holds the player's files (the CD image, a copied game).
+    // An earlier cleanup ("what the game does not need") put a game's files and its CD image
+    // into the recycle bin when the game's own files were not all listed in `Identity`.
     Ok(game.join(named(&game, exe_name).unwrap()))
 }
 
@@ -251,18 +241,6 @@ fn move_into(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::rename(from, to).map_err(|e| format!("Cannot move {} to {}: {e}", from.display(), to.display()))
 }
 
-/// The entries of `dir` other than `keep` (any case).
-fn others(dir: &Path, keep: &[&str]) -> Vec<PathBuf> {
-    let Ok(d) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut v: Vec<PathBuf> = d
-        .flatten()
-        .filter(|e| !keep.iter().any(|k| e.file_name().to_string_lossy().eq_ignore_ascii_case(k)))
-        .map(|e| e.path())
-        .collect();
-    v.sort();
-    v
-}
-
 /// Files copied from a CD are read-only; the game writes into its folder.
 fn writable(dir: &Path) {
     let Ok(d) = std::fs::read_dir(dir) else { return };
@@ -280,29 +258,4 @@ fn writable(dir: &Path) {
             }
         }
     }
-}
-
-/// Move a file or folder to the recycle bin (elsewhere: delete it).
-#[cfg(windows)]
-fn trash(p: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::*;
-    // a list of paths, each NUL-terminated, the list ending with another NUL
-    let from: Vec<u16> = p.as_os_str().encode_wide().chain([0, 0]).collect();
-    let mut op = SHFILEOPSTRUCTW {
-        wFunc: FO_DELETE,
-        pFrom: from.as_ptr(),
-        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16,
-        ..Default::default()
-    };
-    match unsafe { SHFileOperationW(&mut op) } {
-        0 if op.fAnyOperationsAborted == 0 => Ok(()),
-        e => Err(format!("error {e:#x}")),
-    }
-}
-
-#[cfg(not(windows))]
-fn trash(p: &Path) -> Result<(), String> {
-    let r = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
-    r.map_err(|e| e.to_string())
 }

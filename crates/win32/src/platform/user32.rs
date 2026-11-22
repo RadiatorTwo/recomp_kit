@@ -1207,6 +1207,8 @@ pub const IMPORTS: &[Import] = &[
     ("CreateWindowExA", 12, create_window_ex),
     ("DestroyWindow", 1, destroy_window),
     ("ShowWindow", 2, show_window),
+    ("ShowOwnedPopups", 2, ret1),
+    ("WinHelpA", 4, ret1),
     ("UpdateWindow", 1, update_window),
     ("SetWindowPos", 7, set_window_pos),
     ("GetWindowRect", 2, get_window_rect),

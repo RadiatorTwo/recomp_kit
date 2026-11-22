@@ -193,6 +193,15 @@ White. Most apply to any game of that time. Add new ones here.
 - DirectInput gets input without the game's message loop: a game may wait for a key with
   Sleep and GetDeviceData only (Recoil's briefing). DirectInput reads fetch the window's input
   (`user32::poll_input`), else such a wait never ends.
+- A game that draws its own cursor in its menus (it hides the system's and reads where the
+  mouse is): never catch the hidden cursor there. winit keeps a caught hidden cursor in the
+  window's centre on Windows, so only raw motion arrives and the menu cursor stands still. The
+  game's hook says which mode it is in (`window::cursor_drawn`); in missions it is caught.
+- Never delete the player's files. The setup's cleanup ("what the game does not need") put a
+  game's files and its CD image into the recycle bin because `Identity` did not list them all;
+  it is gone. DeleteFileA deletes only inside the game folder (host_path falls back to the
+  parent, the CD's top folder, for reads), and nothing is written outside it. Test runs pass
+  the EXE's path; a start without it runs the setup.
 - Scripted runs (`<PREFIX>_INPUT`) never catch the cursor: the window takes the focus and would
   lock the user's mouse while Claude tests.
 - Glide textures: s and t go 0..256 over the longer side for every texture size (scale by

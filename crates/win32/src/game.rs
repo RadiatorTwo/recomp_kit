@@ -39,7 +39,8 @@ pub struct Identity {
     pub folder: &'static str,
     /// files and folders next to the EXE the game cannot run without: "febmp.bin", "missions"
     pub required: &'static [&'static str],
-    /// other files `setup` keeps in the game folder (saves, the game's settings): "save.cfg"
+    /// other files of the game folder (saves, the game's settings): "save.cfg"; `setup` moves
+    /// them along when it finds the game somewhere else (it never deletes anything)
     pub game_files: &'static [&'static str],
     /// a file in the CD's video folder (`setup` copies that folder), if the game has one
     pub video_marker: Option<&'static str>,

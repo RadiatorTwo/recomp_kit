@@ -1265,10 +1265,23 @@ fn sleep(c: &mut Cpu) -> u32 {
 /// made in.
 pub static LAST_MISSION: Mutex<String> = Mutex::new(String::new());
 
+/// Whether a host path lies inside the game folder (its folder exists and is below it). The
+/// CD's top folder (the game folder's parent, read as a fallback) is never written.
+fn inside_game(p: &std::path::Path) -> bool {
+    let Some(dir) = p.parent().and_then(|d| std::fs::canonicalize(d).ok()) else { return false };
+    std::fs::canonicalize(super::game_dir()).is_ok_and(|g| dir.starts_with(g))
+}
+
 fn create_file(c: &mut Cpu) -> u32 {
     let (name, access, disp) = (cstr(arg(c, 0)), arg(c, 1), arg(c, 4));
     let path = host_path(&name);
     let write = access & 0x4000_0000 != 0;
+    if (write || matches!(disp, 2 | 5)) && !inside_game(&path) {
+        log!("CreateFileA {name}: writing outside the game folder refused ({})", path.display());
+        set_last_error(5); // ERROR_ACCESS_DENIED
+        return INVALID_HANDLE;
+    }
+
     let mut o = std::fs::OpenOptions::new();
     o.read(access & 0x8000_0000 != 0 || !write).write(write);
     match disp {
@@ -1484,8 +1497,17 @@ fn create_directory(c: &mut Cpu) -> u32 {
     std::fs::create_dir(&p).is_ok() as u32
 }
 
+/// DeleteFileA: only inside the game folder (a name found in the CD's top folder, the parent,
+/// is never deleted).
 fn delete_file(c: &mut Cpu) -> u32 {
-    if std::fs::remove_file(host_path(&cstr(arg(c, 0)))).is_ok() {
+    let name = cstr(arg(c, 0));
+    let path = host_path(&name);
+    if !inside_game(&path) {
+        log!("DeleteFileA {name}: outside the game folder, kept ({})", path.display());
+        set_last_error(5); // ERROR_ACCESS_DENIED
+        return 0;
+    }
+    if std::fs::remove_file(&path).is_ok() {
         1
     } else {
         set_last_error(ERROR_FILE_NOT_FOUND);

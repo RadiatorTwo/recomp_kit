@@ -90,6 +90,17 @@ pub fn hide_cursor(hidden: bool) {
     CURSOR_HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
+/// The game draws its own cursor where the mouse is (a menu): the hidden cursor is not caught.
+/// winit keeps a caught hidden cursor in the window's centre on Windows: only the raw motion
+/// would arrive, never where the mouse is.
+static CURSOR_DRAWN: AtomicBool = AtomicBool::new(false);
+
+/// Whether the game now draws its own cursor at the mouse's place (menus) rather than taking
+/// the mouse's motion (missions). Any thread; applied at the next pump.
+pub fn cursor_drawn(drawn: bool) {
+    CURSOR_DRAWN.store(drawn, Ordering::Relaxed);
+}
+
 pub fn on_main() -> bool {
     thread_local! {
         // asked at every Glide call: thread::current() each time cost
@@ -833,9 +844,10 @@ impl App {
     fn catch_cursor(&mut self) {
         let Some(win) = &self.window else { return };
         // a scripted run (<PREFIX>_INPUT, tests) leaves the user's mouse free
-        let catch = self.focused && CURSOR_HIDDEN.load(Ordering::Relaxed) && script_text().is_empty();
+        let hidden = self.focused && CURSOR_HIDDEN.load(Ordering::Relaxed);
+        let catch = hidden && !CURSOR_DRAWN.load(Ordering::Relaxed) && script_text().is_empty();
         // hidden while a gamepad chooses in the menu too (`menupad`)
-        let hide = catch || self.focused && self.pad_focus;
+        let hide = hidden || self.focused && self.pad_focus;
         if hide != self.cursor_hidden {
             self.cursor_hidden = hide;
             win.set_cursor_visible(!hide);
