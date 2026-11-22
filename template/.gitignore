@@ -1,5 +1,5 @@
 target/
-game_files/
+/game_files/
 *.iso
 *.bin
 *.img

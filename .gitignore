@@ -6,3 +6,4 @@ game_files/
 *.cue
 compiled.bin
 shot*/
+!/template/dist/game_files/
