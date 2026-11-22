@@ -40,7 +40,10 @@ pub fn known<'a>(versions: &'a [Version], sha256: &str) -> Option<&'a Version> {
 /// SHA-256 of a file's bytes, lower-case hex.
 pub fn sha256(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The version of this EXE, if it is one of `versions`.
@@ -54,7 +57,12 @@ pub fn select(v: &Version) {
         return;
     }
     let (mut runs, mut gone) = (Vec::new(), Vec::new());
-    for l in v.map.unwrap_or("").lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+    for l in v
+        .map
+        .unwrap_or("")
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
         let mut w = l.split_whitespace();
         let a = u32::from_str_radix(w.next().unwrap(), 16).expect("address map");
         match w.next().unwrap() {

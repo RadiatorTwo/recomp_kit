@@ -22,8 +22,8 @@
 
 use super::gl::{compile, texture};
 use super::{arg, log, mem, thunk, thunk_not_implemented};
-use recomp::rt::{Cpu, EDX};
 use glow::HasContext;
+use recomp::rt::{Cpu, EDX};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -151,10 +151,15 @@ static FILTER: AtomicU32 = AtomicU32::new(16);
 
 /// The saved choice (default: anisotropic 16x); `<PREFIX>_FILTER=<n>` overrides it.
 pub fn filtering() -> u32 {
-    if let Some(n) = recomp::config::env("FILTER").ok_or(()).ok().and_then(|v| v.parse().ok()) {
+    if let Some(n) = recomp::config::env("FILTER")
+        .ok_or(())
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
         return n;
     }
-    let v = super::advapi32::value("", "TextureFilter").and_then(|(_, d)| Some(u32::from_le_bytes(d.get(..4)?.try_into().ok()?)));
+    let v = super::advapi32::value("", "TextureFilter")
+        .and_then(|(_, d)| Some(u32::from_le_bytes(d.get(..4)?.try_into().ok()?)));
     v.filter(|v| FILTER_CHOICES.contains(v)).unwrap_or(16)
 }
 
@@ -164,10 +169,15 @@ static MSAA: AtomicU32 = AtomicU32::new(4);
 
 /// The saved choice (REG_DWORD `Msaa`, default 4x); `<PREFIX>_MSAA=<n>` overrides it.
 pub fn msaa() -> u32 {
-    if let Some(n) = recomp::config::env("MSAA").ok_or(()).ok().and_then(|v| v.parse().ok()) {
+    if let Some(n) = recomp::config::env("MSAA")
+        .ok_or(())
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
         return n;
     }
-    let v = super::advapi32::value("", "Msaa").and_then(|(_, d)| Some(u32::from_le_bytes(d.get(..4)?.try_into().ok()?)));
+    let v = super::advapi32::value("", "Msaa")
+        .and_then(|(_, d)| Some(u32::from_le_bytes(d.get(..4)?.try_into().ok()?)));
     v.filter(|v| MSAA_CHOICES.contains(v)).unwrap_or(4)
 }
 
@@ -289,7 +299,12 @@ impl Local {
             vertex_layout(gl);
             let empty = gl.create_vertex_array().expect("GL vertex array");
             let fbo = || gl.create_framebuffer().expect("GL framebuffer");
-            Local { vao, empty, fbos: HashMap::new(), copy: [fbo(), fbo()] }
+            Local {
+                vao,
+                empty,
+                fbos: HashMap::new(),
+                copy: [fbo(), fbo()],
+            }
         }
     }
 
@@ -308,7 +323,14 @@ impl Local {
 /// The batched vertices' layout (see `VERTEX`), for the vertex array bound.
 fn vertex_layout(gl: &glow::Context) {
     unsafe {
-        for (loc, n, off) in [(0, 2, 0), (1, 4, 8), (2, 3, 24), (3, 4, 36), (5, 4, 68), (6, 2, 84)] {
+        for (loc, n, off) in [
+            (0, 2, 0),
+            (1, 4, 8),
+            (2, 3, 24),
+            (3, 4, 36),
+            (5, 4, 68),
+            (6, 2, 84),
+        ] {
             gl.enable_vertex_attrib_array(loc);
             gl.vertex_attrib_pointer_f32(loc, n, glow::FLOAT, false, 4 * VERTEX as i32, off);
         }
@@ -619,7 +641,9 @@ pub fn texture_addresses() -> Vec<u32> {
 
 /// The aspect drawn for a window of aspect `a` (None: Glide closes): the game's choice.
 fn aspect(a: Option<f32>) -> f32 {
-    crate::game::game().glide().map_or(4.0 / 3.0, |x| x.aspect(a))
+    crate::game::game()
+        .glide()
+        .map_or(4.0 / 3.0, |x| x.aspect(a))
 }
 
 fn with<R>(f: impl FnOnce(&mut Glide, &glow::Context) -> R) -> Option<R> {
@@ -687,8 +711,16 @@ unsafe fn layer_array(gl: &glow::Context, format: u32, n: u32) -> glow::Texture 
     unsafe {
         let t = gl.create_texture().expect("GL texture");
         gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(t));
-        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D_ARRAY,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR_MIPMAP_LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D_ARRAY,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
         for p in [glow::TEXTURE_WRAP_S, glow::TEXTURE_WRAP_T] {
             gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, p, glow::CLAMP_TO_EDGE as i32);
         }
@@ -716,7 +748,12 @@ fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
         let px: [u8; 4] = match format {
             0xb => {
                 let v = m.rd16(data + 2 * k) as u32;
-                [e5(v >> 10 & 31), e5(v >> 5 & 31), e5(v & 31), if v & 0x8000 != 0 { 255 } else { 0 }]
+                [
+                    e5(v >> 10 & 31),
+                    e5(v >> 5 & 31),
+                    e5(v & 31),
+                    if v & 0x8000 != 0 { 255 } else { 0 },
+                ]
             }
             0xa => {
                 let v = m.rd16(data + 2 * k) as u32;
@@ -733,7 +770,12 @@ fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
             }
             0 => {
                 let v = m.rd8(data + k) as u32;
-                [(v >> 5) as u8 * 36, (v >> 2 & 7) as u8 * 36, (v & 3) as u8 * 85, 255]
+                [
+                    (v >> 5) as u8 * 36,
+                    (v >> 2 & 7) as u8 * 36,
+                    (v & 3) as u8 * 85,
+                    255,
+                ]
             }
             2 => [255, 255, 255, m.rd8(data + k)],
             3 => {
@@ -778,27 +820,78 @@ impl Hd {
         unsafe {
             let array = gl.create_texture().expect("GL texture");
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(array));
-            gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MIN_FILTER, glow::LINEAR_MIPMAP_LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D_ARRAY,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR_MIPMAP_LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D_ARRAY,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
             for p in [glow::TEXTURE_WRAP_S, glow::TEXTURE_WRAP_T] {
                 gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, p, glow::CLAMP_TO_EDGE as i32);
             }
-            gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, LEVELS + scale.trailing_zeros() as i32, glow::RGBA8, size, size, HD_LAYERS as i32);
-            Some(Hd { array, scale, stale: false })
+            gl.tex_storage_3d(
+                glow::TEXTURE_2D_ARRAY,
+                LEVELS + scale.trailing_zeros() as i32,
+                glow::RGBA8,
+                size,
+                size,
+                HD_LAYERS as i32,
+            );
+            Some(Hd {
+                array,
+                scale,
+                stale: false,
+            })
         }
     }
 
     /// Rows `r0..=r1` of the original texture (`w` wide, in `layer` of `array`) scaled up into
     /// the replacement's `hd_layer`.
-    fn scale_up(&mut self, gl: &glow::Context, [read, draw]: [glow::Framebuffer; 2], array: glow::Texture, layer: u32, hd_layer: u32, w: u32, (r0, r1): (u32, u32)) {
+    fn scale_up(
+        &mut self,
+        gl: &glow::Context,
+        [read, draw]: [glow::Framebuffer; 2],
+        array: glow::Texture,
+        layer: u32,
+        hd_layer: u32,
+        w: u32,
+        (r0, r1): (u32, u32),
+    ) {
         let k = self.scale as i32;
         let (w, r0, r1) = (w as i32, r0 as i32, r1 as i32 + 1);
         unsafe {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(read));
-            gl.framebuffer_texture_layer(glow::READ_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, Some(array), 0, layer as i32);
+            gl.framebuffer_texture_layer(
+                glow::READ_FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                Some(array),
+                0,
+                layer as i32,
+            );
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(draw));
-            gl.framebuffer_texture_layer(glow::DRAW_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, Some(self.array), 0, hd_layer as i32);
-            gl.blit_framebuffer(0, r0, w, r1, 0, r0 * k, w * k, r1 * k, glow::COLOR_BUFFER_BIT, glow::LINEAR);
+            gl.framebuffer_texture_layer(
+                glow::DRAW_FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                Some(self.array),
+                0,
+                hd_layer as i32,
+            );
+            gl.blit_framebuffer(
+                0,
+                r0,
+                w,
+                r1,
+                0,
+                r0 * k,
+                w * k,
+                r1 * k,
+                glow::COLOR_BUFFER_BIT,
+                glow::LINEAR,
+            );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
         self.stale = true;
@@ -818,7 +911,19 @@ impl Hd {
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.array));
             let y = (r0 * self.scale) as i32;
-            gl.tex_sub_image_3d(glow::TEXTURE_2D_ARRAY, 0, 0, y, hd_layer as i32, img.w as i32, img.h as i32, 1, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(Some(&px)));
+            gl.tex_sub_image_3d(
+                glow::TEXTURE_2D_ARRAY,
+                0,
+                0,
+                y,
+                hd_layer as i32,
+                img.w as i32,
+                img.h as i32,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&px)),
+            );
         }
         self.stale = true;
     }
@@ -829,20 +934,42 @@ impl Glide {
         let target = (w, w * 3 / 4);
         unsafe {
             let color = texture(gl, true);
-            gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, target.0 as i32, target.1 as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                target.0 as i32,
+                target.1 as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
             let prog = compile(gl, VS, FS);
             let vbo = gl.create_buffer().expect("GL buffer");
-            let aniso_max = if gl.supported_extensions().iter().any(|e| e.ends_with("texture_filter_anisotropic")) {
+            let aniso_max = if gl
+                .supported_extensions()
+                .iter()
+                .any(|e| e.ends_with("texture_filter_anisotropic"))
+            {
                 gl.get_parameter_f32(glow::MAX_TEXTURE_MAX_ANISOTROPY_EXT)
             } else {
                 1.0
             };
             let array = layer_array(gl, glow::RGBA8, LAYERS);
             let alpha = layer_array(gl, glow::RG8, LAYERS);
-            let max_layers = (gl.get_parameter_i32(glow::MAX_ARRAY_TEXTURE_LAYERS).max(LAYERS as i32) as u32).min(MAX_LAYERS);
+            let max_layers = (gl
+                .get_parameter_i32(glow::MAX_ARRAY_TEXTURE_LAYERS)
+                .max(LAYERS as i32) as u32)
+                .min(MAX_LAYERS);
             let depth_rb = gl.create_renderbuffer().expect("GL renderbuffer");
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth_rb));
-            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT32F, target.0 as i32, target.1 as i32);
+            gl.renderbuffer_storage(
+                glow::RENDERBUFFER,
+                glow::DEPTH_COMPONENT32F,
+                target.0 as i32,
+                target.1 as i32,
+            );
             let blit = (compile(gl, BLIT_VS, BLIT_FS), texture(gl, false));
             Glide {
                 res: (w, h),
@@ -905,31 +1032,64 @@ impl Glide {
     /// This thread's own GL objects.
     fn local(&mut self, gl: &glow::Context) -> &mut Local {
         let vbo = self.vbo;
-        self.locals.entry(thread_id()).or_insert_with(|| Local::new(gl, vbo))
+        self.locals
+            .entry(thread_id())
+            .or_insert_with(|| Local::new(gl, vbo))
     }
 
     /// This thread's framebuffer drawing into `color`.
     fn color_fbo(&mut self, gl: &glow::Context) -> glow::Framebuffer {
         let (color, depth) = (self.color, self.depth_rb);
-        *self.local(gl).fbos.entry((true, color.0.get() as u64)).or_insert_with(|| unsafe {
-            let f = gl.create_framebuffer().expect("GL framebuffer");
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
-            gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(color), 0);
-            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(depth));
-            f
-        })
+        *self
+            .local(gl)
+            .fbos
+            .entry((true, color.0.get() as u64))
+            .or_insert_with(|| unsafe {
+                let f = gl.create_framebuffer().expect("GL framebuffer");
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
+                gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(color),
+                    0,
+                );
+                gl.framebuffer_renderbuffer(
+                    glow::FRAMEBUFFER,
+                    glow::DEPTH_ATTACHMENT,
+                    glow::RENDERBUFFER,
+                    Some(depth),
+                );
+                f
+            })
     }
 
     /// This thread's framebuffer drawing into the multisampled renderbuffer, if there is one.
     fn ms_fbo(&mut self, gl: &glow::Context) -> Option<glow::Framebuffer> {
         let (rb, _, n, depth) = self.ms?;
-        Some(*self.local(gl).fbos.entry((false, n)).or_insert_with(|| unsafe {
-            let f = gl.create_framebuffer().expect("GL framebuffer");
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
-            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::RENDERBUFFER, Some(rb));
-            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(depth));
-            f
-        }))
+        Some(
+            *self
+                .local(gl)
+                .fbos
+                .entry((false, n))
+                .or_insert_with(|| unsafe {
+                    let f = gl.create_framebuffer().expect("GL framebuffer");
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
+                    gl.framebuffer_renderbuffer(
+                        glow::FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        glow::RENDERBUFFER,
+                        Some(rb),
+                    );
+                    gl.framebuffer_renderbuffer(
+                        glow::FRAMEBUFFER,
+                        glow::DEPTH_ATTACHMENT,
+                        glow::RENDERBUFFER,
+                        Some(depth),
+                    );
+                    f
+                }),
+        )
     }
 
     /// The view's rectangle in the target (x, y from the top, w, h) and the columns it is cut to.
@@ -952,9 +1112,17 @@ impl Glide {
         let (sx, sy) = (vw / self.res.0 as f32, vh / self.res.1 as f32);
         let x0 = (vx + c[0] as f32 * sx).max(cut0).round() as i32;
         let x1 = (vx + c[2] as f32 * sx).min(cut1).round() as i32;
-        let (y0, y1) = ((vy + c[1] as f32 * sy).round() as i32, (vy + c[3] as f32 * sy).round() as i32);
+        let (y0, y1) = (
+            (vy + c[1] as f32 * sy).round() as i32,
+            (vy + c[3] as f32 * sy).round() as i32,
+        );
         unsafe {
-            gl.viewport(vx.round() as i32, (th - vy - vh).round() as i32, vw.round() as i32, vh.round() as i32);
+            gl.viewport(
+                vx.round() as i32,
+                (th - vy - vh).round() as i32,
+                vw.round() as i32,
+                vh.round() as i32,
+            );
             gl.enable(glow::SCISSOR_TEST);
             gl.scissor(x0, th as i32 - y1, (x1 - x0).max(0), (y1 - y0).max(0));
         }
@@ -973,9 +1141,24 @@ impl Glide {
         self.target = (w, h);
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.color));
-            gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                w as i32,
+                h as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(self.depth_rb));
-            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT32F, w as i32, h as i32);
+            gl.renderbuffer_storage(
+                glow::RENDERBUFFER,
+                glow::DEPTH_COMPONENT32F,
+                w as i32,
+                h as i32,
+            );
             let fbo = self.color_fbo(gl);
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
             gl.disable(glow::SCISSOR_TEST);
@@ -1010,10 +1193,22 @@ impl Glide {
             let (w, h) = (self.target.0 as i32, self.target.1 as i32);
             let rb = gl.create_renderbuffer().expect("GL renderbuffer");
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(rb));
-            gl.renderbuffer_storage_multisample(glow::RENDERBUFFER, samples as i32, glow::RGBA8, w, h);
+            gl.renderbuffer_storage_multisample(
+                glow::RENDERBUFFER,
+                samples as i32,
+                glow::RGBA8,
+                w,
+                h,
+            );
             let depth = gl.create_renderbuffer().expect("GL renderbuffer");
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
-            gl.renderbuffer_storage_multisample(glow::RENDERBUFFER, samples as i32, glow::DEPTH_COMPONENT32F, w, h);
+            gl.renderbuffer_storage_multisample(
+                glow::RENDERBUFFER,
+                samples as i32,
+                glow::DEPTH_COMPONENT32F,
+                w,
+                h,
+            );
             self.made += 1;
             self.ms = Some((rb, samples, self.made, depth));
             let fbo = self.ms_fbo(gl).unwrap();
@@ -1043,7 +1238,18 @@ impl Glide {
                 gl.disable(glow::SCISSOR_TEST);
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
                 gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(color));
-                gl.blit_framebuffer(0, 0, w, h, 0, 0, w, h, glow::COLOR_BUFFER_BIT, glow::NEAREST);
+                gl.blit_framebuffer(
+                    0,
+                    0,
+                    w,
+                    h,
+                    0,
+                    0,
+                    w,
+                    h,
+                    glow::COLOR_BUFFER_BIT,
+                    glow::NEAREST,
+                );
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             }
         }
@@ -1079,31 +1285,56 @@ impl Glide {
                     hd.stale = false;
                 }
                 if aniso != self.aniso && self.aniso_max > 1.0 {
-                    gl.tex_parameter_f32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+                    gl.tex_parameter_f32(
+                        glow::TEXTURE_2D_ARRAY,
+                        glow::TEXTURE_MAX_ANISOTROPY_EXT,
+                        aniso,
+                    );
                 }
             }
             for (k, t) in [(glow::TEXTURE1, self.alpha), (glow::TEXTURE0, self.array)] {
                 gl.active_texture(k);
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(t));
                 if aniso != self.aniso && self.aniso_max > 1.0 {
-                    gl.tex_parameter_f32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+                    gl.tex_parameter_f32(
+                        glow::TEXTURE_2D_ARRAY,
+                        glow::TEXTURE_MAX_ANISOTROPY_EXT,
+                        aniso,
+                    );
                 }
             }
             self.aniso = aniso;
             gl.uniform_2_i32(u.clamp_st.as_ref(), s.clamp.0 as i32, s.clamp.1 as i32);
             gl.uniform_1_i32(u.chroma.as_ref(), s.chroma as i32);
             let key = s.key;
-            gl.uniform_3_f32(u.key.as_ref(), (key >> 16 & 0xff) as f32 / 255.0, (key >> 8 & 0xff) as f32 / 255.0, (key & 0xff) as f32 / 255.0);
+            gl.uniform_3_f32(
+                u.key.as_ref(),
+                (key >> 16 & 0xff) as f32 / 255.0,
+                (key >> 8 & 0xff) as f32 / 255.0,
+                (key & 0xff) as f32 / 255.0,
+            );
             gl.uniform_1_i32(u.linear_filter.as_ref(), s.linear as i32);
             // blending: Glide factors 0 zero, 1 src alpha, 2 src/dst colour, 3 dst alpha, 4 one,
             // 5 1 - src alpha, 6 1 - src/dst colour, 7 1 - dst alpha
             let factor = |f: u32, dst: bool| match f {
                 0 => glow::ZERO,
                 1 => glow::SRC_ALPHA,
-                2 => if dst { glow::SRC_COLOR } else { glow::DST_COLOR },
+                2 => {
+                    if dst {
+                        glow::SRC_COLOR
+                    } else {
+                        glow::DST_COLOR
+                    }
+                }
                 3 => glow::DST_ALPHA,
                 5 => glow::ONE_MINUS_SRC_ALPHA,
-                6 => if dst { glow::ONE_MINUS_SRC_COLOR } else { glow::ONE_MINUS_DST_COLOR },
+                6 => {
+                    if dst {
+                        glow::ONE_MINUS_SRC_COLOR
+                    } else {
+                        glow::ONE_MINUS_DST_COLOR
+                    }
+                }
                 7 => glow::ONE_MINUS_DST_ALPHA,
                 _ => glow::ONE,
             };
@@ -1151,22 +1382,57 @@ impl Glide {
                 let w = depth == 2;
                 gl.depth_func(match s.depth_func & 7 {
                     0 => glow::NEVER,
-                    1 => if w { glow::GREATER } else { glow::LESS },
+                    1 => {
+                        if w {
+                            glow::GREATER
+                        } else {
+                            glow::LESS
+                        }
+                    }
                     2 => glow::EQUAL,
-                    3 => if w { glow::GEQUAL } else { glow::LEQUAL },
-                    4 => if w { glow::LESS } else { glow::GREATER },
+                    3 => {
+                        if w {
+                            glow::GEQUAL
+                        } else {
+                            glow::LEQUAL
+                        }
+                    }
+                    4 => {
+                        if w {
+                            glow::LESS
+                        } else {
+                            glow::GREATER
+                        }
+                    }
                     5 => glow::NOTEQUAL,
-                    6 => if w { glow::LEQUAL } else { glow::GEQUAL },
+                    6 => {
+                        if w {
+                            glow::LEQUAL
+                        } else {
+                            glow::GEQUAL
+                        }
+                    }
                     _ => glow::ALWAYS,
                 });
             }
             gl.depth_mask(depth != 0 && s.depth_mask);
-            gl.color_mask(s.color_mask.0, s.color_mask.0, s.color_mask.0, s.color_mask.1);
+            gl.color_mask(
+                s.color_mask.0,
+                s.color_mask.0,
+                s.color_mask.0,
+                s.color_mask.1,
+            );
             gl.uniform_1_i32(u.fog_mode.as_ref(), s.fog as i32);
             let fc = s.fog_color;
-            gl.uniform_3_f32(u.fog_color.as_ref(), (fc >> 16 & 0xff) as f32 / 255.0, (fc >> 8 & 0xff) as f32 / 255.0, (fc & 0xff) as f32 / 255.0);
+            gl.uniform_3_f32(
+                u.fog_color.as_ref(),
+                (fc >> 16 & 0xff) as f32 / 255.0,
+                (fc >> 8 & 0xff) as f32 / 255.0,
+                (fc & 0xff) as f32 / 255.0,
+            );
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
-            let bytes = std::slice::from_raw_parts(self.batch.as_ptr() as *const u8, self.batch.len() * 4);
+            let bytes =
+                std::slice::from_raw_parts(self.batch.as_ptr() as *const u8, self.batch.len() * 4);
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
             gl.draw_arrays(self.batch_mode, 0, (self.batch.len() / VERTEX) as i32);
             gl.disable(glow::SCISSOR_TEST);
@@ -1217,13 +1483,22 @@ impl Glide {
         let mode = [
             bytes(self.cc),
             bytes(self.ac),
-            (self.cc[4] & 1) | (self.ac[4] & 1) << 1 | (tex.is_some() as u32) << 2 | (self.tex_alpha_zero as u32) << 3 | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 20),
+            (self.cc[4] & 1)
+                | (self.ac[4] & 1) << 1
+                | (tex.is_some() as u32) << 2
+                | (self.tex_alpha_zero as u32) << 3
+                | tex.map_or(0, |t| t.layer << 8 | t.hd.map_or(0, |l| l + 1) << 20),
             tex.map_or(0, |t| t.w | t.h << 10) | self.alpha_test.0 << 20 | self.alpha_test.1 << 24,
         ];
         // x y z r g b ooz a oow, then tmu 0: sow tow oow. Glide's s and t go 0..256 over the
         // texture's longer side whatever its size: in texels times its size / 256
         let k = tex.map_or(1.0, |t| t.w.max(t.h) as f32 / 256.0);
-        let sow = |v: u32| (f32::from_bits(m.rd32(v + 0x24)) * k, f32::from_bits(m.rd32(v + 0x28)) * k);
+        let sow = |v: u32| {
+            (
+                f32::from_bits(m.rd32(v + 0x24)) * k,
+                f32::from_bits(m.rd32(v + 0x28)) * k,
+            )
+        };
         // tmu 0's oow, else the vertex's (games that leave it 0: Recoil)
         let q = |v: u32| match f32::from_bits(m.rd32(v + 0x2c)) {
             0.0 => match f32::from_bits(m.rd32(v + 0x20)) {
@@ -1249,11 +1524,22 @@ impl Glide {
             (f32::from_bits(m.rd32(v)), flip.map_or(y, |h| h - y))
         };
         // a line: a quad as wide as the game's line at its resolution
-        let quad = if let [v0, v1] = *verts { Some(self.line_offsets(xy(v0), xy(v1))) } else { None };
+        let quad = if let [v0, v1] = *verts {
+            Some(self.line_offsets(xy(v0), xy(v1)))
+        } else {
+            None
+        };
         let mut put = |v: u32, (x, y): (f32, f32)| {
             // tmu 0's sow tow oow, interpolated linearly on the screen and divided per pixel
             let q = q(v);
-            self.batch.extend([x.to_bits(), y.to_bits(), m.rd32(v + 0xc), m.rd32(v + 0x10), m.rd32(v + 0x14), m.rd32(v + 0x1c)]);
+            self.batch.extend([
+                x.to_bits(),
+                y.to_bits(),
+                m.rd32(v + 0xc),
+                m.rd32(v + 0x10),
+                m.rd32(v + 0x14),
+                m.rd32(v + 0x1c),
+            ]);
             let (s, t) = sow(v);
             self.batch.extend([s.to_bits(), t.to_bits(), q.to_bits()]);
             self.batch.extend(konst);
@@ -1286,10 +1572,19 @@ impl Glide {
         let width = (self.target.1 as f32 / 720.0).round().max(1.0);
         let (dx, dy) = ((b.0 - a.0) * kx, (b.1 - a.1) * ky);
         let len = (dx * dx + dy * dy).sqrt();
-        let (ux, uy) = if len > 0.0 { (dx / len, dy / len) } else { (1.0, 0.0) };
+        let (ux, uy) = if len > 0.0 {
+            (dx / len, dy / len)
+        } else {
+            (1.0, 0.0)
+        };
         let h = width / 2.0;
         // along (u) and across (n = u turned) in pixels, back to the space's units
-        let p = |o: (f32, f32), along: f32, across: f32| (o.0 + (ux * along - uy * across) / kx, o.1 + (uy * along + ux * across) / ky);
+        let p = |o: (f32, f32), along: f32, across: f32| {
+            (
+                o.0 + (ux * along - uy * across) / kx,
+                o.1 + (uy * along + ux * across) / ky,
+            )
+        };
         [p(a, -h, -h), p(a, -h, h), p(b, h, -h), p(b, h, h)]
     }
 
@@ -1302,7 +1597,15 @@ impl Glide {
         let fbo = self.color_fbo(gl);
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-            gl.read_pixels(0, 0, tw as i32, th as i32, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(&mut px)));
+            gl.read_pixels(
+                0,
+                0,
+                tw as i32,
+                th as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut px)),
+            );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
         // nearest target pixel of each screen pixel, in the view's rectangle (GL rows from
@@ -1324,7 +1627,13 @@ impl Glide {
 
     /// RGBA pixels (`w` x `h`, rows from the top) over the picture at screen position `x`, `y`
     /// (from the top); transparent ones are left out.
-    fn draw_pixels(&mut self, gl: &glow::Context, (x, y): (i32, i32), (w, h): (u32, u32), rgba: &[u8]) {
+    fn draw_pixels(
+        &mut self,
+        gl: &glow::Context,
+        (x, y): (i32, i32),
+        (w, h): (u32, u32),
+        rgba: &[u8],
+    ) {
         self.flush(gl);
         let fbo = self.draw_fbo(gl);
         let empty = self.local(gl).empty;
@@ -1335,13 +1644,34 @@ impl Glide {
             self.scissor(gl, [0, 0, self.res.0 as i32, self.res.1 as i32]);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(Some(rgba)));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                w as i32,
+                h as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(rgba)),
+            );
             gl.use_program(Some(prog));
             gl.uniform_1_i32(gl.get_uniform_location(prog, "img").as_ref(), 0);
             let nx = |v: f32| v / sw * 2.0 - 1.0;
             let ny = |v: f32| 1.0 - v / sh * 2.0;
-            let r = [nx(x as f32), ny((y + h as i32) as f32), nx((x + w as i32) as f32), ny(y as f32)];
-            gl.uniform_4_f32(gl.get_uniform_location(prog, "rect").as_ref(), r[0], r[1], r[2], r[3]);
+            let r = [
+                nx(x as f32),
+                ny((y + h as i32) as f32),
+                nx((x + w as i32) as f32),
+                ny(y as f32),
+            ];
+            gl.uniform_4_f32(
+                gl.get_uniform_location(prog, "rect").as_ref(),
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+            );
             gl.bind_vertex_array(Some(empty));
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             gl.disable(glow::SCISSOR_TEST);
@@ -1371,11 +1701,19 @@ impl Glide {
             for y in 0..h {
                 let row = if lower { h - 1 - y } else { y };
                 for x in 0..w {
-                    m.wr16(buf + row * LFB_STRIDE + 2 * x, to_565(px[(y * w + x) as usize]));
+                    m.wr16(
+                        buf + row * LFB_STRIDE + 2 * x,
+                        to_565(px[(y * w + x) as usize]),
+                    );
                 }
             }
         }
-        self.lfb = Some(Lfb { buf, write, mode, lower });
+        self.lfb = Some(Lfb {
+            buf,
+            write,
+            mode,
+            lower,
+        });
         buf
     }
 
@@ -1405,7 +1743,16 @@ impl Glide {
     }
 
     /// Texels into the texture at TMU address `addr` (rows `rows` of its top level, or all).
-    fn download(&mut self, gl: &glow::Context, addr: u32, lod: u32, aspect: u32, format: u32, data: u32, rows: Option<(u32, u32)>) {
+    fn download(
+        &mut self,
+        gl: &glow::Context,
+        addr: u32,
+        lod: u32,
+        aspect: u32,
+        format: u32,
+        data: u32,
+        rows: Option<(u32, u32)>,
+    ) {
         let (w, h) = lod_size(lod, aspect);
         let bpt = bytes_per_texel(format);
         let bytes = w * h * bpt;
@@ -1414,11 +1761,18 @@ impl Glide {
         let (r0, r1) = rows.unwrap_or((0, h - 1));
         let r1 = r1.min(h - 1);
         // the same texels again: nothing to do (and no flush)
-        let src: Option<&[u8]> = (r0 <= r1).then(|| &*mem().slice(data, ((r1 - r0 + 1) * w * bpt) as usize));
+        let src: Option<&[u8]> =
+            (r0 <= r1).then(|| &*mem().slice(data, ((r1 - r0 + 1) * w * bpt) as usize));
         let at = (r0 * w * bpt) as usize;
         if let (Some(t), Some(src)) = (self.textures.get_mut(&addr), src) {
-            let known = t.known.get(r0 as usize..=r1 as usize).is_some_and(|k| k.iter().all(|&k| k));
-            if (t.w, t.h, t.bytes, t.format) == (w, h, bytes, format) && known && t.raw[at..at + src.len()] == src[..] {
+            let known = t
+                .known
+                .get(r0 as usize..=r1 as usize)
+                .is_some_and(|k| k.iter().all(|&k| k));
+            if (t.w, t.h, t.bytes, t.format) == (w, h, bytes, format)
+                && known
+                && t.raw[at..at + src.len()] == src[..]
+            {
                 t.stamp = stamp;
                 return;
             }
@@ -1435,17 +1789,36 @@ impl Glide {
             _ => {
                 // what it overwrites in TMU memory is gone; then a free layer, or the one
                 // downloaded longest ago
-                self.textures.retain(|&a, t| a + t.bytes <= addr || addr + bytes <= a);
+                self.textures
+                    .retain(|&a, t| a + t.bytes <= addr || addr + bytes <= a);
                 if self.textures.len() as u32 >= self.layers && self.layers < self.max_layers {
                     self.grow(gl);
                 }
-                let layer = (0..self.layers).find(|l| self.textures.values().all(|t| t.layer != *l)).unwrap_or_else(|| {
-                    let (&a, t) = self.textures.iter().min_by_key(|t| t.1.stamp).unwrap();
-                    let l = t.layer;
-                    self.textures.remove(&a);
-                    l
-                });
-                self.textures.insert(addr, Texture { layer, w, h, bytes, stamp, hd: None, raw: vec![0; bytes as usize], known: vec![false; h as usize], format, staged: vec![0; (w * h * 4) as usize], staged_alpha: vec![0; (w * h * 2) as usize], pending: None });
+                let layer = (0..self.layers)
+                    .find(|l| self.textures.values().all(|t| t.layer != *l))
+                    .unwrap_or_else(|| {
+                        let (&a, t) = self.textures.iter().min_by_key(|t| t.1.stamp).unwrap();
+                        let l = t.layer;
+                        self.textures.remove(&a);
+                        l
+                    });
+                self.textures.insert(
+                    addr,
+                    Texture {
+                        layer,
+                        w,
+                        h,
+                        bytes,
+                        stamp,
+                        hd: None,
+                        raw: vec![0; bytes as usize],
+                        known: vec![false; h as usize],
+                        format,
+                        staged: vec![0; (w * h * 4) as usize],
+                        staged_alpha: vec![0; (w * h * 2) as usize],
+                        pending: None,
+                    },
+                );
                 layer
             }
         };
@@ -1457,12 +1830,20 @@ impl Glide {
         }
         let n = ((r1 - r0 + 1) * w) as usize;
         let mut px = convert(format, data, n);
-        let key = super::hd::hash(format, w, r1 - r0 + 1, mem().slice(data, n * bytes_per_texel(format) as usize));
+        let key = super::hd::hash(
+            format,
+            w,
+            r1 - r0 + 1,
+            mem().slice(data, n * bytes_per_texel(format) as usize),
+        );
         if let Some(x) = crate::game::game().glide() {
             x.recolour(key, &mut px);
         }
         // as a replacement has it: alpha 0 where keyed out
-        let original: Vec<u8> = px.chunks(4).flat_map(|p| [p[0], p[1], p[2], if p[..3] == [0, 0, 0] { 0 } else { 255 }]).collect();
+        let original: Vec<u8> = px
+            .chunks(4)
+            .flat_map(|p| [p[0], p[1], p[2], if p[..3] == [0, 0, 0] { 0 } else { 255 }])
+            .collect();
         super::hd::dump(key, w, r1 - r0 + 1, &original);
         let t = self.textures.get_mut(&addr).unwrap();
         let at = (r0 * w) as usize;
@@ -1470,7 +1851,11 @@ impl Glide {
         // premultiplied by coverage: a black texel is keyed out
         for (k, p) in px.chunks_exact(4).enumerate() {
             let covered = p[..3] != [0, 0, 0];
-            rgb[4 * k..4 * k + 4].copy_from_slice(&if covered { [p[0], p[1], p[2], 255] } else { [0; 4] });
+            rgb[4 * k..4 * k + 4].copy_from_slice(&if covered {
+                [p[0], p[1], p[2], 255]
+            } else {
+                [0; 4]
+            });
             alpha[2 * k..2 * k + 2].copy_from_slice(&if covered { [p[3], 0] } else { [0, p[3]] });
         }
         t.pending = Some(t.pending.map_or((r0, r1), |(a, b)| (a.min(r0), b.max(r1))));
@@ -1505,7 +1890,9 @@ impl Glide {
     /// Upload the rows of the texture at `addr` downloaded since its last upload into its
     /// layer, what was batched before drawn first (with the old texels).
     fn commit(&mut self, gl: &glow::Context, addr: u32) {
-        let Some(t) = self.textures.get_mut(&addr) else { return };
+        let Some(t) = self.textures.get_mut(&addr) else {
+            return;
+        };
         let Some((r0, r1)) = t.pending else { return };
         if !self.batch.is_empty() {
             self.flush(gl);
@@ -1515,7 +1902,18 @@ impl Glide {
         let (w, h, layer) = (t.w as usize, t.h as usize, t.layer);
         let rows = r0 as usize * w..(r1 as usize + 1) * w;
         unsafe {
-            for (tex, format, px) in [(self.array, glow::RGBA, &t.staged[rows.start * 4..rows.end * 4]), (self.alpha, glow::RG, &t.staged_alpha[rows.start * 2..rows.end * 2])] {
+            for (tex, format, px) in [
+                (
+                    self.array,
+                    glow::RGBA,
+                    &t.staged[rows.start * 4..rows.end * 4],
+                ),
+                (
+                    self.alpha,
+                    glow::RG,
+                    &t.staged_alpha[rows.start * 2..rows.end * 2],
+                ),
+            ] {
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(tex));
                 gl.tex_sub_image_3d(
                     glow::TEXTURE_2D_ARRAY,
@@ -1534,7 +1932,10 @@ impl Glide {
             // its mipmaps, from the whole texture (the GPU's generate_mipmap would build every
             // layer's: with hundreds of textures downloaded at a mission's start that took the
             // driver down)
-            for (tex, format, ch, px) in [(self.array, glow::RGBA, 4, &t.staged), (self.alpha, glow::RG, 2, &t.staged_alpha)] {
+            for (tex, format, ch, px) in [
+                (self.array, glow::RGBA, 4, &t.staged),
+                (self.alpha, glow::RG, 2, &t.staged_alpha),
+            ] {
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(tex));
                 let (mut px, mut lw, mut lh) = (px[..w * h * ch].to_vec(), w, h);
                 for level in 1..LEVELS {
@@ -1563,7 +1964,14 @@ impl Glide {
     /// After a download of rows `r0..=r1` (known by `key`) into the texture at `addr`: its
     /// replacement into the replacements' layer, or the original scaled up when other parts of
     /// the page are replaced. A whole page without a replacement gives its layer up.
-    fn replace(&mut self, gl: &glow::Context, addr: u32, key: u64, rows: (u32, u32), original: &[u8]) {
+    fn replace(
+        &mut self,
+        gl: &glow::Context,
+        addr: u32,
+        key: u64,
+        rows: (u32, u32),
+        original: &[u8],
+    ) {
         if self.hd.is_none() {
             return;
         }
@@ -1583,10 +1991,17 @@ impl Glide {
             (None, None) => return,
             (None, Some(_)) => {
                 // a free layer, or the one of the texture downloaded longest ago
-                let l = (0..HD_LAYERS).find(|l| self.textures.values().all(|t| t.hd != Some(*l))).unwrap_or_else(|| {
-                    let t = self.textures.values_mut().filter(|t| t.hd.is_some()).min_by_key(|t| t.stamp).unwrap();
-                    t.hd.take().unwrap()
-                });
+                let l = (0..HD_LAYERS)
+                    .find(|l| self.textures.values().all(|t| t.hd != Some(*l)))
+                    .unwrap_or_else(|| {
+                        let t = self
+                            .textures
+                            .values_mut()
+                            .filter(|t| t.hd.is_some())
+                            .min_by_key(|t| t.stamp)
+                            .unwrap();
+                        t.hd.take().unwrap()
+                    });
                 self.textures.get_mut(&addr).unwrap().hd = Some(l);
                 // the rest of the page as it is
                 if !whole {
@@ -1621,7 +2036,16 @@ fn sst_query_hardware(c: &mut Cpu) -> u32 {
     let m = mem();
     m.slice(p, 0x40).fill(0);
     // one Voodoo with 6 MB frame buffer memory (the game offers up to 1280x960 for it)
-    for (off, v) in [(0, 1), (4, 0), (8, 6), (0xc, 2), (0x10, 1), (0x14, 0), (0x18, 1), (0x1c, TMU_RAM >> 20)] {
+    for (off, v) in [
+        (0, 1),
+        (4, 0),
+        (8, 6),
+        (0xc, 2),
+        (0x10, 1),
+        (0x14, 0),
+        (0x18, 1),
+        (0x1c, TMU_RAM >> 20),
+    ] {
         m.wr32(p + off, v);
     }
     1
@@ -1695,7 +2119,6 @@ fn sst_win_close(_: &mut Cpu) -> u32 {
     1
 }
 
-
 fn buffer_clear(c: &mut Cpu) -> u32 {
     let (color, depth) = (arg(c, 0), arg(c, 2) & 0xffff);
     with(|g, gl| {
@@ -1707,13 +2130,22 @@ fn buffer_clear(c: &mut Cpu) -> u32 {
             g.scissor(gl, s.clip);
             let ch = |sh: u32| (color >> sh & 0xff) as f32 / 255.0;
             gl.clear_color(ch(16), ch(8), ch(0), 1.0);
-            gl.color_mask(s.color_mask.0, s.color_mask.0, s.color_mask.0, s.color_mask.1);
+            gl.color_mask(
+                s.color_mask.0,
+                s.color_mask.0,
+                s.color_mask.0,
+                s.color_mask.1,
+            );
             let mut bits = glow::COLOR_BUFFER_BIT;
             // the depth buffer when it is on and written: z as it is, w turned round (0xffff
             // the farthest)
             if s.depth_mode != 0 && s.depth_mask {
                 let d = depth as f32 / 65535.0;
-                gl.clear_depth_f32(if matches!(s.depth_mode, 2 | 4) { 1.0 - d } else { d });
+                gl.clear_depth_f32(if matches!(s.depth_mode, 2 | 4) {
+                    1.0 - d
+                } else {
+                    d
+                });
                 gl.depth_mask(true);
                 bits |= glow::DEPTH_BUFFER_BIT;
             }
@@ -1787,7 +2219,17 @@ fn color_mask(c: &mut Cpu) -> u32 {
 fn glide_get_state(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
     with(|g, _| {
-        let s = Saved { state: g.state, cc: g.cc, ac: g.ac, constant: g.constant, tex: g.tex, tex_alpha_zero: g.tex_alpha_zero, alpha_test: g.alpha_test, cull: g.cull, lower_left: g.lower_left };
+        let s = Saved {
+            state: g.state,
+            cc: g.cc,
+            ac: g.ac,
+            constant: g.constant,
+            tex: g.tex,
+            tex_alpha_zero: g.tex_alpha_zero,
+            alpha_test: g.alpha_test,
+            cull: g.cull,
+            lower_left: g.lower_left,
+        };
         g.saved.insert(p, s);
     });
     0
@@ -1796,9 +2238,29 @@ fn glide_get_state(c: &mut Cpu) -> u32 {
 fn glide_set_state(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
     with(|g, gl| {
-        let Some(s) = g.saved.get(&p).copied() else { return };
+        let Some(s) = g.saved.get(&p).copied() else {
+            return;
+        };
         g.set(gl, |st| *st = s.state);
-        (g.cc, g.ac, g.constant, g.tex, g.tex_alpha_zero, g.alpha_test, g.cull, g.lower_left) = (s.cc, s.ac, s.constant, s.tex, s.tex_alpha_zero, s.alpha_test, s.cull, s.lower_left);
+        (
+            g.cc,
+            g.ac,
+            g.constant,
+            g.tex,
+            g.tex_alpha_zero,
+            g.alpha_test,
+            g.cull,
+            g.lower_left,
+        ) = (
+            s.cc,
+            s.ac,
+            s.constant,
+            s.tex,
+            s.tex_alpha_zero,
+            s.alpha_test,
+            s.cull,
+            s.lower_left,
+        );
     });
     0
 }
@@ -1813,7 +2275,9 @@ fn lfb_lock(c: &mut Cpu) -> u32 {
         log!("warn: grLfbLock write mode {mode:#x} not supported");
     }
     let lower = origin == 1;
-    let Some(buf) = with(|g, gl| g.lfb_lock(gl, write, mode, lower)) else { return 0 };
+    let Some(buf) = with(|g, gl| g.lfb_lock(gl, write, mode, lower)) else {
+        return 0;
+    };
     let m = mem();
     m.wr32(info + 4, buf);
     m.wr32(info + 8, LFB_STRIDE);
@@ -1830,7 +2294,15 @@ fn lfb_unlock(_: &mut Cpu) -> u32 {
 /// grLfbWriteRegion(buffer, x, y, source format, w, h, stride, data): source formats 565 (0),
 /// 555 (1), 1555 (2), 888 (4), 8888 (5).
 fn lfb_write_region(c: &mut Cpu) -> u32 {
-    let (x, y, fmt, w, h, stride, data) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6), arg(c, 7));
+    let (x, y, fmt, w, h, stride, data) = (
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 6),
+        arg(c, 7),
+    );
     let m = mem();
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for r in 0..h {
@@ -1847,8 +2319,20 @@ fn lfb_write_region(c: &mut Cpu) -> u32 {
         }
     }
     with(|g, gl| {
-        let y = if g.lower_left { g.res.1 as i32 - (y + h) as i32 } else { y as i32 };
-        let rgba = if g.lower_left { rgba.chunks((w * 4) as usize).rev().flatten().copied().collect() } else { rgba };
+        let y = if g.lower_left {
+            g.res.1 as i32 - (y + h) as i32
+        } else {
+            y as i32
+        };
+        let rgba = if g.lower_left {
+            rgba.chunks((w * 4) as usize)
+                .rev()
+                .flatten()
+                .copied()
+                .collect()
+        } else {
+            rgba
+        };
         g.draw_pixels(gl, (x as i32, y), (w, h), &rgba);
     });
     1
@@ -1856,16 +2340,30 @@ fn lfb_write_region(c: &mut Cpu) -> u32 {
 
 /// grLfbReadRegion(buffer, x, y, w, h, stride, data): the picture so far as 565.
 fn lfb_read_region(c: &mut Cpu) -> u32 {
-    let (x, y, w, h, stride, data) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6));
+    let (x, y, w, h, stride, data) = (
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 6),
+    );
     with(|g, gl| {
         let px = g.read_screen(gl);
         let (sw, sh) = g.res;
         let m = mem();
         for r in 0..h {
-            let sy = if g.lower_left { sh.saturating_sub(1 + y + r) } else { y + r };
+            let sy = if g.lower_left {
+                sh.saturating_sub(1 + y + r)
+            } else {
+                y + r
+            };
             for k in 0..w {
                 let (sx, sy) = ((x + k).min(sw - 1), sy.min(sh - 1));
-                m.wr16(data + r * stride + 2 * k, to_565(px[(sy * sw + sx) as usize]));
+                m.wr16(
+                    data + r * stride + 2 * k,
+                    to_565(px[(sy * sw + sx) as usize]),
+                );
             }
         }
     })
@@ -1891,7 +2389,13 @@ fn buffer_swap(_: &mut Cpu) -> u32 {
         g.flush(gl);
         g.resolve(gl);
         g.swaps += 1;
-        (g.color, g.target, crate::game::game().glide().map_or(g.gamma, |x| x.gamma(g.gamma)))
+        (
+            g.color,
+            g.target,
+            crate::game::game()
+                .glide()
+                .map_or(g.gamma, |x| x.gamma(g.gamma)),
+        )
     });
     if let Some((tex, (w, h), gamma)) = shown {
         super::window::show_texture(tex, w, h, gamma);
@@ -1946,11 +2450,20 @@ fn draw_point(c: &mut Cpu) -> u32 {
 }
 
 fn clip_window(c: &mut Cpu) -> u32 {
-    let r = [arg(c, 0) as i32, arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3) as i32];
+    let r = [
+        arg(c, 0) as i32,
+        arg(c, 1) as i32,
+        arg(c, 2) as i32,
+        arg(c, 3) as i32,
+    ];
     with(|g, gl| {
         // kept from the top (with the origin at the lower left, y counts up)
         let h = g.res.1 as i32;
-        let r = if g.lower_left { [r[0], h - r[3], r[2], h - r[1]] } else { r };
+        let r = if g.lower_left {
+            [r[0], h - r[3], r[2], h - r[1]]
+        } else {
+            r
+        };
         g.set(gl, |s| s.clip = r)
     });
     0
@@ -2056,15 +2569,24 @@ fn tex_max_address(_: &mut Cpu) -> u32 {
 /// GrTexInfo: smallLod, largeLod, aspect, format, data
 fn tex_info(p: u32) -> (u32, u32, u32, u32, u32) {
     let m = mem();
-    (m.rd32(p), m.rd32(p + 4), m.rd32(p + 8), m.rd32(p + 12), m.rd32(p + 16))
+    (
+        m.rd32(p),
+        m.rd32(p + 4),
+        m.rd32(p + 8),
+        m.rd32(p + 12),
+        m.rd32(p + 16),
+    )
 }
 
 fn tex_mem_required(info: (u32, u32, u32, u32, u32)) -> u32 {
     let (small, large, aspect, format, _) = info;
-    (large..=small.max(large)).map(|l| {
-        let (w, h) = lod_size(l, aspect);
-        w * h * bytes_per_texel(format)
-    }).sum::<u32>().next_multiple_of(8)
+    (large..=small.max(large))
+        .map(|l| {
+            let (w, h) = lod_size(l, aspect);
+            w * h * bytes_per_texel(format)
+        })
+        .sum::<u32>()
+        .next_multiple_of(8)
 }
 
 fn tex_texture_mem_required(c: &mut Cpu) -> u32 {
@@ -2083,7 +2605,14 @@ fn tex_download_mipmap(c: &mut Cpu) -> u32 {
 }
 
 fn tex_download_mipmap_level(c: &mut Cpu) -> u32 {
-    let (addr, this, large, aspect, format, data) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 7));
+    let (addr, this, large, aspect, format, data) = (
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 7),
+    );
     if this == large {
         with(|g, gl| g.download(gl, addr, this, aspect, format, data, None));
     }
@@ -2091,7 +2620,16 @@ fn tex_download_mipmap_level(c: &mut Cpu) -> u32 {
 }
 
 fn tex_download_mipmap_level_partial(c: &mut Cpu) -> u32 {
-    let (addr, this, large, aspect, format, data, r0, r1) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 7), arg(c, 8), arg(c, 9));
+    let (addr, this, large, aspect, format, data, r0, r1) = (
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 7),
+        arg(c, 8),
+        arg(c, 9),
+    );
     if this == large {
         // `data` points at the first row downloaded
         with(|g, gl| g.download(gl, addr, this, aspect, format, data, Some((r0, r1))));
@@ -2172,14 +2710,19 @@ const FUNCTIONS: &[(&str, fn(&mut Cpu) -> u32)] = &[
     ("grTexCalcMemRequired", tex_calc_mem_required),
     ("grTexDownloadMipMap", tex_download_mipmap),
     ("grTexDownloadMipMapLevel", tex_download_mipmap_level),
-    ("grTexDownloadMipMapLevelPartial", tex_download_mipmap_level_partial),
+    (
+        "grTexDownloadMipMapLevelPartial",
+        tex_download_mipmap_level_partial,
+    ),
     ("grTexSource", tex_source),
 ];
 
 /// GetProcAddress on glide2x.dll: a thunk for the name (`_grName@argbytes`).
 pub fn proc_address(name: &str) -> u32 {
     let plain = name.trim_start_matches('_');
-    let (base, bytes) = plain.split_once('@').map_or((plain, 0), |(b, n)| (b, n.parse().unwrap_or(0)));
+    let (base, bytes) = plain
+        .split_once('@')
+        .map_or((plain, 0), |(b, n)| (b, n.parse().unwrap_or(0)));
     let name = format!("glide2x!{base}");
     match FUNCTIONS.iter().find(|e| e.0 == base) {
         Some(&(_, f)) => thunk(&name, (bytes / 4) as i32, f),
@@ -2198,6 +2741,9 @@ mod tests {
         // 4x1: a side of 1 stays 1, pairs averaged
         assert_eq!(half(&[0, 2, 4, 8], 4, 1, 1), (vec![1, 6], 2, 1));
         // two bytes a pixel: each averaged on its own
-        assert_eq!(half(&[0, 100, 2, 100, 4, 100, 6, 100], 2, 2, 2), (vec![3, 100], 1, 1));
+        assert_eq!(
+            half(&[0, 100, 2, 100, 4, 100, 6, 100], 2, 2, 2),
+            (vec![3, 100], 1, 1)
+        );
     }
 }

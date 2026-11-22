@@ -32,7 +32,11 @@ pub fn by_key(f: u8) -> Option<usize> {
         }
         on
     });
-    if on && f != 0 { all().iter().position(|c| c.key == f) } else { None }
+    if on && f != 0 {
+        all().iter().position(|c| c.key == f)
+    } else {
+        None
+    }
 }
 
 /// Ask for command k (it runs at the next `run_pending`).

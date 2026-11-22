@@ -10,9 +10,9 @@ pub mod font;
 pub mod template;
 
 use super::menupad::PadEvent;
-use crate::game::After;
 use super::user32::{self, Msg};
 use super::{Import, ResId, arg, cstr, guest_call, log, mem, put_cstr, resource};
+use crate::game::After;
 use recomp::rt::Cpu;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -45,17 +45,41 @@ const ERR: u32 = 0xffff_ffff;
 
 #[derive(Clone, Debug)]
 pub enum Kind {
-    Push { default: bool },
-    Check { auto: bool },
-    Radio { auto: bool },
+    Push {
+        default: bool,
+    },
+    Check {
+        auto: bool,
+    },
+    Radio {
+        auto: bool,
+    },
     Group,
     Static,
-    Edit { limit: u32 },
-    List { items: Vec<(String, u32)>, sel: i32, top: i32 },
+    Edit {
+        limit: u32,
+    },
+    List {
+        items: Vec<(String, u32)>,
+        sel: i32,
+        top: i32,
+    },
     /// a drop-down list; `drop` is the height of the open list. With `edit` (CBS_DROPDOWN) its
     /// text (the control's) can be typed; `whole`: the text is selected, a key replaces it.
-    Combo { items: Vec<(String, u32)>, sel: i32, open: bool, top: i32, drop: i32, edit: bool, whole: bool },
-    Track { lo: i32, hi: i32, pos: i32 },
+    Combo {
+        items: Vec<(String, u32)>,
+        sel: i32,
+        open: bool,
+        top: i32,
+        drop: i32,
+        edit: bool,
+        whole: bool,
+    },
+    Track {
+        lo: i32,
+        hi: i32,
+        pos: i32,
+    },
     Other,
 }
 
@@ -119,7 +143,11 @@ struct Stack {
     dirty: bool,
 }
 
-static STACK: Mutex<Stack> = Mutex::new(Stack { dialogs: Vec::new(), serial: 0, dirty: false });
+static STACK: Mutex<Stack> = Mutex::new(Stack {
+    dialogs: Vec::new(),
+    serial: 0,
+    dirty: false,
+});
 
 fn stack() -> MutexGuard<'static, Stack> {
     STACK.lock().unwrap_or_else(|e| e.into_inner())
@@ -148,7 +176,12 @@ impl Control {
     /// The closed part of a combo box.
     pub fn face(&self) -> [i32; 4] {
         match self.kind {
-            Kind::Combo { drop, .. } => [self.rect[0], self.rect[1], self.rect[2], self.rect[3] - drop],
+            Kind::Combo { drop, .. } => [
+                self.rect[0],
+                self.rect[1],
+                self.rect[2],
+                self.rect[3] - drop,
+            ],
             _ => self.rect,
         }
     }
@@ -156,14 +189,24 @@ impl Control {
     /// The open list of a combo box.
     pub fn drop_rect(&self) -> Option<[i32; 4]> {
         match self.kind {
-            Kind::Combo { open: true, drop, .. } => Some([self.rect[0], self.rect[3] - drop, self.rect[2], self.rect[3]]),
+            Kind::Combo {
+                open: true, drop, ..
+            } => Some([
+                self.rect[0],
+                self.rect[3] - drop,
+                self.rect[2],
+                self.rect[3],
+            ]),
             _ => None,
         }
     }
 
     /// A combo box shows its selected item (selected as a whole when it can be typed).
     fn sync_combo(&mut self) {
-        if let Kind::Combo { items, sel, whole, .. } = &mut self.kind {
+        if let Kind::Combo {
+            items, sel, whole, ..
+        } = &mut self.kind
+        {
             if let Some(t) = items.get(*sel as usize) {
                 self.text = t.0.clone();
                 *whole = true;
@@ -203,7 +246,11 @@ fn kind_of(i: &Item, h: i32) -> (Kind, i32) {
         },
         Class::Static => Kind::Static,
         Class::Edit => Kind::Edit { limit: 0x7fff },
-        Class::ListBox => Kind::List { items: Vec::new(), sel: -1, top: 0 },
+        Class::ListBox => Kind::List {
+            items: Vec::new(),
+            sel: -1,
+            top: 0,
+        },
         // the template's height includes the open list
         Class::ComboBox => Kind::Combo {
             items: Vec::new(),
@@ -214,7 +261,11 @@ fn kind_of(i: &Item, h: i32) -> (Kind, i32) {
             edit: i.style & 3 == 2,
             whole: false,
         },
-        Class::Other(n) if n.eq_ignore_ascii_case("msctls_trackbar32") => Kind::Track { lo: 0, hi: 100, pos: 0 },
+        Class::Other(n) if n.eq_ignore_ascii_case("msctls_trackbar32") => Kind::Track {
+            lo: 0,
+            hi: 100,
+            pos: 0,
+        },
         _ => Kind::Other,
     };
     (k, h)
@@ -227,10 +278,15 @@ impl Dialog {
         // MS Sans Serif 8: 6 x 13 pixel dialog base units; shrink to fit the overlay
         let (mut sx, mut sy) = (1.5f32, 13.0 / 8.0);
         let (w, h) = (t.rect[2] as f32 * sx, t.rect[3] as f32 * sy + cap_h as f32);
-        let fit = ((OV_W - 16) as f32 / w).min((OV_H - 16) as f32 / h).min(1.0);
+        let fit = ((OV_W - 16) as f32 / w)
+            .min((OV_H - 16) as f32 / h)
+            .min(1.0);
         sx *= fit;
         sy *= fit;
-        let (w, h) = ((t.rect[2] as f32 * sx) as i32, (t.rect[3] as f32 * sy) as i32 + cap_h);
+        let (w, h) = (
+            (t.rect[2] as f32 * sx) as i32,
+            (t.rect[3] as f32 * sy) as i32 + cap_h,
+        );
         let (x0, y0) = ((OV_W - w) / 2, (OV_H - h) / 2);
         let controls = t
             .items
@@ -290,21 +346,37 @@ impl Dialog {
         let cap = if self.caption { 14 } else { 0 };
         let x = self.rect[0] + (r[0] as f32 * self.scale.0).round() as i32;
         let y = self.rect[1] + cap + (r[1] as f32 * self.scale.1).round() as i32;
-        [x, y, x + (r[2] as f32 * self.scale.0).round() as i32, y + (r[3] as f32 * self.scale.1).round() as i32]
+        [
+            x,
+            y,
+            x + (r[2] as f32 * self.scale.0).round() as i32,
+            y + (r[3] as f32 * self.scale.1).round() as i32,
+        ]
     }
 
     /// The control under a point: an open combo list first.
     fn hit(&self, x: i32, y: i32) -> Option<usize> {
-        if let Some(k) = self.controls.iter().position(|c| c.drop_rect().is_some_and(|r| inside(r, x, y))) {
+        if let Some(k) = self
+            .controls
+            .iter()
+            .position(|c| c.drop_rect().is_some_and(|r| inside(r, x, y)))
+        {
             return Some(k);
         }
         // later controls are drawn on top
-        self.controls.iter().rposition(|c| c.interactive() && inside(c.face(), x, y))
+        self.controls
+            .iter()
+            .rposition(|c| c.interactive() && inside(c.face(), x, y))
     }
 
     fn command(&self, k: usize, code: u32) -> Notify {
         let c = &self.controls[k];
-        Notify { dialog: self.hwnd, msg: WM_COMMAND, wp: c.id & 0xffff | code << 16, lp: c.hwnd }
+        Notify {
+            dialog: self.hwnd,
+            msg: WM_COMMAND,
+            wp: c.id & 0xffff | code << 16,
+            lp: c.hwnd,
+        }
     }
 
     /// Activate a control as a click does.
@@ -314,8 +386,13 @@ impl Dialog {
             Kind::Check { auto: true } => self.controls[k].check ^= 1,
             Kind::Radio { auto: true } => {
                 // the group: from the control with WS_GROUP at or before it to the next one
-                let start = (0..=k).rev().find(|&i| self.controls[i].style & WS_GROUP != 0).unwrap_or(0);
-                let end = (k + 1..self.controls.len()).find(|&i| self.controls[i].style & WS_GROUP != 0).unwrap_or(self.controls.len());
+                let start = (0..=k)
+                    .rev()
+                    .find(|&i| self.controls[i].style & WS_GROUP != 0)
+                    .unwrap_or(0);
+                let end = (k + 1..self.controls.len())
+                    .find(|&i| self.controls[i].style & WS_GROUP != 0)
+                    .unwrap_or(self.controls.len());
                 for i in start..end {
                     if matches!(self.controls[i].kind, Kind::Radio { .. }) {
                         self.controls[i].check = (i == k) as u32;
@@ -380,9 +457,22 @@ impl Dialog {
 
     fn track_notify(&self, k: usize, code: u32) -> Notify {
         let c = &self.controls[k];
-        let pos = if let Kind::Track { pos, .. } = c.kind { pos } else { 0 };
-        let msg = if c.style & 2 != 0 { WM_VSCROLL } else { WM_HSCROLL };
-        Notify { dialog: self.hwnd, msg, wp: code | (pos as u32) << 16, lp: c.hwnd }
+        let pos = if let Kind::Track { pos, .. } = c.kind {
+            pos
+        } else {
+            0
+        };
+        let msg = if c.style & 2 != 0 {
+            WM_VSCROLL
+        } else {
+            WM_HSCROLL
+        };
+        Notify {
+            dialog: self.hwnd,
+            msg,
+            wp: code | (pos as u32) << 16,
+            lp: c.hwnd,
+        }
     }
 
     /// Mouse and keyboard input for the topmost dialog.
@@ -405,7 +495,14 @@ impl Dialog {
                 // an open combo list takes the click
                 if let Some(k) = self.controls.iter().position(|c| c.drop_rect().is_some()) {
                     let r = self.controls[k].drop_rect().unwrap();
-                    if let Kind::Combo { open, sel, top, items, .. } = &mut self.controls[k].kind {
+                    if let Kind::Combo {
+                        open,
+                        sel,
+                        top,
+                        items,
+                        ..
+                    } = &mut self.controls[k].kind
+                    {
                         *open = false;
                         let row = *top + (y - r[1] - 2) / ROW;
                         if inside(r, x, y) && row >= 0 && (row as usize) < items.len() {
@@ -424,11 +521,20 @@ impl Dialog {
                 let face = self.controls[k].face();
                 match &mut self.controls[k].kind {
                     // a combo box that can be typed: its text takes the focus, all selected
-                    Kind::Combo { edit: true, whole, .. } if x < face[2] - 14 => {
+                    Kind::Combo {
+                        edit: true, whole, ..
+                    } if x < face[2] - 14 => {
                         *whole = true;
                         self.focus = Some(k);
                     }
-                    Kind::Combo { open, top, sel, items, drop, .. } => {
+                    Kind::Combo {
+                        open,
+                        top,
+                        sel,
+                        items,
+                        drop,
+                        ..
+                    } => {
                         *open = true;
                         // a little above the selection, but no empty rows at the end
                         let rows = (*drop - 4) / ROW;
@@ -465,13 +571,19 @@ impl Dialog {
             }
             0x20a => {
                 let lines = -((m.wp >> 16) as i16 as i32) / 120;
-                let target = self.controls.iter().position(|c| c.drop_rect().is_some()).or_else(|| self.hit(x, y));
+                let target = self
+                    .controls
+                    .iter()
+                    .position(|c| c.drop_rect().is_some())
+                    .or_else(|| self.hit(x, y));
                 if let Some(k) = target {
                     let rows = match self.controls[k].kind {
                         Kind::Combo { drop, .. } => (drop - 4) / ROW,
                         _ => (self.controls[k].rect[3] - self.controls[k].rect[1] - 4) / ROW,
                     };
-                    if let Kind::List { items, top, .. } | Kind::Combo { items, top, .. } = &mut self.controls[k].kind {
+                    if let Kind::List { items, top, .. } | Kind::Combo { items, top, .. } =
+                        &mut self.controls[k].kind
+                    {
                         *top = (*top + lines * 3).clamp(0, (items.len() as i32 - rows).max(0));
                     }
                 }
@@ -483,20 +595,37 @@ impl Dialog {
                     } else if self.proc_ == 0 {
                         self.result = Some(2);
                     } else {
-                        out.push(Notify { dialog: self.hwnd, msg: WM_COMMAND, wp: 2, lp: 0 });
+                        out.push(Notify {
+                            dialog: self.hwnd,
+                            msg: WM_COMMAND,
+                            wp: 2,
+                            lp: 0,
+                        });
                     }
                 }
                 0x0d => {
                     if let Some(k) = self.button(true) {
                         self.click(k, out);
                     } else if self.proc_ == 0 {
-                        self.result = self.controls.iter().find(|c| matches!(c.kind, Kind::Push { .. })).map(|c| c.id);
+                        self.result = self
+                            .controls
+                            .iter()
+                            .find(|c| matches!(c.kind, Kind::Push { .. }))
+                            .map(|c| c.id);
                     } else {
-                        out.push(Notify { dialog: self.hwnd, msg: WM_COMMAND, wp: 1, lp: 0 });
+                        out.push(Notify {
+                            dialog: self.hwnd,
+                            msg: WM_COMMAND,
+                            wp: 1,
+                            lp: 0,
+                        });
                     }
                 }
                 0x08 => {
-                    if let Some(k) = self.focus.filter(|&k| matches!(self.controls[k].kind, Kind::Edit { .. })) {
+                    if let Some(k) = self
+                        .focus
+                        .filter(|&k| matches!(self.controls[k].kind, Kind::Edit { .. }))
+                    {
                         self.controls[k].text.pop();
                         out.push(self.command(k, 0x300)); // EN_CHANGE
                     } else if let Some(k) = self.focus.filter(|&k| self.controls[k].typed_combo()) {
@@ -525,7 +654,10 @@ impl Dialog {
             },
             0x102 => {
                 let ch = m.wp as u8;
-                if let Some(k) = self.focus.filter(|&k| matches!(self.controls[k].kind, Kind::Edit { .. })) {
+                if let Some(k) = self
+                    .focus
+                    .filter(|&k| matches!(self.controls[k].kind, Kind::Edit { .. }))
+                {
                     if let Kind::Edit { limit } = self.controls[k].kind {
                         if ch >= 32 && ch != 127 && (self.controls[k].text.len() as u32) < limit {
                             self.controls[k].text.push(ch as char);
@@ -563,7 +695,8 @@ impl Dialog {
 
     /// A waits for the pad button to bind to the box it clicked.
     fn pad_binding(&self) -> bool {
-        self.pad_binds.is_some_and(|k| self.controls.get(k).is_some_and(|c| c.inverted))
+        self.pad_binds
+            .is_some_and(|k| self.controls.get(k).is_some_and(|c| c.inverted))
     }
 
     /// Gamepad input (issue #8): the D-pad or left stick goes from control to control (left
@@ -573,7 +706,12 @@ impl Dialog {
     /// inverted) the pad belongs to it.
     fn pad_input(&mut self, e: PadEvent, out: &mut Vec<Notify>) {
         if trace() {
-            log!("dialog {:#x}: pad {e:?} at {:?} binding {:?}", self.hwnd, self.pad, self.pad_binds);
+            log!(
+                "dialog {:#x}: pad {e:?} at {:?} binding {:?}",
+                self.hwnd,
+                self.pad,
+                self.pad_binds
+            );
         }
         if self.pad_binding() {
             self.pad_down = false;
@@ -584,7 +722,14 @@ impl Dialog {
         if let Some(k) = self.controls.iter().position(|c| c.drop_rect().is_some()) {
             match e {
                 PadEvent::Dir((0, dy)) => {
-                    if let Kind::Combo { items, sel, top, drop, .. } = &mut self.controls[k].kind {
+                    if let Kind::Combo {
+                        items,
+                        sel,
+                        top,
+                        drop,
+                        ..
+                    } = &mut self.controls[k].kind
+                    {
                         let rows = ((*drop - 4) / ROW).max(1);
                         *sel = (*sel + dy).clamp(0, (items.len() as i32 - 1).max(0));
                         *top = (*top).clamp(*sel - rows + 1, *sel).max(0);
@@ -614,7 +759,15 @@ impl Dialog {
             match e {
                 // the first input only shows where the pad is: the focus, else the default button
                 PadEvent::Dir(_) | PadEvent::A(true) => self.pad_start(),
-                PadEvent::B => self.input(&Msg { hwnd: self.hwnd, msg: 0x100, wp: 0x1b, lp: 0 }, out),
+                PadEvent::B => self.input(
+                    &Msg {
+                        hwnd: self.hwnd,
+                        msg: 0x100,
+                        wp: 0x1b,
+                        lp: 0,
+                    },
+                    out,
+                ),
                 PadEvent::A(false) => {}
             }
             self.pad_down = false;
@@ -632,7 +785,9 @@ impl Dialog {
                         out.push(self.track_notify(k, 8)); // TB_ENDTRACK
                         return;
                     }
-                    Kind::List { items, sel, top } if d.1 != 0 && (0..items.len() as i32).contains(&(*sel + d.1)) => {
+                    Kind::List { items, sel, top }
+                        if d.1 != 0 && (0..items.len() as i32).contains(&(*sel + d.1)) =>
+                    {
                         let rows = ((rect[3] - rect[1] - 4) / ROW).max(1);
                         *sel += d.1;
                         *top = (*top).clamp(*sel - rows + 1, *sel).max(0);
@@ -641,7 +796,9 @@ impl Dialog {
                     }
                     _ => {}
                 }
-                let usable: Vec<usize> = (0..self.controls.len()).filter(|&i| self.controls[i].interactive()).collect();
+                let usable: Vec<usize> = (0..self.controls.len())
+                    .filter(|&i| self.controls[i].interactive())
+                    .collect();
                 let rects: Vec<_> = usable
                     .iter()
                     .map(|&i| {
@@ -650,7 +807,9 @@ impl Dialog {
                     })
                     .collect();
                 let cur = usable.iter().position(|&i| i == k);
-                let came = self.pad_came.and_then(|(i, way)| Some((usable.iter().position(|&u| u == i)?, way)));
+                let came = self
+                    .pad_came
+                    .and_then(|(i, way)| Some((usable.iter().position(|&u| u == i)?, way)));
                 if let Some(n) = super::menupad::nearest(&rects, cur, came, (0, 0), d) {
                     self.pad_came = Some((k, d));
                     self.pad = Some(usable[n]);
@@ -673,7 +832,14 @@ impl Dialog {
                 super::dinput::forget_presses();
                 self.pad_binds = Some(k);
                 match &mut self.controls[k].kind {
-                    Kind::Combo { open, top, sel, items, drop, .. } => {
+                    Kind::Combo {
+                        open,
+                        top,
+                        sel,
+                        items,
+                        drop,
+                        ..
+                    } => {
                         *open = true;
                         let rows = (*drop - 4) / ROW;
                         *top = (*sel - 2).clamp(0, (items.len() as i32 - rows).max(0));
@@ -692,7 +858,15 @@ impl Dialog {
             PadEvent::B => {
                 self.pad_down = false;
                 self.pressed = None;
-                self.input(&Msg { hwnd: self.hwnd, msg: 0x100, wp: 0x1b, lp: 0 }, out);
+                self.input(
+                    &Msg {
+                        hwnd: self.hwnd,
+                        msg: 0x100,
+                        wp: 0x1b,
+                        lp: 0,
+                    },
+                    out,
+                );
             }
         }
     }
@@ -715,11 +889,19 @@ pub fn control_at(lp: u32) -> Option<u32> {
 }
 
 /// What the game's messages do to a control; returns the result.
-fn control_message(d: &mut Dialog, k: usize, msg: u32, wp: u32, lp: u32, out: &mut Vec<Notify>) -> u32 {
+fn control_message(
+    d: &mut Dialog,
+    k: usize,
+    msg: u32,
+    wp: u32,
+    lp: u32,
+    out: &mut Vec<Notify>,
+) -> u32 {
     let m = mem();
     let text_of = |p: u32| if p == 0 { String::new() } else { cstr(p) };
     // copy a string to a guest buffer of `n` bytes (n = 0: unknown size)
-    let give = |p: u32, s: &str, n: u32| put_cstr(p, s, if n == 0 { s.len() as u32 + 1 } else { n });
+    let give =
+        |p: u32, s: &str, n: u32| put_cstr(p, s, if n == 0 { s.len() as u32 + 1 } else { n });
     let c = &mut d.controls[k];
     match msg {
         WM_SETTEXT => {
@@ -745,7 +927,9 @@ fn control_message(d: &mut Dialog, k: usize, msg: u32, wp: u32, lp: u32, out: &m
         }
         // trackbars
         0x400..=0x41f if matches!(c.kind, Kind::Track { .. }) => {
-            let Kind::Track { lo, hi, pos } = &mut c.kind else { unreachable!() };
+            let Kind::Track { lo, hi, pos } = &mut c.kind else {
+                unreachable!()
+            };
             match msg {
                 0x400 => *pos as u32,
                 0x401 => *lo as u32,
@@ -828,7 +1012,9 @@ fn control_message(d: &mut Dialog, k: usize, msg: u32, wp: u32, lp: u32, out: &m
                     _ => {}
                 }
             }
-            let Some((items, sel)) = c.items() else { return 0 };
+            let Some((items, sel)) = c.items() else {
+                return 0;
+            };
             let get = |i: u32| items.get(i as usize);
             let find = |items: &Vec<(String, u32)>, start: u32, s: &str, exact: bool| -> u32 {
                 let n = items.len();
@@ -848,7 +1034,11 @@ fn control_message(d: &mut Dialog, k: usize, msg: u32, wp: u32, lp: u32, out: &m
                     items.len() as u32 - 1
                 }
                 "insert" => {
-                    let at = if wp == ERR { items.len() } else { (wp as usize).min(items.len()) };
+                    let at = if wp == ERR {
+                        items.len()
+                    } else {
+                        (wp as usize).min(items.len())
+                    };
                     items.insert(at, (text_of(lp), 0));
                     at as u32
                 }
@@ -916,9 +1106,19 @@ fn control_message(d: &mut Dialog, k: usize, msg: u32, wp: u32, lp: u32, out: &m
 fn deliver(c: &mut Cpu, out: Vec<Notify>) {
     for n in out {
         if trace() {
-            log!("dialog {:#x}: message {:#x} {:#x} {:#x}", n.dialog, n.msg, n.wp, n.lp);
+            log!(
+                "dialog {:#x}: message {:#x} {:#x} {:#x}",
+                n.dialog,
+                n.msg,
+                n.wp,
+                n.lp
+            );
         }
-        let proc_ = stack().dialogs.iter().find(|d| d.hwnd == n.dialog).map(|d| d.proc_);
+        let proc_ = stack()
+            .dialogs
+            .iter()
+            .find(|d| d.hwnd == n.dialog)
+            .map(|d| d.proc_);
         if let Some(p) = proc_.filter(|&p| p != 0) {
             guest_call(c, p, &[n.dialog, n.msg, n.wp, n.lp]);
         }
@@ -929,7 +1129,11 @@ fn deliver(c: &mut Cpu, out: Vec<Notify>) {
 fn redraw() {
     let mut s = stack();
     s.dirty = false;
-    let img = if s.dialogs.is_empty() { None } else { Some((draw::render(&s.dialogs), OV_W as u32, OV_H as u32)) };
+    let img = if s.dialogs.is_empty() {
+        None
+    } else {
+        Some((draw::render(&s.dialogs), OV_W as u32, OV_H as u32))
+    };
     drop(s);
     super::window::set_overlay(img);
 }
@@ -962,13 +1166,21 @@ fn run(c: &mut Cpu, mut d: Dialog, param: u32) -> u32 {
     redraw();
     let mut phase = draw::caret_phase();
     loop {
-        let done = stack().dialogs.iter().find(|d| d.hwnd == hwnd).and_then(|d| d.result);
+        let done = stack()
+            .dialogs
+            .iter()
+            .find(|d| d.hwnd == hwnd)
+            .and_then(|d| d.result);
         if let Some(r) = done {
             stack().dialogs.retain(|d| d.hwnd != hwnd);
             redraw();
             return r;
         }
-        let then = stack().dialogs.iter_mut().find(|d| d.hwnd == hwnd).and_then(|d| d.then.take());
+        let then = stack()
+            .dialogs
+            .iter_mut()
+            .find(|d| d.hwnd == hwnd)
+            .and_then(|d| d.then.take());
         match then {
             Some(After::Open(template, p)) => {
                 open(c, ResId::Id(template), p, 0);
@@ -1001,7 +1213,15 @@ fn run(c: &mut Cpu, mut d: Dialog, param: u32) -> u32 {
                 // the window's close button: like Esc in the dialog
                 let mut out = Vec::new();
                 if let Some(top) = stack().dialogs.last_mut() {
-                    top.input(&Msg { hwnd: m.hwnd, msg: 0x100, wp: 0x1b, lp: 0 }, &mut out);
+                    top.input(
+                        &Msg {
+                            hwnd: m.hwnd,
+                            msg: 0x100,
+                            wp: 0x1b,
+                            lp: 0,
+                        },
+                        &mut out,
+                    );
                 }
                 deliver(c, out);
             } else {
@@ -1045,18 +1265,28 @@ pub fn owns(hwnd: u32) -> bool {
 fn locate(s: &Stack, hwnd: u32) -> Option<(usize, Option<usize>)> {
     let di = s.dialogs.iter().position(|d| d.hwnd == hwnd & !0xff)?;
     let k = hwnd & 0xff;
-    if k == 0 { Some((di, None)) } else { (k as usize <= s.dialogs[di].controls.len()).then_some((di, Some(k as usize - 1))) }
+    if k == 0 {
+        Some((di, None))
+    } else {
+        (k as usize <= s.dialogs[di].controls.len()).then_some((di, Some(k as usize - 1)))
+    }
 }
 
 /// SendMessage to a dialog or control.
 pub fn send(c: &mut Cpu, hwnd: u32, msg: u32, wp: u32, lp: u32) -> u32 {
     let mut s = stack();
-    let Some((di, k)) = locate(&s, hwnd) else { return 0 };
+    let Some((di, k)) = locate(&s, hwnd) else {
+        return 0;
+    };
     match k {
         None => {
             let p = s.dialogs[di].proc_;
             drop(s);
-            if p != 0 { guest_call(c, p, &[hwnd, msg, wp, lp]) } else { 0 }
+            if p != 0 {
+                guest_call(c, p, &[hwnd, msg, wp, lp])
+            } else {
+                0
+            }
         }
         Some(k) => {
             let mut out = Vec::new();
@@ -1109,7 +1339,11 @@ pub fn is_open(template: u32) -> bool {
 /// The text of control `id` in the open dialog made from template `template`.
 pub fn text_in(template: u32, id: u32) -> Option<String> {
     let mut s = stack();
-    let d = s.dialogs.iter_mut().rev().find(|d| d.template == template)?;
+    let d = s
+        .dialogs
+        .iter_mut()
+        .rev()
+        .find(|d| d.template == template)?;
     d.control(id).map(|c| c.text.clone())
 }
 
@@ -1214,7 +1448,15 @@ fn is_dlg_button_checked(c: &mut Cpu) -> u32 {
 
 /// MessageBoxA as one of our dialogs: the text and the buttons its type asks for.
 fn message_box(c: &mut Cpu) -> u32 {
-    let (text, title, kind) = (cstr(arg(c, 1)), if arg(c, 2) != 0 { cstr(arg(c, 2)) } else { String::new() }, arg(c, 3));
+    let (text, title, kind) = (
+        cstr(arg(c, 1)),
+        if arg(c, 2) != 0 {
+            cstr(arg(c, 2))
+        } else {
+            String::new()
+        },
+        arg(c, 3),
+    );
     log!("MessageBox [{title}] {text}");
     let buttons: &[(&str, u32)] = match kind & 0xf {
         1 => &[("OK", 1), ("Cancel", 2)],
@@ -1229,18 +1471,44 @@ fn message_box(c: &mut Cpu) -> u32 {
     }
     // lay it out in dialog units like a template: text lines, then a row of buttons
     let lines: Vec<&str> = text.lines().collect();
-    let width = lines.iter().map(|l| draw::text_width(l) * 2 / 3 + 1).max().unwrap_or(0).max(buttons.len() as i32 * 56) + 20;
+    let width = lines
+        .iter()
+        .map(|l| draw::text_width(l) * 2 / 3 + 1)
+        .max()
+        .unwrap_or(0)
+        .max(buttons.len() as i32 * 56)
+        + 20;
     let th = lines.len() as i32 * 9;
     let mut items: Vec<Item> = lines
         .iter()
         .enumerate()
-        .map(|(k, l)| Item { class: Class::Static, id: u32::MAX, text: l.to_string(), style: WS_VISIBLE | 1, ex_style: 0, rect: [10, 10 + 9 * k as i32, width - 20, 9] })
+        .map(|(k, l)| Item {
+            class: Class::Static,
+            id: u32::MAX,
+            text: l.to_string(),
+            style: WS_VISIBLE | 1,
+            ex_style: 0,
+            rect: [10, 10 + 9 * k as i32, width - 20, 9],
+        })
         .collect();
     let bx = (width - buttons.len() as i32 * 56 + 6) / 2;
     for (k, &(t, id)) in buttons.iter().enumerate() {
-        items.push(Item { class: Class::Button, id, text: t.into(), style: WS_VISIBLE | (k == 0) as u32, ex_style: 0, rect: [bx + 56 * k as i32, th + 18, 50, 14] });
+        items.push(Item {
+            class: Class::Button,
+            id,
+            text: t.into(),
+            style: WS_VISIBLE | (k == 0) as u32,
+            ex_style: 0,
+            rect: [bx + 56 * k as i32, th + 18, 50, 14],
+        });
     }
-    let t = Template { style: if title.is_empty() { 0 } else { WS_CAPTION }, title, rect: [0, 0, width, th + 40], font: None, items };
+    let t = Template {
+        style: if title.is_empty() { 0 } else { WS_CAPTION },
+        title,
+        rect: [0, 0, width, th + 40],
+        font: None,
+        items,
+    };
     show(c, 0, t, 0, 0)
 }
 

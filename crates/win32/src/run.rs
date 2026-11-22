@@ -34,7 +34,9 @@ fn output() {
         let out = if AttachConsole(ATTACH_PARENT_PROCESS) != 0 {
             std::fs::OpenOptions::new().write(true).open("CONOUT$").ok()
         } else {
-            let log = std::env::current_exe().ok().and_then(|p| Some(p.parent()?.join(game::id().log_file)));
+            let log = std::env::current_exe()
+                .ok()
+                .and_then(|p| Some(p.parent()?.join(game::id().log_file)));
             log.and_then(|p| std::fs::File::create(p).ok())
         };
         if let Some(f) = out {
@@ -65,7 +67,12 @@ pub fn run(g: &'static dyn Game) -> ! {
         std::process::exit(code);
     }
     // guest calls nest on the host stack like the original's: run on a thread with a large one
-    let code = std::thread::Builder::new().stack_size(256 << 20).spawn(start).unwrap().join().unwrap();
+    let code = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(start)
+        .unwrap()
+        .join()
+        .unwrap();
     platform::kernel32::terminate(code);
 }
 
@@ -111,10 +118,20 @@ fn start() -> u32 {
     // the machine code is kept beside the EXE, for this program and this EXE
     let cache = exe.with_file_name(setup::COMPILED);
     let key = cache_key(&all);
-    let compiled = compile_cached(&prog, &smc, &mut code, &g.hooks(), key.map(|k| (cache.as_path(), k)));
+    let compiled = compile_cached(
+        &prog,
+        &smc,
+        &mut code,
+        &g.hooks(),
+        key.map(|k| (cache.as_path(), k)),
+    );
     let st = &compiled.stats;
     if st.cached {
-        eprintln!("compiled code of {} functions loaded in {} ms", st.functions, t.elapsed().as_millis());
+        eprintln!(
+            "compiled code of {} functions loaded in {} ms",
+            st.functions,
+            t.elapsed().as_millis()
+        );
     } else {
         eprintln!(
             "compiled {} functions in {} ms (finding them {found}, lifting {}, compiling {})",
@@ -139,6 +156,10 @@ fn cache_key(img: &Image) -> Option<[u8; 32]> {
     h.update(&own);
     h.update(&img.data);
     // the memory's base, a constant in the code when fixed
-    h.update(recomp::lift::FIXED_BASE.load(std::sync::atomic::Ordering::Relaxed).to_le_bytes());
+    h.update(
+        recomp::lift::FIXED_BASE
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .to_le_bytes(),
+    );
     Some(h.finalize().into())
 }

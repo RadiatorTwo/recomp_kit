@@ -14,8 +14,8 @@
 //! items in `<PREFIX>_INPUT` drive a scripted pad (pad 0, before the real ones).
 
 use super::{Import, alloc, arg, free, guest_call, log, mem, put_cstr};
-use recomp::rt::Cpu;
 use gilrs::{Axis, Button, Gilrs};
+use recomp::rt::Cpu;
 use std::cell::RefCell;
 use std::sync::Mutex;
 
@@ -36,7 +36,10 @@ const DIPH_BYOFFSET: u32 = 1;
 /// A GUID as its 16 bytes in memory.
 const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
     let (a, b, c) = (d1.to_le_bytes(), d2.to_le_bytes(), d3.to_le_bytes());
-    [a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]]
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5],
+        d4[6], d4[7],
+    ]
 }
 
 const DI_D4: [u8; 8] = [0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00];
@@ -53,7 +56,11 @@ fn pad_guid(n: u32) -> [u8; 16] {
 
 fn trace() -> bool {
     static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *T.get_or_init(|| recomp::config::env("PAD_LOG").ok_or(()).is_ok_and(|v| v != "0"))
+    *T.get_or_init(|| {
+        recomp::config::env("PAD_LOG")
+            .ok_or(())
+            .is_ok_and(|v| v != "0")
+    })
 }
 
 macro_rules! pad_log {
@@ -125,14 +132,18 @@ fn pressed_by(e: &gilrs::EventType) -> Option<u32> {
     match *e {
         gilrs::EventType::ButtonChanged(Button::RightTrigger2, v, _) if v > 0.3 => Some(0),
         gilrs::EventType::ButtonChanged(Button::LeftTrigger2, v, _) if v > 0.3 => Some(1),
-        gilrs::EventType::ButtonPressed(b, _) => BUTTONS.iter().position(|&x| x == b).map(|k| BUTTON_NUMBERS[k]),
+        gilrs::EventType::ButtonPressed(b, _) => BUTTONS
+            .iter()
+            .position(|&x| x == b)
+            .map(|k| BUTTON_NUMBERS[k]),
         _ => None,
     }
 }
 
 fn read(g: &gilrs::Gamepad) -> Pad {
     let trigger = |b| g.button_data(b).map_or(0.0, |d| d.value()) > 0.3;
-    let mut buttons = trigger(Button::RightTrigger2) as u32 | (trigger(Button::LeftTrigger2) as u32) << 1;
+    let mut buttons =
+        trigger(Button::RightTrigger2) as u32 | (trigger(Button::LeftTrigger2) as u32) << 1;
     for (b, n) in BUTTONS.into_iter().zip(BUTTON_NUMBERS) {
         buttons |= (g.is_pressed(b) as u32) << n;
     }
@@ -149,7 +160,9 @@ fn read(g: &gilrs::Gamepad) -> Pad {
 }
 
 fn new_gilrs() -> Option<&'static mut Gilrs> {
-    let g = Gilrs::new().map_err(|e| log!("warn: no gamepads: {e}")).ok()?;
+    let g = Gilrs::new()
+        .map_err(|e| log!("warn: no gamepads: {e}"))
+        .ok()?;
     Some(Box::leak(Box::new(g)))
 }
 
@@ -179,17 +192,26 @@ fn update() {
     let mut pads = PADS.lock().unwrap();
     let pressed_before = |id| pads.iter().find(|e| e.id == id).map_or(0, |e| e.pressed);
     let mut now: Vec<Entry> = scripted
-        .map(|pad| Entry { pad, pressed: pressed_before(None) | pad.buttons, id: None, name: "Scripted pad".to_string() })
+        .map(|pad| Entry {
+            pad,
+            pressed: pressed_before(None) | pad.buttons,
+            id: None,
+            name: "Scripted pad".to_string(),
+        })
         .into_iter()
         .collect();
     GILRS.with(|g| {
         let mut g = g.borrow_mut();
-        let Some(g) = g.get_or_insert_with(new_gilrs) else { return };
+        let Some(g) = g.get_or_insert_with(new_gilrs) else {
+            return;
+        };
         let mut pressed: Vec<(usize, u32)> = Vec::new();
         while let Some(e) = g.next_event() {
             match e.event {
                 gilrs::EventType::Connected => pad_log!("connected: {}", g.gamepad(e.id).name()),
-                gilrs::EventType::Disconnected => pad_log!("disconnected: {}", g.gamepad(e.id).name()),
+                gilrs::EventType::Disconnected => {
+                    pad_log!("disconnected: {}", g.gamepad(e.id).name())
+                }
                 ref ev => {
                     if let Some(b) = pressed_by(ev) {
                         pressed.push((e.id.into(), 1 << b));
@@ -201,7 +223,12 @@ fn update() {
             let id: usize = id.into();
             let pad = read(&p);
             let new = pressed.iter().filter(|e| e.0 == id).fold(0, |a, e| a | e.1);
-            Entry { pad, pressed: pressed_before(Some(id)) | new | pad.buttons, id: Some(id), name: p.name().to_string() }
+            Entry {
+                pad,
+                pressed: pressed_before(Some(id)) | new | pad.buttons,
+                id: Some(id),
+                name: p.name().to_string(),
+            }
         }));
     });
     if super::record::on() {
@@ -263,7 +290,9 @@ fn pad(n: u32) -> Pad {
         update();
     }
     let mut pads = PADS.lock().unwrap();
-    let Some(k) = connected(&pads, n) else { return Pad::default() };
+    let Some(k) = connected(&pads, n) else {
+        return Pad::default();
+    };
     let e = &mut pads[k];
     let mut p = e.pad;
     p.buttons |= std::mem::take(&mut e.pressed);
@@ -273,8 +302,8 @@ fn pad(n: u32) -> Pad {
 /// The scripted pad's controls (<PREFIX>_INPUT `pad@A*500`, `pad@LX=-1*1000`): our buttons in
 /// order (the D-pad's too), then Start and both sticks' axes (y up, as gilrs has it).
 pub const CONTROLS: [&str; 20] = [
-    "RT", "LT", "B", "A", "X", "Y", "LB", "RB", "Back", "R3", "L3", "Up", "Down", "Left", "Right", "Start", "LX", "LY",
-    "RX", "RY",
+    "RT", "LT", "B", "A", "X", "Y", "LB", "RB", "Back", "R3", "L3", "Up", "Down", "Left", "Right",
+    "Start", "LX", "LY", "RX", "RY",
 ];
 
 /// Set one control of the scripted pad (`CONTROLS[k]`): held when `v` is not 0, or the axis' value.
@@ -381,7 +410,12 @@ fn enum_devices(c: &mut Cpu) -> u32 {
     ensure_polled();
     let names: Vec<String> = {
         let pads = PADS.lock().unwrap();
-        (0..2).map(|n| pads.get(n).map_or_else(|| format!("Gamepad {}", n + 1), |e| e.name.clone())).collect()
+        (0..2)
+            .map(|n| {
+                pads.get(n)
+                    .map_or_else(|| format!("Gamepad {}", n + 1), |e| e.name.clone())
+            })
+            .collect()
     };
     let ddi = alloc(0x244);
     let m = mem();
@@ -391,7 +425,10 @@ fn enum_devices(c: &mut Cpu) -> u32 {
         m.wr32(ddi, 0x244);
         m.slice(ddi + 4, 16).copy_from_slice(&pad_guid(n as u32));
         m.slice(ddi + 0x14, 16).copy_from_slice(&pad_guid(0));
-        m.wr32(ddi + 0x24, DIDEVTYPE_JOYSTICK | DIDEVTYPEJOYSTICK_GAMEPAD << 8);
+        m.wr32(
+            ddi + 0x24,
+            DIDEVTYPE_JOYSTICK | DIDEVTYPEJOYSTICK_GAMEPAD << 8,
+        );
         put_cstr(ddi + 0x28, name, 260);
         put_cstr(ddi + 0x12c, name, 260);
         if guest_call(c, cb, &[ddi, user]) == 0 {
@@ -430,7 +467,13 @@ const DEVICE_SIZE: u32 = 0x20;
 
 fn dev_query(c: &mut Cpu) -> u32 {
     let (this, iid, out) = (arg(c, 0), guid_at(arg(c, 1)), arg(c, 2));
-    if ![IID_IUNKNOWN, IID_IDIRECTINPUTDEVICEA, IID_IDIRECTINPUTDEVICE2A].contains(&iid) {
+    if ![
+        IID_IUNKNOWN,
+        IID_IDIRECTINPUTDEVICEA,
+        IID_IDIRECTINPUTDEVICE2A,
+    ]
+    .contains(&iid)
+    {
         mem().wr32(out, 0);
         return E_NOINTERFACE;
     }
@@ -448,7 +491,16 @@ fn get_capabilities(c: &mut Cpu) -> u32 {
         return E_INVALIDARG;
     }
     m.slice(p + 4, size as usize - 4).fill(0);
-    for (k, v) in [DIDC_ATTACHED, DIDEVTYPE_JOYSTICK | DIDEVTYPEJOYSTICK_GAMEPAD << 8, 2, 15, 0].into_iter().enumerate() {
+    for (k, v) in [
+        DIDC_ATTACHED,
+        DIDEVTYPE_JOYSTICK | DIDEVTYPEJOYSTICK_GAMEPAD << 8,
+        2,
+        15,
+        0,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         m.wr32(p + 4 + 4 * k as u32, v);
     }
     DI_OK
@@ -505,10 +557,17 @@ fn acquire(c: &mut Cpu) -> u32 {
 /// centre (the game tests the sign).
 fn axis_value(d: u32, axis: u32, p: &Pad) -> u32 {
     let m = mem();
-    let (lo, hi) = (m.rd32(d + RANGE + 8 * axis) as i32 as f32, m.rd32(d + RANGE + 8 * axis + 4) as i32 as f32);
+    let (lo, hi) = (
+        m.rd32(d + RANGE + 8 * axis) as i32 as f32,
+        m.rd32(d + RANGE + 8 * axis + 4) as i32 as f32,
+    );
     let dz = m.rd32(d + DEAD_ZONE + 4 * axis).min(9999) as f32 / 10000.0;
     let s = p.stick[axis as usize].clamp(-1.0, 1.0);
-    let v = if s.abs() > dz { s.signum() * (s.abs() - dz) / (1.0 - dz) } else { 0.0 };
+    let v = if s.abs() > dz {
+        s.signum() * (s.abs() - dz) / (1.0 - dz)
+    } else {
+        0.0
+    };
     let centre = (lo + hi) / 2.0;
     if v == 0.0 {
         return centre.floor() as i32 as u32;
@@ -558,7 +617,11 @@ static DEVICE: &[Import] = &[
     ("IDirectInputDevice2A::EnumEffects", 4, ok),
     ("IDirectInputDevice2A::GetEffectInfo", 3, not_impl),
     ("IDirectInputDevice2A::GetForceFeedbackState", 2, not_impl),
-    ("IDirectInputDevice2A::SendForceFeedbackCommand", 2, not_impl),
+    (
+        "IDirectInputDevice2A::SendForceFeedbackCommand",
+        2,
+        not_impl,
+    ),
     ("IDirectInputDevice2A::EnumCreatedEffectObjects", 4, ok),
     ("IDirectInputDevice2A::Escape", 2, not_impl),
     ("IDirectInputDevice2A::Poll", 1, ok),
@@ -669,7 +732,9 @@ pub fn release_keys() {
 /// A mouse button (0 left, 1 right, 2 middle, 3 X1) went down or up.
 pub fn button(b: u8, down: bool) {
     let mut s = KM.lock().unwrap();
-    let Some(k) = s.buttons.get_mut(b as usize) else { return };
+    let Some(k) = s.buttons.get_mut(b as usize) else {
+        return;
+    };
     *k = if down { 0x80 } else { 0 };
     km_push(&mut s, MOUSE, 12 + b as u32, if down { 0x80 } else { 0 });
 }
@@ -705,7 +770,10 @@ fn km_create(kind: usize, out: u32) -> u32 {
     m.wr32(d + 4, 1);
     m.wr32(d + KM_KIND, kind as u32);
     m.wr32(d + KM_BUFFERED, 0);
-    KM.lock().unwrap().events.insert(d, (kind, std::collections::VecDeque::new()));
+    KM.lock()
+        .unwrap()
+        .events
+        .insert(d, (kind, std::collections::VecDeque::new()));
     m.wr32(out, d);
     pad_log!("CreateDevice: {}", KM_NAMES[kind]);
     DI_OK
@@ -717,7 +785,10 @@ fn km_enum(c: &mut Cpu, kind: u32, cb: u32, user: u32) -> bool {
     let ddi = alloc(0x244);
     let m = mem();
     let mut go_on = true;
-    for (g, t, name) in [(GUID_SYSKEYBOARD, DIDEVTYPE_KEYBOARD, "Keyboard"), (GUID_SYSMOUSE, DIDEVTYPE_MOUSE, "Mouse")] {
+    for (g, t, name) in [
+        (GUID_SYSKEYBOARD, DIDEVTYPE_KEYBOARD, "Keyboard"),
+        (GUID_SYSMOUSE, DIDEVTYPE_MOUSE, "Mouse"),
+    ] {
         if kind != 0 && kind != t {
             continue;
         }
@@ -748,7 +819,11 @@ fn km_capabilities(c: &mut Cpu) -> u32 {
     let m = mem();
     let size = m.rd32(p).max(24);
     m.slice(p + 4, size as usize - 4).fill(0);
-    let caps = if km_kind(d) == KEYBOARD { [DIDC_ATTACHED, DIDEVTYPE_KEYBOARD, 0, 256, 0] } else { [DIDC_ATTACHED, DIDEVTYPE_MOUSE, 3, 4, 0] };
+    let caps = if km_kind(d) == KEYBOARD {
+        [DIDC_ATTACHED, DIDEVTYPE_KEYBOARD, 0, 256, 0]
+    } else {
+        [DIDC_ATTACHED, DIDEVTYPE_MOUSE, 3, 4, 0]
+    };
     for (k, v) in caps.into_iter().enumerate() {
         m.wr32(p + 4 + 4 * k as u32, v);
     }
@@ -824,7 +899,9 @@ fn km_device_data(c: &mut Cpu) -> u32 {
     let m = mem();
     let want = m.rd32(count_p) as usize;
     let mut s = KM.lock().unwrap();
-    let KmState { events, sequence, .. } = &mut *s;
+    let KmState {
+        events, sequence, ..
+    } = &mut *s;
     let Some((_, q)) = events.get_mut(&d) else {
         m.wr32(count_p, 0);
         return DI_OK;
@@ -870,7 +947,11 @@ static KM_DEVICE: &[Import] = &[
     ("IDirectInputDevice2A::EnumEffects", 4, ok),
     ("IDirectInputDevice2A::GetEffectInfo", 3, not_impl),
     ("IDirectInputDevice2A::GetForceFeedbackState", 2, not_impl),
-    ("IDirectInputDevice2A::SendForceFeedbackCommand", 2, not_impl),
+    (
+        "IDirectInputDevice2A::SendForceFeedbackCommand",
+        2,
+        not_impl,
+    ),
     ("IDirectInputDevice2A::EnumCreatedEffectObjects", 4, ok),
     ("IDirectInputDevice2A::Escape", 2, not_impl),
     ("IDirectInputDevice2A::Poll", 1, ok),

@@ -37,7 +37,10 @@ pub struct LogicClock {
 
 impl LogicClock {
     pub const fn new(fps: u32) -> Self {
-        LogicClock { frame_ns: 1_000_000_000 / fps as u64, state: Mutex::new(None) }
+        LogicClock {
+            frame_ns: 1_000_000_000 / fps as u64,
+            state: Mutex::new(None),
+        }
     }
 
     pub fn frame_time(&self) -> Duration {
@@ -67,7 +70,12 @@ impl LogicClock {
     /// steps of 0.69 and 0.31 frame alternating, a double image). Such a swap gets the new
     /// frame instead: the logic runs at once, up to a period before it is due (its clock does
     /// not change).
-    pub fn frame(&self, mut picture: impl FnMut(), pacer: &Pacer, period: Duration) -> (u64, Duration) {
+    pub fn frame(
+        &self,
+        mut picture: impl FnMut(),
+        pacer: &Pacer,
+        period: Duration,
+    ) -> (u64, Duration) {
         let frame = self.frame_time();
         let due = {
             let mut s = self.state.lock().unwrap();
@@ -120,7 +128,9 @@ pub struct Pacer {
 
 impl Pacer {
     pub const fn new() -> Self {
-        Pacer { next: Mutex::new(None) }
+        Pacer {
+            next: Mutex::new(None),
+        }
     }
 
     /// Wait for this swap's turn, the next `period` later (zero: unlimited, no wait).
@@ -141,7 +151,11 @@ impl Pacer {
     /// When a picture drawn now will be shown: at the next swap's turn, or now.
     pub fn next_shown(&self) -> Instant {
         let now = Instant::now();
-        self.next.lock().unwrap().filter(|&t| t > now).unwrap_or(now)
+        self.next
+            .lock()
+            .unwrap()
+            .filter(|&t| t > now)
+            .unwrap_or(now)
     }
 }
 
@@ -178,8 +192,16 @@ impl<T: Copy> Hist<T> {
     pub fn note(h: Option<&Self>, f: u64, v: T) -> Self {
         match h {
             Some(h) if h.frame == f => Hist { cur: v, ..*h },
-            Some(h) if h.frame + 1 == f => Hist { frame: f, cur: v, prev: Some(h.cur) },
-            _ => Hist { frame: f, cur: v, prev: None },
+            Some(h) if h.frame + 1 == f => Hist {
+                frame: f,
+                cur: v,
+                prev: Some(h.cur),
+            },
+            _ => Hist {
+                frame: f,
+                cur: v,
+                prev: None,
+            },
         }
     }
 }
@@ -200,7 +222,12 @@ pub fn lerp_angle(a: u32, b: u32, alpha: u32, bits: u32) -> u32 {
 
 /// Whether a matrix is a rotation (rows of length 1 within `tol`).
 pub fn is_rotation(m: &[f64; 9], tol: f64) -> bool {
-    (0..3).all(|r| ((m[3 * r] * m[3 * r] + m[3 * r + 1] * m[3 * r + 1] + m[3 * r + 2] * m[3 * r + 2]).sqrt() - 1.0).abs() < tol)
+    (0..3).all(|r| {
+        ((m[3 * r] * m[3 * r] + m[3 * r + 1] * m[3 * r + 1] + m[3 * r + 2] * m[3 * r + 2]).sqrt()
+            - 1.0)
+            .abs()
+            < tol
+    })
 }
 
 /// A rotation matrix's quaternion (w, x, y, z).
@@ -254,7 +281,9 @@ pub fn mix_rotation(a: &[i16; 9], b: &[i16; 9], one: f64, alpha: u32) -> Option<
     }
     let (ma, mb) = (a.map(|v| v as f64 / one), b.map(|v| v as f64 / one));
     if !(is_rotation(&ma, 0.02) && is_rotation(&mb, 0.02)) {
-        return Some(std::array::from_fn(|k| lerp(a[k] as i64, b[k] as i64, alpha) as i16));
+        return Some(std::array::from_fn(|k| {
+            lerp(a[k] as i64, b[k] as i64, alpha) as i16
+        }));
     }
     let (qa, mut qb) = (quat(&ma), quat(&mb));
     let mut dot: f64 = (0..4).map(|i| qa[i] * qb[i]).sum();
@@ -328,7 +357,8 @@ impl Statics {
                 for p in pages {
                     let (a, b) = (p.max(lo), (p + 0x1000).min(hi));
                     let at = (a - lo) as usize;
-                    m.slice(a, (b - a) as usize).copy_from_slice(&saved[at..at + (b - a) as usize]);
+                    m.slice(a, (b - a) as usize)
+                        .copy_from_slice(&saved[at..at + (b - a) as usize]);
                 }
                 // putting back writes too: the watch starts after it
                 let _ = m.written(lo, hi);
@@ -354,7 +384,16 @@ pub struct Saved {
 }
 
 pub fn save(c: &Cpu) -> Saved {
-    Saved { r: c.r, flags: [c.cf, c.pf, c.zf, c.sf, c.of, c.df], st: c.st, st_int: c.st_int, st_int_of: c.st_int_of, top: c.top, fsw: c.fsw, fcw: c.fcw }
+    Saved {
+        r: c.r,
+        flags: [c.cf, c.pf, c.zf, c.sf, c.of, c.df],
+        st: c.st,
+        st_int: c.st_int,
+        st_int_of: c.st_int_of,
+        top: c.top,
+        fsw: c.fsw,
+        fcw: c.fcw,
+    }
 }
 
 pub fn restore(c: &mut Cpu, s: &Saved) {
@@ -386,13 +425,28 @@ mod tests {
         let (s, c) = a.sin_cos();
         let [x, y, z] = ax;
         let t = 1.0 - c;
-        [t * x * x + c, t * x * y - s * z, t * x * z + s * y, t * x * y + s * z, t * y * y + c, t * y * z - s * x, t * x * z - s * y, t * y * z + s * x, t * z * z + c]
+        [
+            t * x * x + c,
+            t * x * y - s * z,
+            t * x * z + s * y,
+            t * x * y + s * z,
+            t * y * y + c,
+            t * y * z - s * x,
+            t * x * z - s * y,
+            t * y * z + s * x,
+            t * z * z + c,
+        ]
     }
 
     #[test]
     fn quaternion_round_trip() {
         let n = 14f64.sqrt();
-        for ax in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0 / n, 2.0 / n, -3.0 / n]] {
+        for ax in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0 / n, 2.0 / n, -3.0 / n],
+        ] {
             for k in 0..24 {
                 let m = rot(ax, k as f64 * 0.27);
                 let back = from_quat(quat(&m));
@@ -407,12 +461,21 @@ mod tests {
 
     #[test]
     fn rotation_halfway() {
-        let (a, b) = (fixed(rot([0.0, 1.0, 0.0], 0.0)), fixed(rot([0.0, 1.0, 0.0], 0.4)));
+        let (a, b) = (
+            fixed(rot([0.0, 1.0, 0.0], 0.0)),
+            fixed(rot([0.0, 1.0, 0.0], 0.4)),
+        );
         let mid = mix_rotation(&a, &b, 4096.0, 128).unwrap();
         let want = fixed(rot([0.0, 1.0, 0.0], 0.2));
-        assert!((0..9).all(|i| (mid[i] - want[i]).abs() <= 2), "{mid:?} {want:?}");
+        assert!(
+            (0..9).all(|i| (mid[i] - want[i]).abs() <= 2),
+            "{mid:?} {want:?}"
+        );
         // a rotor's turn: not interpolated
-        assert_eq!(mix_rotation(&a, &fixed(rot([0.0, 1.0, 0.0], 2.0)), 4096.0, 128), None);
+        assert_eq!(
+            mix_rotation(&a, &fixed(rot([0.0, 1.0, 0.0], 2.0)), 4096.0, 128),
+            None
+        );
         // scaled: element by element
         let s = [8192, 0, 0, 0, 8192, 0, 0, 0, 8192];
         assert_eq!(mix_rotation(&a, &s, 4096.0, 128).unwrap()[0], 6144);

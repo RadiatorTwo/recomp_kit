@@ -15,7 +15,12 @@ pub struct Setting {
 impl Setting {
     /// `value`: the registry value's name; `env`: the switch without the prefix.
     pub const fn new(value: &'static str, env: &'static str, default: bool) -> Setting {
-        Setting { on: AtomicU8::new(2), value, env, default }
+        Setting {
+            on: AtomicU8::new(2),
+            value,
+            env,
+            default,
+        }
     }
 
     pub fn get(&self) -> bool {
@@ -25,7 +30,8 @@ impl Setting {
         }
         let on = match recomp::config::env(self.env) {
             Some(v) => v != "0",
-            None => advapi32::value("", self.value).map_or(self.default, |(_, d)| d.first().is_some_and(|&b| b != 0)),
+            None => advapi32::value("", self.value)
+                .map_or(self.default, |(_, d)| d.first().is_some_and(|&b| b != 0)),
         };
         self.on.store(on as u8, Ordering::Relaxed);
         on

@@ -17,7 +17,7 @@ fn on() -> bool {
 /// Start sampling the calling thread (once).
 #[cfg(windows)]
 pub fn start() {
-    use windows_sys::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+    use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread};
     static STARTED: OnceLock<()> = OnceLock::new();
     if !on() || STARTED.get().is_some() {
@@ -25,7 +25,17 @@ pub fn start() {
     }
     let _ = STARTED.set(());
     let mut h: HANDLE = std::ptr::null_mut();
-    unsafe { DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &mut h, 0, 0, DUPLICATE_SAME_ACCESS) };
+    unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            GetCurrentThread(),
+            GetCurrentProcess(),
+            &mut h,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
     let h = h as usize;
     std::thread::spawn(move || sample(h as HANDLE));
 }
@@ -35,14 +45,27 @@ pub fn start() {}
 
 #[cfg(windows)]
 fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
-    use windows_sys::Win32::System::Diagnostics::Debug::{GetThreadContext, ReadProcessMemory, RtlLookupFunctionEntry, RtlVirtualUnwind, CONTEXT, CONTEXT_FULL_AMD64, UNW_FLAG_NHANDLER};
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        CONTEXT, CONTEXT_FULL_AMD64, GetThreadContext, ReadProcessMemory, RtlLookupFunctionEntry,
+        RtlVirtualUnwind, UNW_FLAG_NHANDLER,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     use windows_sys::Win32::System::Threading::{ResumeThread, SuspendThread};
-    let Some(d) = recomp::rt::DISPATCH.get() else { return };
+    let Some(d) = recomp::rt::DISPATCH.get() else {
+        return;
+    };
     // hooked functions: their lifted originals too
-    let mut starts: Vec<(usize, u32)> = d.table.iter().map(|&(g, p)| (p, g)).chain(d.hooks.iter().map(|h| (h.2, h.0))).collect();
+    let mut starts: Vec<(usize, u32)> = d
+        .table
+        .iter()
+        .map(|&(g, p)| (p, g))
+        .chain(d.hooks.iter().map(|h| (h.2, h.0)))
+        .collect();
     starts.sort_unstable();
-    let (lo, hi) = (starts.first().map_or(0, |s| s.0), starts.last().map_or(0, |s| s.0) + 0x10000);
+    let (lo, hi) = (
+        starts.first().map_or(0, |s| s.0),
+        starts.last().map_or(0, |s| s.0) + 0x10000,
+    );
     let mut counts: HashMap<String, u32> = HashMap::new();
     let mut modules = HashMap::new();
     let mut total = 0u32;
@@ -54,7 +77,9 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
         std::thread::sleep(std::time::Duration::from_micros(500));
         let mut ctx: CONTEXT = unsafe { std::mem::zeroed() };
         ctx.ContextFlags = CONTEXT_FULL_AMD64;
-        let ours = |a: u64| (lo..hi).contains(&(a as usize)) || (own_text().0..own_text().1).contains(&(a as usize));
+        let ours = |a: u64| {
+            (lo..hi).contains(&(a as usize)) || (own_text().0..own_text().1).contains(&(a as usize))
+        };
         unsafe {
             if SuspendThread(h) == u32::MAX {
                 return;
@@ -67,7 +92,14 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
                     let mut n = 0;
                     let p = (ctx.Rsp as usize + got) as *const std::ffi::c_void;
                     let chunk = (4096 - (p as usize & 4095)).min(stack.len() - got);
-                    if ReadProcessMemory(GetCurrentProcess(), p, stack[got..].as_mut_ptr().cast(), chunk, &mut n) == 0 {
+                    if ReadProcessMemory(
+                        GetCurrentProcess(),
+                        p,
+                        stack[got..].as_mut_ptr().cast(),
+                        chunk,
+                        &mut n,
+                    ) == 0
+                    {
                         break;
                     }
                     got += n;
@@ -75,7 +107,10 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
             }
             ResumeThread(h);
             if ok == 0 {
-                log!("sample: GetThreadContext failed: {}", std::io::Error::last_os_error());
+                log!(
+                    "sample: GetThreadContext failed: {}",
+                    std::io::Error::last_os_error()
+                );
                 return;
             }
             stack_len = got;
@@ -88,7 +123,9 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
                     None => "?".to_string(),
                     // the function <PREFIX>_DUMP shows: by place in its machine code (the
                     // dump's offsets)
-                    Some((p, g)) if recomp::jit::dump_of(g) => format!("{}+{:x}", recomp::image::named(g), a - p),
+                    Some((p, g)) if recomp::jit::dump_of(g) => {
+                        format!("{}+{:x}", recomp::image::named(g), a - p)
+                    }
                     Some((_, g)) => recomp::image::named(g),
                 }
             } else {
@@ -114,7 +151,18 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
                     c.Rsp += 8;
                 } else {
                     let (mut data, mut frame) = (std::ptr::null_mut(), 0u64);
-                    unsafe { RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, c.Rip, f, &mut c, &mut data, &mut frame, std::ptr::null_mut()) };
+                    unsafe {
+                        RtlVirtualUnwind(
+                            UNW_FLAG_NHANDLER,
+                            image,
+                            c.Rip,
+                            f,
+                            &mut c,
+                            &mut data,
+                            &mut frame,
+                            std::ptr::null_mut(),
+                        )
+                    };
                 }
                 if c.Rip == 0 {
                     break;
@@ -138,7 +186,12 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
             log!("sample: {total} samples");
             if let Some(path) = recomp::config::env("SAMPLE_RAW") {
                 // every sample's name, for symbolising our own addresses against the link map
-                let _ = std::fs::write(path, v.iter().map(|(k, n)| format!("{n} {k}\n")).collect::<String>());
+                let _ = std::fs::write(
+                    path,
+                    v.iter()
+                        .map(|(k, n)| format!("{n} {k}\n"))
+                        .collect::<String>(),
+                );
             }
             for (name, n) in v.iter().take(25) {
                 log!("sample: {:5.1}% {name}", *n as f64 * 100.0 / total as f64);
@@ -152,18 +205,38 @@ fn sample(h: windows_sys::Win32::Foundation::HANDLE) {
 /// Looked up per 64 KB (`known`).
 #[cfg(windows)]
 fn module_of(a: usize, known: &mut HashMap<usize, Option<(usize, String)>>) -> String {
-    use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT};
+    use windows_sys::Win32::System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        GetModuleFileNameW, GetModuleHandleExW,
+    };
     let m = known.entry(a >> 16).or_insert_with(|| {
         let mut h = std::ptr::null_mut();
-        if unsafe { GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, a as *const u16, &mut h) } == 0 {
+        if unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                    | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                a as *const u16,
+                &mut h,
+            )
+        } == 0
+        {
             return None;
         }
         let mut buf = [0u16; 260];
         let n = unsafe { GetModuleFileNameW(h, buf.as_mut_ptr(), 260) } as usize;
-        Some((h as usize, String::from_utf16_lossy(&buf[..n]).rsplit('\\').next().unwrap_or("?").to_lowercase()))
+        Some((
+            h as usize,
+            String::from_utf16_lossy(&buf[..n])
+                .rsplit('\\')
+                .next()
+                .unwrap_or("?")
+                .to_lowercase(),
+        ))
     });
     match m {
-        Some((base, name)) if name.ends_with(".exe") || name == "ntdll.dll" => format!("{name}+{:#x}", a - *base),
+        Some((base, name)) if name.ends_with(".exe") || name == "ntdll.dll" => {
+            format!("{name}+{:#x}", a - *base)
+        }
         Some((_, name)) => name.clone(),
         None => format!("no module {:#x}", a & !0xffff),
     }
@@ -183,7 +256,10 @@ fn own_text() -> (usize, usize) {
         for i in 0..sections {
             let h = first + 40 * i;
             if std::slice::from_raw_parts(h as *const u8, 5) == b".text" {
-                let (size, va) = (*((h + 8) as *const u32) as usize, *((h + 12) as *const u32) as usize);
+                let (size, va) = (
+                    *((h + 8) as *const u32) as usize,
+                    *((h + 12) as *const u32) as usize,
+                );
                 return (base + va, base + va + size);
             }
         }

@@ -8,17 +8,21 @@ use crate::lift::{Lifter, Refs};
 use crate::rt::{self, Cpu, DISPATCH, Dispatch, Hook};
 use crate::smc::Smc;
 use cranelift_codegen::binemit::Reloc;
-use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, LibCall, Signature, UserFuncName, types::*};
+use cranelift_codegen::control::ControlPlane;
+use cranelift_codegen::ir::{
+    AbiParam, Function, InstBuilder, LibCall, Signature, UserFuncName, types::*,
+};
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings::{self, Configurable};
-use cranelift_codegen::control::ControlPlane;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Linkage, Module, ModuleReloc, ModuleRelocTarget, default_libcall_names};
+use cranelift_module::{
+    FuncId, Linkage, Module, ModuleReloc, ModuleRelocTarget, default_libcall_names,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 pub struct Compiled {
@@ -66,7 +70,13 @@ pub fn compile(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32, Hook)]
 /// As `compile`, with the lifted functions' machine code kept in `cache` (a file, and the key
 /// it is valid for: what made it, our program and the game's EXE). A file with another key is
 /// replaced.
-pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32, Hook)], cache: Option<(&Path, [u8; 32])>) -> Compiled {
+pub fn compile_cached(
+    prog: &Program,
+    smc: &Smc,
+    code: &mut Code,
+    hooks: &[(u32, Hook)],
+    cache: Option<(&Path, [u8; 32])>,
+) -> Compiled {
     let cache = cache.filter(|_| crate::config::env("DUMP").is_none());
     let mut flags = settings::builder();
     flags.set("opt_level", "speed").unwrap();
@@ -97,7 +107,9 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
     let tcfg = module.target_config();
     let ptr = tcfg.pointer_type();
 
-    let sig = |cc: CallConv, params: &[cranelift_codegen::ir::Type], ret: Option<cranelift_codegen::ir::Type>| {
+    let sig = |cc: CallConv,
+               params: &[cranelift_codegen::ir::Type],
+               ret: Option<cranelift_codegen::ir::Type>| {
         let mut s = Signature::new(cc);
         s.params.extend(params.iter().map(|&t| AbiParam::new(t)));
         s.returns.extend(ret.map(AbiParam::new));
@@ -105,7 +117,8 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
     };
     // guest functions: fn(cpu) with the tail calling convention (return_call between them)
     let guest_sig = sig(CallConv::Tail, &[ptr], None);
-    let mut decl = |name: &str, s: &Signature| module.declare_function(name, Linkage::Import, s).unwrap();
+    let mut decl =
+        |name: &str, s: &Signature| module.declare_function(name, Linkage::Import, s).unwrap();
     let h_lookup = decl("rt_lookup", &sig(host_cc, &[ptr, I32], Some(ptr)));
     let h_foreign = decl("rt_foreign", &sig(host_cc, &[ptr], None));
     let h_unimpl = decl("rt_unimpl", &sig(host_cc, &[ptr, I32], None));
@@ -115,16 +128,28 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
     let h_rdtsc = decl("rt_rdtsc", &sig(host_cc, &[ptr], None));
     let h_x87 = decl("rt_x87", &sig(host_cc, &[ptr, I32, I32], None));
     let h_yield = decl("rt_yield", &sig(host_cc, &[ptr], None));
-    let h_fpu_round = decl("rt_fpu_round", &sig(host_cc, &[I32, F64, F64, I32], Some(F64)));
+    let h_fpu_round = decl(
+        "rt_fpu_round",
+        &sig(host_cc, &[I32, F64, F64, I32], Some(F64)),
+    );
     let h_mxcsr_rz = decl("rt_mxcsr_rz", &sig(host_cc, &[], Some(I32)));
     let h_mxcsr_set = decl("rt_mxcsr_set", &sig(host_cc, &[I32], None));
     let h_hook = decl("rt_hook", &sig(host_cc, &[ptr, I32], None));
-    let d_poll = module.declare_data("rt_poll", Linkage::Import, true, false).unwrap();
+    let d_poll = module
+        .declare_data("rt_poll", Linkage::Import, true, false)
+        .unwrap();
 
     let ids: BTreeMap<u32, FuncId> = prog
         .fns
         .keys()
-        .map(|&a| (a, module.declare_function(&format!("F_{a:x}"), Linkage::Local, &guest_sig).unwrap()))
+        .map(|&a| {
+            (
+                a,
+                module
+                    .declare_function(&format!("F_{a:x}"), Linkage::Local, &guest_sig)
+                    .unwrap(),
+            )
+        })
         .collect();
     for h in hooks.iter().filter(|h| !ids.contains_key(&h.0)) {
         eprintln!("warn: hook at {:#x}: no function there", h.0);
@@ -133,12 +158,26 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
     let originals: BTreeMap<u32, FuncId> = hooks
         .iter()
         .filter(|h| ids.contains_key(&h.0))
-        .map(|h| (h.0, module.declare_function(&format!("G_{:x}", h.0), Linkage::Local, &guest_sig).unwrap()))
+        .map(|h| {
+            (
+                h.0,
+                module
+                    .declare_function(&format!("G_{:x}", h.0), Linkage::Local, &guest_sig)
+                    .unwrap(),
+            )
+        })
         .collect();
-    let foreign_id = module.declare_function("foreign_stub", Linkage::Local, &guest_sig).unwrap();
-    let enter_id = module.declare_function("enter", Linkage::Local, &sig(host_cc, &[ptr, ptr], None)).unwrap();
+    let foreign_id = module
+        .declare_function("foreign_stub", Linkage::Local, &guest_sig)
+        .unwrap();
+    let enter_id = module
+        .declare_function("enter", Linkage::Local, &sig(host_cc, &[ptr, ptr], None))
+        .unwrap();
 
-    let mut stats = Stats { functions: prog.fns.len(), ..Default::default() };
+    let mut stats = Stats {
+        functions: prog.fns.len(),
+        ..Default::default()
+    };
     let mut ctx = module.make_context();
     let mut fctx = FunctionBuilderContext::new();
     let t0 = Instant::now();
@@ -175,7 +214,8 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
                         poll: module.declare_data_in_func(d_poll, b.func),
                         guest_sig: b.import_signature(guest_sig.clone()),
                     };
-                    let mut get_fn = |func: &mut Function, a: u32| module.declare_func_in_func(ids[&a], func);
+                    let mut get_fn =
+                        |func: &mut Function, a: u32| module.declare_func_in_func(ids[&a], func);
                     Lifter::new(b, f, prog, smc, &refs, &mut get_fn, tcfg).lift(code)
                 };
                 stats.instructions += f.ins.len();
@@ -225,7 +265,9 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
         }
     };
     for b in &blobs {
-        module.define_function_bytes(b.id, b.align, &b.bytes, &b.relocs).expect("defining a compiled function");
+        module
+            .define_function_bytes(b.id, b.align, &b.bytes, &b.relocs)
+            .expect("defining a compiled function");
     }
 
     // the stub passes the hook's index in address order (`Dispatch::hooks`)
@@ -289,30 +331,58 @@ pub fn compile_cached(prog: &Program, smc: &Smc, code: &mut Code, hooks: &[(u32,
     module.finalize_definitions().expect("linking the JIT code");
     stats.compile_ms = t0.elapsed().as_millis() - stats.lift_ms;
 
-    let fns: HashMap<u32, *const u8> = ids.iter().map(|(&a, &id)| (a, module.get_finalized_function(id))).collect();
+    let fns: HashMap<u32, *const u8> = ids
+        .iter()
+        .map(|(&a, &id)| (a, module.get_finalized_function(id)))
+        .collect();
     let mut table: Vec<(u32, usize)> = fns.iter().map(|(&a, &p)| (a, p as usize)).collect();
     table.sort_unstable();
     let foreign_stub = module.get_finalized_function(foreign_id) as usize;
     let enter = unsafe {
-        std::mem::transmute::<*const u8, extern "C" fn(*mut Cpu, *const u8)>(module.get_finalized_function(enter_id))
+        std::mem::transmute::<*const u8, extern "C" fn(*mut Cpu, *const u8)>(
+            module.get_finalized_function(enter_id),
+        )
     };
     let mut hooks: Vec<(u32, Hook, usize)> = hooks
         .iter()
-        .filter_map(|&(a, h)| Some((a, h, module.get_finalized_function(*originals.get(&a)?) as usize)))
+        .filter_map(|&(a, h)| {
+            Some((
+                a,
+                h,
+                module.get_finalized_function(*originals.get(&a)?) as usize,
+            ))
+        })
         .collect();
     hooks.sort_unstable_by_key(|h| h.0);
     // in the order of `originals`: the stubs' indices
     assert_eq!(hooks.len(), originals.len(), "a function hooked twice");
     let (dense, dense_base) = Dispatch::dense(&table);
-    let _ = DISPATCH.set(Dispatch { table, dense, dense_base, foreign_stub, enter, hooks });
-    Compiled { _module: module, enter, fns, stats }
+    let _ = DISPATCH.set(Dispatch {
+        table,
+        dense,
+        dense_base,
+        foreign_stub,
+        enter,
+        hooks,
+    });
+    Compiled {
+        _module: module,
+        enter,
+        fns,
+        stats,
+    }
 }
 
 /// Compile the lifted functions on every core; the results in their order.
-fn compile_all(isa: &dyn cranelift_codegen::isa::TargetIsa, lifted: Vec<(u32, FuncId, Function)>) -> Vec<(u32, FuncId, Result<Blob, String>)> {
+fn compile_all(
+    isa: &dyn cranelift_codegen::isa::TargetIsa,
+    lifted: Vec<(u32, FuncId, Function)>,
+) -> Vec<(u32, FuncId, Result<Blob, String>)> {
     let n = lifted.len();
-    let work: Vec<Mutex<Option<(u32, FuncId, Function)>>> = lifted.into_iter().map(|l| Mutex::new(Some(l))).collect();
-    let done: Vec<Mutex<Option<(u32, FuncId, Result<Blob, String>)>>> = (0..n).map(|_| Mutex::new(None)).collect();
+    let work: Vec<Mutex<Option<(u32, FuncId, Function)>>> =
+        lifted.into_iter().map(|l| Mutex::new(Some(l))).collect();
+    let done: Vec<Mutex<Option<(u32, FuncId, Result<Blob, String>)>>> =
+        (0..n).map(|_| Mutex::new(None)).collect();
     let next = AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     std::thread::scope(|s| {
@@ -335,7 +405,12 @@ fn compile_all(isa: &dyn cranelift_codegen::isa::TargetIsa, lifted: Vec<(u32, Fu
                                 id,
                                 align: c.buffer.min_alignment as u64,
                                 bytes: c.code_buffer().to_vec(),
-                                relocs: c.buffer.relocs().iter().map(|r| ModuleReloc::from_mach_reloc(r, &ctx.func, id)).collect(),
+                                relocs: c
+                                    .buffer
+                                    .relocs()
+                                    .iter()
+                                    .map(|r| ModuleReloc::from_mach_reloc(r, &ctx.func, id))
+                                    .collect(),
                             })
                         }
                         Err(e) => Err(format!("{:?}", e.inner)),
@@ -345,7 +420,9 @@ fn compile_all(isa: &dyn cranelift_codegen::isa::TargetIsa, lifted: Vec<(u32, Fu
             });
         }
     });
-    done.into_iter().map(|d| d.into_inner().unwrap().unwrap()).collect()
+    done.into_iter()
+        .map(|d| d.into_inner().unwrap().unwrap())
+        .collect()
 }
 
 // ---- the cache file ---------------------------------------------------------------------------
@@ -357,10 +434,23 @@ fn compile_all(isa: &dyn cranelift_codegen::isa::TargetIsa, lifted: Vec<(u32, Fu
 const MAGIC: &[u8; 8] = b"RCMPJIT1";
 
 /// The relocation kinds the x86-64 code uses (their numbers in the file).
-const RELOCS: [Reloc; 6] = [Reloc::Abs4, Reloc::Abs8, Reloc::X86PCRel4, Reloc::X86CallPCRel4, Reloc::X86CallPLTRel4, Reloc::X86GOTPCRel4];
+const RELOCS: [Reloc; 6] = [
+    Reloc::Abs4,
+    Reloc::Abs8,
+    Reloc::X86PCRel4,
+    Reloc::X86CallPCRel4,
+    Reloc::X86CallPLTRel4,
+    Reloc::X86GOTPCRel4,
+];
 
 fn save(path: &Path, key: &[u8; 32], blobs: &[Blob]) {
-    let mut out = Vec::with_capacity(blobs.iter().map(|b| b.bytes.len() + 24 * b.relocs.len() + 16).sum::<usize>() + 48);
+    let mut out = Vec::with_capacity(
+        blobs
+            .iter()
+            .map(|b| b.bytes.len() + 24 * b.relocs.len() + 16)
+            .sum::<usize>()
+            + 48,
+    );
     let u32_ = |out: &mut Vec<u8>, v: u32| out.extend_from_slice(&v.to_le_bytes());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(key);
@@ -386,7 +476,10 @@ fn save(path: &Path, key: &[u8; 32], blobs: &[Blob]) {
                 }
                 ModuleRelocTarget::LibCall(l) => {
                     u32_(&mut out, 1);
-                    u32_(&mut out, LibCall::all_libcalls().iter().position(|x| x == l).unwrap() as u32);
+                    u32_(
+                        &mut out,
+                        LibCall::all_libcalls().iter().position(|x| x == l).unwrap() as u32,
+                    );
                     u32_(&mut out, 0);
                 }
                 ModuleRelocTarget::FunctionOffset(f, o) => {
@@ -449,14 +542,27 @@ fn load(path: &Path, key: &[u8; 32]) -> Option<Vec<Blob>> {
             let kind = *RELOCS.get(r.u32()? as usize)?;
             let (tag, a, b) = (r.u32()?, r.u32()?, r.u32()?);
             let name = match tag {
-                0 => ModuleRelocTarget::User { namespace: a, index: b },
+                0 => ModuleRelocTarget::User {
+                    namespace: a,
+                    index: b,
+                },
                 1 => ModuleRelocTarget::LibCall(*LibCall::all_libcalls().get(a as usize)?),
                 2 => ModuleRelocTarget::FunctionOffset(FuncId::from_u32(a), b),
                 _ => return None,
             };
-            relocs.push(ModuleReloc { offset, kind, name, addend: r.i64()? });
+            relocs.push(ModuleReloc {
+                offset,
+                kind,
+                name,
+                addend: r.i64()?,
+            });
         }
-        blobs.push(Blob { id, align, bytes, relocs });
+        blobs.push(Blob {
+            id,
+            align,
+            bytes,
+            relocs,
+        });
     }
     // all of it, and nothing behind it
     (r.at == data.len()).then_some(blobs)
@@ -466,20 +572,29 @@ fn load(path: &Path, key: &[u8; 32]) -> Option<Vec<Blob>> {
 /// stderr (with the cache file not read).
 pub fn dump_of(addr: u32) -> bool {
     static A: OnceLock<Option<u32>> = OnceLock::new();
-    *A.get_or_init(|| crate::config::env("DUMP").and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())) == Some(addr)
+    *A.get_or_init(|| {
+        crate::config::env("DUMP")
+            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+    }) == Some(addr)
 }
 
 fn dump(addr: u32, code: &[u8]) {
     use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
-    let mut out = format!("== {addr:#x}: {} bytes
-", code.len());
+    let mut out = format!(
+        "== {addr:#x}: {} bytes
+",
+        code.len()
+    );
     let mut f = IntelFormatter::new();
     let mut d = Decoder::with_ip(64, code, 0, DecoderOptions::NONE);
     for i in &mut d {
         let mut t = String::new();
         f.format(&i, &mut t);
-        out += &format!("{:5x}  {t}
-", i.ip());
+        out += &format!(
+            "{:5x}  {t}
+",
+            i.ip()
+        );
     }
     eprint!("{out}");
 }

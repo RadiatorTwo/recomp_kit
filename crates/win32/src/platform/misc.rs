@@ -78,7 +78,10 @@ fn mci_get_error_string(c: &mut Cpu) -> u32 {
 /// AVIStreamOpenFromFileA and AVIFileOpenA: no AVI videos yet (Indeo needs a decoder):
 /// AVIERR_FILEOPEN, the game goes on without the video.
 fn avi_open(c: &mut Cpu) -> u32 {
-    super::log!("AVI {}: not played (no decoder yet)", super::cstr(arg(c, 1)));
+    super::log!(
+        "AVI {}: not played (no decoder yet)",
+        super::cstr(arg(c, 1))
+    );
     if arg(c, 0) != 0 {
         mem().wr32(arg(c, 0), 0);
     }

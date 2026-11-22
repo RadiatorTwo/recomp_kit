@@ -144,7 +144,12 @@ pub trait Game: Sync {
     /// REG_SZ `JoinAddress` in the game's key.
     fn join_address(&self) -> String {
         crate::platform::advapi32::value("", "JoinAddress")
-            .map(|(_, d)| d.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect())
+            .map(|(_, d)| {
+                d.iter()
+                    .take_while(|&&b| b != 0)
+                    .map(|&b| b as char)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 

@@ -20,7 +20,9 @@ use super::{Import, alloc, arg, cstr, free, guest_call, kernel32, log, mem};
 use recomp::rt::Cpu;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -59,16 +61,44 @@ const DPSYS_SESSIONLOST: u32 = 0x31;
 /// A GUID as its 16 bytes in memory.
 const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
     let (a, b, c) = (d1.to_le_bytes(), d2.to_le_bytes(), d3.to_le_bytes());
-    [a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]]
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5],
+        d4[6], d4[7],
+    ]
 }
 
-pub const CLSID_DIRECTPLAY: [u8; 16] = guid(0xd1eb6d20, 0x8923, 0x11d0, [0x9d, 0x97, 0x00, 0xa0, 0xc9, 0x0a, 0x43, 0xcb]);
+pub const CLSID_DIRECTPLAY: [u8; 16] = guid(
+    0xd1eb6d20,
+    0x8923,
+    0x11d0,
+    [0x9d, 0x97, 0x00, 0xa0, 0xc9, 0x0a, 0x43, 0xcb],
+);
 const IID_IUNKNOWN: [u8; 16] = guid(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
-const IID_IDIRECTPLAY4A: [u8; 16] = guid(0x0ab1c531, 0x4745, 0x11d1, [0xa7, 0xa1, 0x00, 0x00, 0xf8, 0x03, 0xab, 0xfc]);
+const IID_IDIRECTPLAY4A: [u8; 16] = guid(
+    0x0ab1c531,
+    0x4745,
+    0x11d1,
+    [0xa7, 0xa1, 0x00, 0x00, 0xf8, 0x03, 0xab, 0xfc],
+);
 /// the TCP/IP service provider, and the address parts of a connection
-const DPSPGUID_TCPIP: [u8; 16] = guid(0x36e95ee0, 0x8577, 0x11cf, [0x96, 0x0c, 0x00, 0x80, 0xc7, 0x53, 0x4e, 0x82]);
-const DPAID_TOTALSIZE: [u8; 16] = guid(0x1318f560, 0x912c, 0x11d0, [0x9d, 0xaa, 0x00, 0xa0, 0xc9, 0x0a, 0x43, 0xcb]);
-const DPAID_SERVICEPROVIDER: [u8; 16] = guid(0x07d916c0, 0xe0af, 0x11cf, [0x9c, 0x4e, 0x00, 0xa0, 0xc9, 0x05, 0x42, 0x5e]);
+const DPSPGUID_TCPIP: [u8; 16] = guid(
+    0x36e95ee0,
+    0x8577,
+    0x11cf,
+    [0x96, 0x0c, 0x00, 0x80, 0xc7, 0x53, 0x4e, 0x82],
+);
+const DPAID_TOTALSIZE: [u8; 16] = guid(
+    0x1318f560,
+    0x912c,
+    0x11d0,
+    [0x9d, 0xaa, 0x00, 0xa0, 0xc9, 0x0a, 0x43, 0xcb],
+);
+const DPAID_SERVICEPROVIDER: [u8; 16] = guid(
+    0x07d916c0,
+    0xe0af,
+    0x11cf,
+    [0x9c, 0x4e, 0x00, 0xa0, 0xc9, 0x05, 0x42, 0x5e],
+);
 
 /// The one connection we offer.
 const CONNECTION_NAME: &str = "TCP/IP (local network or Internet)";
@@ -96,7 +126,11 @@ const TO_HOST: u32 = u32::MAX;
 
 fn trace() -> bool {
     static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *T.get_or_init(|| recomp::config::env("NET_LOG").ok_or(()).is_ok_and(|v| v != "0"))
+    *T.get_or_init(|| {
+        recomp::config::env("NET_LOG")
+            .ok_or(())
+            .is_ok_and(|v| v != "0")
+    })
 }
 
 macro_rules! net_log {
@@ -104,14 +138,22 @@ macro_rules! net_log {
 }
 
 fn port() -> u16 {
-    recomp::config::env("NET_PORT").ok_or(()).ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT)
+    recomp::config::env("NET_PORT")
+        .ok_or(())
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT)
 }
 
 /// Not cryptographic: ids and session GUIDs that differ between computers and runs.
 fn random() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
     h.finish()
 }
 
@@ -207,10 +249,20 @@ impl Session {
             .players
             .iter()
             .filter_map(|p| p.local.map(|e| (p.id, e)))
-            .filter(|&(id, _)| if to == DPID_ALLPLAYERS { id != from } else { id == to })
+            .filter(|&(id, _)| {
+                if to == DPID_ALLPLAYERS {
+                    id != from
+                } else {
+                    id == to
+                }
+            })
             .collect();
         for (id, event) in targets {
-            self.queue.push_back(Message { from, to: id, body: body() });
+            self.queue.push_back(Message {
+                from,
+                to: id,
+                body: body(),
+            });
             if event != 0 {
                 kernel32::set_event_state(event, true);
             }
@@ -223,7 +275,14 @@ impl Session {
         self.peers
             .iter()
             .filter(|p| p.id != origin)
-            .filter(|p| !self.host || to == DPID_ALLPLAYERS || self.players.iter().any(|q| q.id == to && q.peer == p.id && q.local.is_none()))
+            .filter(|p| {
+                !self.host
+                    || to == DPID_ALLPLAYERS
+                    || self
+                        .players
+                        .iter()
+                        .any(|q| q.id == to && q.peer == p.id && q.local.is_none())
+            })
             .map(|p| p.out.clone())
             .collect()
     }
@@ -231,7 +290,11 @@ impl Session {
     fn close(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         for p in &self.peers {
-            let _ = p.out.lock().unwrap_or_else(|e| e.into_inner()).shutdown(Shutdown::Both);
+            let _ = p
+                .out
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .shutdown(Shutdown::Both);
         }
         self.peers.clear();
     }
@@ -269,7 +332,8 @@ fn read_frame(s: &mut TcpStream) -> std::io::Result<(u8, Vec<u8>)> {
 }
 
 fn u32_at(b: &[u8], at: usize) -> u32 {
-    b.get(at..at + 4).map_or(0, |s| u32::from_le_bytes(s.try_into().unwrap()))
+    b.get(at..at + 4)
+        .map_or(0, |s| u32::from_le_bytes(s.try_into().unwrap()))
 }
 
 fn text_of(b: &[u8]) -> String {
@@ -279,14 +343,19 @@ fn text_of(b: &[u8]) -> String {
 fn player_add(id: u32, existing: bool, name: &str) -> Vec<u8> {
     let mut b = id.to_le_bytes().to_vec();
     b.push(existing as u8);
-    b.extend(name.chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }));
+    b.extend(
+        name.chars()
+            .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }),
+    );
     frame(PLAYER_ADD, &b)
 }
 
 /// A connection's thread: frames in until it closes.
 fn reader(serial: u32, peer: u32, mut s: TcpStream) {
     loop {
-        let Ok((kind, b)) = read_frame(&mut s) else { break };
+        let Ok((kind, b)) = read_frame(&mut s) else {
+            break;
+        };
         if !handle(serial, peer, &s, kind, &b) {
             break;
         }
@@ -298,7 +367,13 @@ fn reader(serial: u32, peer: u32, mut s: TcpStream) {
 /// One frame from connection `peer`; false ends the connection.
 fn handle(serial: u32, peer: u32, s: &TcpStream, kind: u8, b: &[u8]) -> bool {
     let mut g = net();
-    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()).filter(|ss| ss.serial == serial) else { return false };
+    let Some(ss) = g
+        .as_mut()
+        .and_then(|n| n.session.as_mut())
+        .filter(|ss| ss.serial == serial)
+    else {
+        return false;
+    };
     match kind {
         HELLO if ss.host => {
             let joined = ss.peers.iter().filter(|p| p.id != peer).count() as u32;
@@ -318,15 +393,28 @@ fn handle(serial: u32, peer: u32, s: &TcpStream, kind: u8, b: &[u8]) -> bool {
             net_log!("player's computer {peer} joined");
         }
         PLAYER_ADD => {
-            let (id, existing, name) = (u32_at(b, 0), b.get(4) == Some(&1), text_of(b.get(5..).unwrap_or(&[])));
+            let (id, existing, name) = (
+                u32_at(b, 0),
+                b.get(4) == Some(&1),
+                text_of(b.get(5..).unwrap_or(&[])),
+            );
             if id == 0 || ss.players.iter().any(|p| p.id == id) {
                 return true;
             }
             net_log!("player {id:#x} {name:?} added");
-            ss.players.push(Player { id, name: name.clone(), local: None, peer });
+            ss.players.push(Player {
+                id,
+                name: name.clone(),
+                local: None,
+                peer,
+            });
             if !existing {
                 let players = ss.players.len() as u32;
-                ss.deliver(DPID_SYSMSG, DPID_ALLPLAYERS, || Body::Created { id, name: name.clone(), players });
+                ss.deliver(DPID_SYSMSG, DPID_ALLPLAYERS, || Body::Created {
+                    id,
+                    name: name.clone(),
+                    players,
+                });
             }
             if ss.host {
                 let outs = ss.routes(peer, DPID_ALLPLAYERS);
@@ -360,24 +448,42 @@ fn handle(serial: u32, peer: u32, s: &TcpStream, kind: u8, b: &[u8]) -> bool {
 
 /// A player left: its destroy message for the local players.
 fn gone(ss: &mut Session, id: u32) {
-    if let Some(k) = ss.players.iter().position(|p| p.id == id && p.local.is_none()) {
+    if let Some(k) = ss
+        .players
+        .iter()
+        .position(|p| p.id == id && p.local.is_none())
+    {
         let p = ss.players.remove(k);
         net_log!("player {id:#x} {:?} left", p.name);
-        ss.deliver(DPID_SYSMSG, DPID_ALLPLAYERS, || Body::Destroyed { id, name: p.name.clone() });
+        ss.deliver(DPID_SYSMSG, DPID_ALLPLAYERS, || Body::Destroyed {
+            id,
+            name: p.name.clone(),
+        });
     }
 }
 
 /// A connection closed: on the host its players left, elsewhere the session is lost.
 fn lost(serial: u32, peer: u32) {
     let mut g = net();
-    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()).filter(|ss| ss.serial == serial) else { return };
+    let Some(ss) = g
+        .as_mut()
+        .and_then(|n| n.session.as_mut())
+        .filter(|ss| ss.serial == serial)
+    else {
+        return;
+    };
     if ss.stop.load(Ordering::Relaxed) {
         return;
     }
     net_log!("connection {peer} closed");
     ss.peers.retain(|p| p.id != peer);
     if ss.host {
-        let ids: Vec<u32> = ss.players.iter().filter(|p| p.peer == peer && p.local.is_none()).map(|p| p.id).collect();
+        let ids: Vec<u32> = ss
+            .players
+            .iter()
+            .filter(|p| p.peer == peer && p.local.is_none())
+            .map(|p| p.id)
+            .collect();
         for id in ids {
             gone(ss, id);
             let outs = ss.routes(peer, DPID_ALLPLAYERS);
@@ -405,7 +511,9 @@ fn start_host(serial: u32, listener: TcpListener, udp: Option<UdpSocket>, stop: 
                     next += 1;
                     std::thread::spawn(move || reader(serial, peer, c));
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(20)),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
                 Err(e) => {
                     net_log!("accept: {e}");
                     std::thread::sleep(Duration::from_millis(100));
@@ -418,13 +526,21 @@ fn start_host(serial: u32, listener: TcpListener, udp: Option<UdpSocket>, stop: 
         let _ = udp.set_read_timeout(Some(Duration::from_millis(100)));
         let mut buf = [0; 64];
         while !stop.load(Ordering::Relaxed) {
-            let Ok((n, from)) = udp.recv_from(&mut buf) else { continue };
+            let Ok((n, from)) = udp.recv_from(&mut buf) else {
+                continue;
+            };
             if n < 24 || &buf[..8] != ask() {
                 continue;
             }
             let answer = {
                 let g = net();
-                let Some(ss) = g.as_ref().and_then(|n| n.session.as_ref()).filter(|ss| ss.serial == serial) else { break };
+                let Some(ss) = g
+                    .as_ref()
+                    .and_then(|n| n.session.as_ref())
+                    .filter(|ss| ss.serial == serial)
+                else {
+                    break;
+                };
                 if buf[8..24] != ss.app {
                     continue;
                 }
@@ -434,7 +550,12 @@ fn start_host(serial: u32, listener: TcpListener, udp: Option<UdpSocket>, stop: 
                 a.extend_from_slice(&(ss.players.len() as u32).to_le_bytes());
                 a.extend_from_slice(&ss.max.to_le_bytes());
                 a.extend_from_slice(&ss.flags.to_le_bytes());
-                a.extend(ss.name.chars().take(64).map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }));
+                a.extend(
+                    ss.name
+                        .chars()
+                        .take(64)
+                        .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }),
+                );
                 a
             };
             net_log!("asked by {from}");
@@ -454,7 +575,9 @@ fn finder(n: &mut Net) -> Option<&UdpSocket> {
         std::thread::spawn(move || {
             let mut buf = [0; 200];
             while !s.load(Ordering::Relaxed) {
-                let Ok((len, from)) = r.recv_from(&mut buf) else { continue };
+                let Ok((len, from)) = r.recv_from(&mut buf) else {
+                    continue;
+                };
                 let b = &buf[..len];
                 if len < 56 || &b[..8] != answer() {
                     continue;
@@ -488,9 +611,16 @@ fn targets() -> Vec<SocketAddr> {
     let typed = typed.trim();
     if typed.is_empty() {
         let p = port();
-        return vec![SocketAddr::from((Ipv4Addr::BROADCAST, p)), SocketAddr::from((Ipv4Addr::LOCALHOST, p))];
+        return vec![
+            SocketAddr::from((Ipv4Addr::BROADCAST, p)),
+            SocketAddr::from((Ipv4Addr::LOCALHOST, p)),
+        ];
     }
-    let with_port = if typed.contains(':') { typed.to_string() } else { format!("{typed}:{}", port()) };
+    let with_port = if typed.contains(':') {
+        typed.to_string()
+    } else {
+        format!("{typed}:{}", port())
+    };
     match with_port.to_socket_addrs() {
         Ok(a) => a.filter(|a| a.is_ipv4()).take(1).collect(),
         Err(e) => {
@@ -513,7 +643,10 @@ pub fn create(iid: u32, out: u32) -> u32 {
         free(old.object);
     }
     let object = super::com_new(DIRECT_PLAY, 0);
-    *g = Some(Net { object, ..Net::default() });
+    *g = Some(Net {
+        object,
+        ..Net::default()
+    });
     drop(g);
     query(iid, out)
 }
@@ -521,7 +654,9 @@ pub fn create(iid: u32, out: u32) -> u32 {
 fn query(iid: u32, out: u32) -> u32 {
     let id: [u8; 16] = mem().slice(iid, 16).try_into().unwrap();
     let mut g = net();
-    let Some(n) = g.as_mut() else { return E_NOINTERFACE };
+    let Some(n) = g.as_mut() else {
+        return E_NOINTERFACE;
+    };
     if id != IID_IUNKNOWN && id != IID_IDIRECTPLAY4A {
         log!("warn: DirectPlay: interface {id:02x?} not supported");
         mem().wr32(out, 0);
@@ -582,7 +717,12 @@ fn enum_connections(c: &mut Cpu) -> u32 {
     let name = CONNECTION_NAME.as_bytes();
     let block = alloc(16 + conn.len() as u32 + 16 + name.len() as u32 + 1);
     let m = mem();
-    let (sp, address, dpname, text) = (block, block + 16, block + 16 + conn.len() as u32, block + 32 + conn.len() as u32);
+    let (sp, address, dpname, text) = (
+        block,
+        block + 16,
+        block + 16 + conn.len() as u32,
+        block + 32 + conn.len() as u32,
+    );
     m.slice(sp, 16).copy_from_slice(&DPSPGUID_TCPIP);
     m.slice(address, conn.len()).copy_from_slice(&conn);
     m.wr32(dpname, 16);
@@ -599,7 +739,9 @@ fn initialize_connection(c: &mut Cpu) -> u32 {
     let conn = connection();
     let ours = a != 0 && mem().slice(a, conn.len()) == &conn[..];
     let mut g = net();
-    let Some(n) = g.as_mut() else { return DPERR_UNINITIALIZED };
+    let Some(n) = g.as_mut() else {
+        return DPERR_UNINITIALIZED;
+    };
     if !ours {
         return DPERR_INVALIDPARAMS;
     }
@@ -620,7 +762,9 @@ fn enum_sessions(c: &mut Cpu) -> u32 {
     let app: [u8; 16] = mem().slice(desc + 0x18, 16).try_into().unwrap();
     let wait = {
         let mut g = net();
-        let Some(n) = g.as_mut() else { return DPERR_UNINITIALIZED };
+        let Some(n) = g.as_mut() else {
+            return DPERR_UNINITIALIZED;
+        };
         if !n.initialized {
             return DPERR_UNINITIALIZED;
         }
@@ -647,11 +791,15 @@ fn enum_sessions(c: &mut Cpu) -> u32 {
     std::thread::sleep(wait);
     let sessions: Vec<([u8; 16], u32, u32, u32, String)> = {
         let mut g = net();
-        let Some(n) = g.as_mut() else { return DPERR_UNINITIALIZED };
+        let Some(n) = g.as_mut() else {
+            return DPERR_UNINITIALIZED;
+        };
         n.found.retain(|f| f.seen.elapsed() < FOUND_FOR);
         n.found
             .iter()
-            .filter(|f| f.app == app && (flags & DPENUMSESSIONS_AVAILABLE == 0 || f.current < f.max))
+            .filter(|f| {
+                f.app == app && (flags & DPENUMSESSIONS_AVAILABLE == 0 || f.current < f.max)
+            })
             .map(|f| (f.instance, f.current, f.max, f.flags, f.name.clone()))
             .collect()
     };
@@ -686,7 +834,9 @@ fn open(c: &mut Cpu) -> u32 {
     let (desc, flags) = (arg(c, 1), arg(c, 2));
     let m = mem();
     let mut g = net();
-    let Some(n) = g.as_mut() else { return DPERR_UNINITIALIZED };
+    let Some(n) = g.as_mut() else {
+        return DPERR_UNINITIALIZED;
+    };
     if !n.initialized {
         return DPERR_UNINITIALIZED;
     }
@@ -695,7 +845,11 @@ fn open(c: &mut Cpu) -> u32 {
     let serial = n.serial;
     let stop = Arc::new(AtomicBool::new(false));
     if flags & DPOPEN_CREATE != 0 {
-        let bind: IpAddr = recomp::config::env("NET_BIND").ok_or(()).ok().and_then(|a| a.parse().ok()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        let bind: IpAddr = recomp::config::env("NET_BIND")
+            .ok_or(())
+            .ok()
+            .and_then(|a| a.parse().ok())
+            .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         let listener = match TcpListener::bind((bind, port())) {
             Ok(l) => l,
             Err(e) => {
@@ -703,7 +857,14 @@ fn open(c: &mut Cpu) -> u32 {
                 return DPERR_CANTCREATESESSION;
             }
         };
-        let udp = UdpSocket::bind((bind, port())).map_err(|e| log!("warn: DirectPlay: no session search on port {}: {e}", port())).ok();
+        let udp = UdpSocket::bind((bind, port()))
+            .map_err(|e| {
+                log!(
+                    "warn: DirectPlay: no session search on port {}: {e}",
+                    port()
+                )
+            })
+            .ok();
         let r = random();
         let mut instance = [0; 16];
         instance[..8].copy_from_slice(&r.to_le_bytes());
@@ -730,7 +891,12 @@ fn open(c: &mut Cpu) -> u32 {
         return DPERR_INVALIDPARAMS;
     }
     let instance: [u8; 16] = m.slice(desc + 8, 16).try_into().unwrap();
-    let Some((addr, app, max, sflags, name)) = n.found.iter().find(|f| f.instance == instance).map(|f| (f.addr, f.app, f.max, f.flags, f.name.clone())) else {
+    let Some((addr, app, max, sflags, name)) = n
+        .found
+        .iter()
+        .find(|f| f.instance == instance)
+        .map(|f| (f.addr, f.app, f.max, f.flags, f.name.clone()))
+    else {
         return DPERR_NOSESSIONS;
     };
     drop(g);
@@ -755,9 +921,13 @@ fn open(c: &mut Cpu) -> u32 {
         Err(_) => return DPERR_TIMEOUT,
     }
     let _ = s.set_read_timeout(None);
-    let Ok(out) = s.try_clone() else { return DPERR_NOCONNECTION };
+    let Ok(out) = s.try_clone() else {
+        return DPERR_NOCONNECTION;
+    };
     let mut g = net();
-    let Some(n) = g.as_mut().filter(|n| n.serial == serial) else { return DPERR_NOCONNECTION };
+    let Some(n) = g.as_mut().filter(|n| n.serial == serial) else {
+        return DPERR_NOCONNECTION;
+    };
     n.session = Some(Session {
         serial,
         host: false,
@@ -767,7 +937,10 @@ fn open(c: &mut Cpu) -> u32 {
         flags: sflags,
         name,
         players: Vec::new(),
-        peers: vec![Peer { id: TO_HOST, out: Arc::new(Mutex::new(out)) }],
+        peers: vec![Peer {
+            id: TO_HOST,
+            out: Arc::new(Mutex::new(out)),
+        }],
         queue: VecDeque::new(),
         stop,
     });
@@ -800,9 +973,15 @@ fn close_session(_: &mut Cpu) -> u32 {
 fn create_player(c: &mut Cpu) -> u32 {
     let (out, dpname, event) = (arg(c, 1), arg(c, 2), arg(c, 3));
     let m = mem();
-    let name = if dpname != 0 && m.rd32(dpname + 8) != 0 { cstr(m.rd32(dpname + 8)) } else { String::new() };
+    let name = if dpname != 0 && m.rd32(dpname + 8) != 0 {
+        cstr(m.rd32(dpname + 8))
+    } else {
+        String::new()
+    };
     let mut g = net();
-    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else { return DPERR_INVALIDPARAMS };
+    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else {
+        return DPERR_INVALIDPARAMS;
+    };
     let id = loop {
         let id = random() as u32;
         if id != 0 && id != u32::MAX && !ss.players.iter().any(|p| p.id == id) {
@@ -810,7 +989,12 @@ fn create_player(c: &mut Cpu) -> u32 {
         }
     };
     net_log!("local player {id:#x} {name:?}");
-    ss.players.push(Player { id, name: name.clone(), local: Some(event), peer: 0 });
+    ss.players.push(Player {
+        id,
+        name: name.clone(),
+        local: Some(event),
+        peer: 0,
+    });
     let outs = ss.routes(0, DPID_ALLPLAYERS);
     send_to(&outs, &player_add(id, false, &name));
     m.wr32(out, id);
@@ -821,8 +1005,16 @@ fn create_player(c: &mut Cpu) -> u32 {
 fn destroy_player(c: &mut Cpu) -> u32 {
     let id = arg(c, 1);
     let mut g = net();
-    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else { return DPERR_INVALIDPLAYER };
-    let Some(k) = ss.players.iter().position(|p| p.id == id && p.local.is_some()) else { return DPERR_INVALIDPLAYER };
+    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else {
+        return DPERR_INVALIDPLAYER;
+    };
+    let Some(k) = ss
+        .players
+        .iter()
+        .position(|p| p.id == id && p.local.is_some())
+    else {
+        return DPERR_INVALIDPLAYER;
+    };
     ss.players.remove(k);
     ss.queue.retain(|q| q.to != id);
     let outs = ss.routes(0, DPID_ALLPLAYERS);
@@ -835,7 +1027,9 @@ fn send(c: &mut Cpu) -> u32 {
     let (from, to, data, size) = (arg(c, 1), arg(c, 2), arg(c, 4), arg(c, 5));
     let bytes = mem().slice(data, size as usize).to_vec();
     let mut g = net();
-    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else { return DPERR_NOCONNECTION };
+    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else {
+        return DPERR_NOCONNECTION;
+    };
     if !ss.players.iter().any(|p| p.id == from && p.local.is_some()) {
         return DPERR_INVALIDPLAYER;
     }
@@ -854,7 +1048,10 @@ fn bytes_of(m: &Message, at: u32) -> Vec<u8> {
     let name_at = |b: &mut Vec<u8>, slot: usize, name: &str| {
         let p = at + b.len() as u32;
         b[slot..slot + 4].copy_from_slice(&p.to_le_bytes());
-        b.extend(name.chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }));
+        b.extend(
+            name.chars()
+                .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }),
+        );
         b.push(0);
     };
     let w = |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
@@ -893,12 +1090,13 @@ fn receive(c: &mut Cpu) -> u32 {
     let m = mem();
     let (want_from, want_to) = (m.rd32(pfrom), m.rd32(pto));
     let mut g = net();
-    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else { return DPERR_NOMESSAGES };
-    let Some(k) = ss
-        .queue
-        .iter()
-        .position(|q| (flags & DPRECEIVE_FROMPLAYER == 0 || q.from == want_from) && (flags & DPRECEIVE_TOPLAYER == 0 || q.to == want_to))
-    else {
+    let Some(ss) = g.as_mut().and_then(|n| n.session.as_mut()) else {
+        return DPERR_NOMESSAGES;
+    };
+    let Some(k) = ss.queue.iter().position(|q| {
+        (flags & DPRECEIVE_FROMPLAYER == 0 || q.from == want_from)
+            && (flags & DPRECEIVE_TOPLAYER == 0 || q.to == want_to)
+    }) else {
         return DPERR_NOMESSAGES;
     };
     let bytes = bytes_of(&ss.queue[k], data);
@@ -919,7 +1117,10 @@ fn receive(c: &mut Cpu) -> u32 {
 /// GetMessageCount(this, player, &count).
 fn get_message_count(c: &mut Cpu) -> u32 {
     let (id, out) = (arg(c, 1), arg(c, 2));
-    let n = net().as_ref().and_then(|n| n.session.as_ref()).map_or(0, |ss| ss.queue.iter().filter(|q| q.to == id).count());
+    let n = net()
+        .as_ref()
+        .and_then(|n| n.session.as_ref())
+        .map_or(0, |ss| ss.queue.iter().filter(|q| q.to == id).count());
     mem().wr32(out, n as u32);
     DP_OK
 }
@@ -963,7 +1164,11 @@ static DIRECT_PLAY: &[Import] = &[
     ("IDirectPlay4A::EnumConnections", 5, enum_connections),
     ("IDirectPlay4A::EnumGroupsInGroup", 6, not_impl),
     ("IDirectPlay4A::GetGroupConnectionSettings", 5, not_impl),
-    ("IDirectPlay4A::InitializeConnection", 3, initialize_connection),
+    (
+        "IDirectPlay4A::InitializeConnection",
+        3,
+        initialize_connection,
+    ),
     ("IDirectPlay4A::SecureOpen", 5, not_impl),
     ("IDirectPlay4A::SendChatMessage", 5, not_impl),
     ("IDirectPlay4A::SetGroupConnectionSettings", 4, not_impl),

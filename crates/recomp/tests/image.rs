@@ -28,8 +28,13 @@ fn dll() -> Vec<u8> {
     w32(&mut d, opt + 136, 0x3000); // relocations
     w32(&mut d, opt + 140, 12);
     // name, vsize, rva, rsize, raw, flags
-    for (k, (name, rva, raw, flags)) in
-        [(".text", 0x1000, 0x200, 0x6000_0020u32), (".edata", 0x2000, 0x400, 0x4000_0040), (".reloc", 0x3000, 0x600, 0x4200_0040)].into_iter().enumerate()
+    for (k, (name, rva, raw, flags)) in [
+        (".text", 0x1000, 0x200, 0x6000_0020u32),
+        (".edata", 0x2000, 0x400, 0x4000_0040),
+        (".reloc", 0x3000, 0x600, 0x4200_0040),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let o = opt + 0xe0 + 40 * k;
         put(&mut d, o, name.as_bytes());
@@ -70,8 +75,17 @@ fn dll() -> Vec<u8> {
 #[test]
 fn exports() {
     let img = Image::parse(dll());
-    assert_eq!(img.exports(), vec![(BASE + 0x1000, "#5".to_string()), (BASE + 0x1004, "Second".to_string())]);
-    assert_eq!(img.export_ordinals(), vec![(BASE + 0x1000, 5), (BASE + 0x1004, 6)]);
+    assert_eq!(
+        img.exports(),
+        vec![
+            (BASE + 0x1000, "#5".to_string()),
+            (BASE + 0x1004, "Second".to_string())
+        ]
+    );
+    assert_eq!(
+        img.export_ordinals(),
+        vec![(BASE + 0x1000, 5), (BASE + 0x1004, 6)]
+    );
 }
 
 #[test]
@@ -81,7 +95,11 @@ fn rebase() {
     img.rebase(to);
     assert_eq!((img.base, img.entry), (to, to + 0x1000));
     assert!(img.is_code(to + 0x1004) && !img.is_code(BASE + 0x1004));
-    assert_eq!(img.u32(to + 0x1005), to + 0x1010, "the instruction's address moved");
+    assert_eq!(
+        img.u32(to + 0x1005),
+        to + 0x1010,
+        "the instruction's address moved"
+    );
     assert_eq!(img.u32(to + 0x1010), to + 0x1004, "the pointer moved");
     assert_eq!(img.exports()[1], (to + 0x1004, "Second".to_string()));
 }
@@ -105,7 +123,10 @@ fn patch_checks_old_bytes() {
     let mut img = Image::parse(dll());
     let at = BASE + 0x1000;
     let old = img.read(at, 2).unwrap();
-    assert!(img.patch(at, &[old[0] ^ 0xff, old[1]], &[0x90, 0x90]).is_err());
+    assert!(
+        img.patch(at, &[old[0] ^ 0xff, old[1]], &[0x90, 0x90])
+            .is_err()
+    );
     assert_eq!(img.read(at, 2).unwrap(), old);
     img.patch(at, &old, &[0xeb, 0x00]).unwrap();
     assert_eq!(img.read(at, 2).unwrap(), [0xeb, 0x00]);

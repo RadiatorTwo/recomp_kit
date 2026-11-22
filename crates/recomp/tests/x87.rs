@@ -4,10 +4,9 @@
 mod common;
 
 use common::{Guest, Rng, SCRATCH, Snippet, dbl};
-use recomp::rt::{EAX, f64_to_f80};
 use iced_x86::IcedError;
 use iced_x86::code_asm::*;
-
+use recomp::rt::{EAX, f64_to_f80};
 
 /// ST0 = -sqrt(|(a - a*b) + b/a|), through fld st(i), fxch and the popping forms.
 fn arith(a: &mut CodeAssembler) -> Result<(), IcedError> {
@@ -133,8 +132,16 @@ fn precision(a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.ret()
 }
 
-const SNIPPETS: [(&str, Snippet); 8] =
-    [("arith", arith), ("copy64", copy64), ("round", round), ("compare", compare), ("mixed", mixed), ("f80", f80), ("stack8", stack8), ("precision", precision)];
+const SNIPPETS: [(&str, Snippet); 8] = [
+    ("arith", arith),
+    ("copy64", copy64),
+    ("round", round),
+    ("compare", compare),
+    ("mixed", mixed),
+    ("f80", f80),
+    ("stack8", stack8),
+    ("precision", precision),
+];
 
 fn same(x: f64, y: f64) -> bool {
     x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan())
@@ -149,7 +156,11 @@ fn round_ref(x: f64, rc: u16, bits: u32) -> i64 {
         _ => x.trunc(),
     };
     let lim = 2f64.powi(bits as i32 - 1);
-    if r >= -lim && r < lim { r as i64 } else { i64::MIN >> (64 - bits) }
+    if r >= -lim && r < lim {
+        r as i64
+    } else {
+        i64::MIN >> (64 - bits)
+    }
 }
 
 #[test]
@@ -162,7 +173,11 @@ fn x87() {
 
         let cpu = g.call(0, &[dbl(x)[0], dbl(x)[1], dbl(y)[0], dbl(y)[1]]);
         let want = -((x - x * y) + y / x).abs().sqrt();
-        assert!(same(cpu.st(0), want), "arith({x}, {y}) = {}, want {want}", cpu.st(0));
+        assert!(
+            same(cpu.st(0), want),
+            "arith({x}, {y}) = {}, want {want}",
+            cpu.st(0)
+        );
         assert_eq!(cpu.top, 7, "arith leaves one value");
 
         let v = rng.next();
@@ -177,7 +192,11 @@ fn x87() {
         let i32_ = m.rd32(SCRATCH) as i32 as i64;
         let i16_ = i16::from_le_bytes([m.rd8(SCRATCH + 4), m.rd8(SCRATCH + 5)]) as i64;
         let i64_ = i64::from_le_bytes(m.slice(SCRATCH + 8, 8).try_into().unwrap());
-        let want = (round_ref(x, rc, 32), round_ref(x, rc, 16), round_ref(x, rc, 64));
+        let want = (
+            round_ref(x, rc, 32),
+            round_ref(x, rc, 16),
+            round_ref(x, rc, 64),
+        );
         assert_eq!((i32_, i16_, i64_), want, "round({x}, rc {rc})");
         assert_eq!(cpu.fcw, 0x37f, "control word restored");
 
@@ -193,9 +212,17 @@ fn x87() {
         };
         assert_eq!(cpu.r[EAX], want, "compare({x}, {y})");
         let sw = cpu.r[1];
-        assert_eq!((sw >> 11) & 7, 0, "fcompp pops both: TOP 0 in the status word");
+        assert_eq!(
+            (sw >> 11) & 7,
+            0,
+            "fcompp pops both: TOP 0 in the status word"
+        );
 
-        let (i, j, f) = (rng.next() as i16, rng.next() as i32 >> (rng.next() % 32), rng.f64() as f32);
+        let (i, j, f) = (
+            rng.next() as i16,
+            rng.next() as i32 >> (rng.next() % 32),
+            rng.f64() as f32,
+        );
         m.slice(SCRATCH, 2).copy_from_slice(&i.to_le_bytes());
         m.wr32(SCRATCH + 4, j as u32);
         m.wr32(SCRATCH + 8, f.to_bits());
@@ -203,12 +230,17 @@ fn x87() {
         let p = (i as f64 + j as f64) * f as f64;
         let got_f = f32::from_bits(m.rd32(SCRATCH + 12));
         let got_i = i16::from_le_bytes([m.rd8(SCRATCH + 16), m.rd8(SCRATCH + 17)]) as i64;
-        assert!(got_f.to_bits() == (p as f32).to_bits() || (p.is_nan() && got_f.is_nan()), "mixed f32 ({i}, {j}, {f})");
+        assert!(
+            got_f.to_bits() == (p as f32).to_bits() || (p.is_nan() && got_f.is_nan()),
+            "mixed f32 ({i}, {j}, {f})"
+        );
         assert_eq!(got_i, round_ref(p, 0, 16), "mixed i16 ({i}, {j}, {f})");
 
         g.call(5, &[dbl(x)[0], dbl(x)[1], SCRATCH]);
         assert_eq!(m.slice(SCRATCH, 10), &f64_to_f80(x), "f80 bytes of {x}");
-        let back = f64::from_bits(u64::from_le_bytes(m.slice(SCRATCH + 16, 8).try_into().unwrap()));
+        let back = f64::from_bits(u64::from_le_bytes(
+            m.slice(SCRATCH + 16, 8).try_into().unwrap(),
+        ));
         assert!(same(back, x), "f80 round trip of {x} gave {back}");
     }
     assert_eq!(f64_to_f80(1.0), [0, 0, 0, 0, 0, 0, 0, 0x80, 0xff, 0x3f]);
@@ -227,15 +259,48 @@ fn x87_precision() {
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let m = &g.mem;
     // right on, just above and below 24-bit numbers and their middles
-    let edges = [(1.0, 2f64.powi(-60)), (1.0, -2f64.powi(-60)), (-1.0, 2f64.powi(-60)), (1.0 + 2f64.powi(-24), 2f64.powi(-70)), (1.0 + 2f64.powi(-24), -2f64.powi(-70)), (3.0, 2f64.powi(-24)), (1.0, 3.0), (-1.0, 3.0), (5.0, -5.0)];
+    let edges = [
+        (1.0, 2f64.powi(-60)),
+        (1.0, -2f64.powi(-60)),
+        (-1.0, 2f64.powi(-60)),
+        (1.0 + 2f64.powi(-24), 2f64.powi(-70)),
+        (1.0 + 2f64.powi(-24), -2f64.powi(-70)),
+        (3.0, 2f64.powi(-24)),
+        (1.0, 3.0),
+        (-1.0, 3.0),
+        (5.0, -5.0),
+    ];
     for i in 0..200000 {
         // also floats and their sums: results right on 24-bit numbers
-        let mut v = || if rng.next() % 2 == 0 { rng.f64() as f32 as f64 } else { rng.f64() };
-        let (x, y) = if i < edges.len() * 7 { edges[i / 7] } else { (v(), v()) };
+        let mut v = || {
+            if rng.next() % 2 == 0 {
+                rng.f64() as f32 as f64
+            } else {
+                rng.f64()
+            }
+        };
+        let (x, y) = if i < edges.len() * 7 {
+            edges[i / 7]
+        } else {
+            (v(), v())
+        };
         let cw = [0x07f, 0xc7f, 0x47f, 0x87f, 0x27f, 0xe7f, 0x37f][i % 7] as u32;
-        g.call(7, &[dbl(x)[0], dbl(x)[1], dbl(y)[0], dbl(y)[1], cw, SCRATCH]);
-        let got = |k: u32| f64::from_bits(u64::from_le_bytes(m.slice(SCRATCH + 8 * k, 8).try_into().unwrap()));
-        let ops = [(FpuOp::Add, x, y), (FpuOp::Sub, x, y), (FpuOp::Mul, x, y), (FpuOp::Div, x, y), (FpuOp::Sqrt, x.abs(), 0.0)];
+        g.call(
+            7,
+            &[dbl(x)[0], dbl(x)[1], dbl(y)[0], dbl(y)[1], cw, SCRATCH],
+        );
+        let got = |k: u32| {
+            f64::from_bits(u64::from_le_bytes(
+                m.slice(SCRATCH + 8 * k, 8).try_into().unwrap(),
+            ))
+        };
+        let ops = [
+            (FpuOp::Add, x, y),
+            (FpuOp::Sub, x, y),
+            (FpuOp::Mul, x, y),
+            (FpuOp::Div, x, y),
+            (FpuOp::Sqrt, x.abs(), 0.0),
+        ];
         for (k, &(op, a, b)) in ops.iter().enumerate() {
             let want = if (cw & 0xe00) == 0x200 {
                 match op {
@@ -248,14 +313,28 @@ fn x87_precision() {
             } else {
                 rt_fpu_round(op as u32, a, b, cw)
             };
-            assert!(same(got(k as u32), want), "op {k} ({:#x}, {:#x}) cw {cw:#x}: {:#x} want {:#x}", x.to_bits(), y.to_bits(), got(k as u32).to_bits(), want.to_bits());
+            assert!(
+                same(got(k as u32), want),
+                "op {k} ({:#x}, {:#x}) cw {cw:#x}: {:#x} want {:#x}",
+                x.to_bits(),
+                y.to_bits(),
+                got(k as u32).to_bits(),
+                want.to_bits()
+            );
         }
         // (below a float's normal range `rt_fpu_round` rounds twice: not checked)
         if x != 0.0 && x.abs() < f32::MIN_POSITIVE as f64 {
             continue;
         }
         let f = f32::from_bits(m.rd32(SCRATCH + 40));
-        let want = if (cw & 0xc00) == 0 { x as f32 } else { rt_fpu_round(FpuOp::Round as u32, x, 0.0, cw) as f32 };
-        assert!(same(f as f64, want as f64), "fst ({x}) cw {cw:#x}: {f} want {want}");
+        let want = if (cw & 0xc00) == 0 {
+            x as f32
+        } else {
+            rt_fpu_round(FpuOp::Round as u32, x, 0.0, cw) as f32
+        };
+        assert!(
+            same(f as f64, want as f64),
+            "fst ({x}) cw {cw:#x}: {f} want {want}"
+        );
     }
 }

@@ -31,7 +31,12 @@ struct Registry {
     next: u32,
 }
 
-static REG: Mutex<Registry> = Mutex::new(Registry { loaded: false, keys: BTreeMap::new(), open: BTreeMap::new(), next: 0x1000 });
+static REG: Mutex<Registry> = Mutex::new(Registry {
+    loaded: false,
+    keys: BTreeMap::new(),
+    open: BTreeMap::new(),
+    next: 0x1000,
+});
 
 fn reg() -> std::sync::MutexGuard<'static, Registry> {
     let mut r = REG.lock().unwrap_or_else(|e| e.into_inner());
@@ -47,7 +52,9 @@ fn hex(b: &[u8]) -> String {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len() / 2).filter_map(|k| u8::from_str_radix(&s[2 * k..2 * k + 2], 16).ok()).collect()
+    (0..s.len() / 2)
+        .filter_map(|k| u8::from_str_radix(&s[2 * k..2 * k + 2], 16).ok())
+        .collect()
 }
 
 impl Registry {
@@ -66,12 +73,21 @@ impl Registry {
                 } else if let (Some(k), Some((name, v))) = (&cur, line.split_once('=')) {
                     let (name, v) = (name.trim(), v.trim());
                     let val = if let Some(d) = v.strip_prefix("dword:") {
-                        (REG_DWORD, u32::from_str_radix(d, 16).unwrap_or(0).to_le_bytes().to_vec())
+                        (
+                            REG_DWORD,
+                            u32::from_str_radix(d, 16)
+                                .unwrap_or(0)
+                                .to_le_bytes()
+                                .to_vec(),
+                        )
                     } else if let Some(s) = v.strip_prefix("sz:") {
                         let mut b: Vec<u8> = s.chars().map(|c| c as u8).collect();
                         b.push(0);
                         (REG_SZ, b)
-                    } else if let Some((t, d)) = v.split_once(":").and_then(|(t, d)| Some((t.strip_prefix("hex")?, d))) {
+                    } else if let Some((t, d)) = v
+                        .split_once(":")
+                        .and_then(|(t, d)| Some((t.strip_prefix("hex")?, d)))
+                    {
                         (t.trim_matches(['(', ')']).parse().unwrap_or(3), unhex(d))
                     } else {
                         continue;
@@ -89,9 +105,23 @@ impl Registry {
             out += &format!("[{k}]\n");
             for (name, (t, d)) in vals {
                 let v = match *t {
-                    REG_DWORD if d.len() == 4 => format!("dword:{:08x}", u32::from_le_bytes(d[..4].try_into().unwrap())),
-                    REG_SZ if d.last() == Some(&0) && d[..d.len() - 1].iter().all(|&b| b >= 32 && b != b'\\' || b >= 128) => {
-                        format!("sz:{}", d[..d.len() - 1].iter().map(|&b| b as char).collect::<String>())
+                    REG_DWORD if d.len() == 4 => format!(
+                        "dword:{:08x}",
+                        u32::from_le_bytes(d[..4].try_into().unwrap())
+                    ),
+                    REG_SZ
+                        if d.last() == Some(&0)
+                            && d[..d.len() - 1]
+                                .iter()
+                                .all(|&b| b >= 32 && b != b'\\' || b >= 128) =>
+                    {
+                        format!(
+                            "sz:{}",
+                            d[..d.len() - 1]
+                                .iter()
+                                .map(|&b| b as char)
+                                .collect::<String>()
+                        )
                     }
                     t => format!("hex({t}):{}", hex(d)),
                 };
@@ -135,7 +165,11 @@ impl Registry {
         };
         let sub = if sub == 0 { String::new() } else { cstr(sub) };
         let sub = sub.trim_matches('\\');
-        Some(if sub.is_empty() { base } else { format!("{base}\\{sub}") })
+        Some(if sub.is_empty() {
+            base
+        } else {
+            format!("{base}\\{sub}")
+        })
     }
 
     fn open_key(&mut self, path: String) -> u32 {
@@ -153,17 +187,32 @@ pub fn save() {
 /// A value of the game's key or one below it, e.g. ("Settings", "Resolution").
 pub fn value(sub: &str, name: &str) -> Option<(u32, Vec<u8>)> {
     let r = reg();
-    let path = if sub.is_empty() { game_key().to_string() } else { format!("{}\\{sub}", game_key()) };
+    let path = if sub.is_empty() {
+        game_key().to_string()
+    } else {
+        format!("{}\\{sub}", game_key())
+    };
     let k = r.find(&path)?;
-    r.keys[k].iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone())
+    r.keys[k]
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.clone())
 }
 
 /// Set a value of the game's key or one below it and save the registry file.
 pub fn set_value(sub: &str, name: &str, t: u32, data: &[u8]) {
     let mut r = reg();
-    let path = if sub.is_empty() { game_key().to_string() } else { format!("{}\\{sub}", game_key()) };
+    let path = if sub.is_empty() {
+        game_key().to_string()
+    } else {
+        format!("{}\\{sub}", game_key())
+    };
     let key = r.key_mut(&path);
-    let existing = key.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned().unwrap_or_else(|| name.to_string());
+    let existing = key
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case(name))
+        .cloned()
+        .unwrap_or_else(|| name.to_string());
     key.insert(existing, (t, data.to_vec()));
     r.save();
 }
@@ -176,7 +225,9 @@ fn trace() -> bool {
 fn reg_open_key_ex(c: &mut Cpu) -> u32 {
     let (h, sub, out) = (arg(c, 0), arg(c, 1), arg(c, 4));
     let mut r = reg();
-    let Some(p) = r.path(h, sub) else { return NOT_FOUND };
+    let Some(p) = r.path(h, sub) else {
+        return NOT_FOUND;
+    };
     if trace() {
         log!("reg: open {p}");
     }
@@ -191,7 +242,9 @@ fn reg_open_key_ex(c: &mut Cpu) -> u32 {
 fn reg_create_key_ex(c: &mut Cpu) -> u32 {
     let (h, sub, out, disp) = (arg(c, 0), arg(c, 1), arg(c, 7), arg(c, 8));
     let mut r = reg();
-    let Some(p) = r.path(h, sub) else { return NOT_FOUND };
+    let Some(p) = r.path(h, sub) else {
+        return NOT_FOUND;
+    };
     let existed = r.exists(&p);
     if trace() {
         log!("reg: create {p}");
@@ -214,8 +267,17 @@ fn reg_query_value_ex(c: &mut Cpu) -> u32 {
     let (h, name, ty, data, len) = (arg(c, 0), arg(c, 1), arg(c, 3), arg(c, 4), arg(c, 5));
     let r = reg();
     let name = if name == 0 { String::new() } else { cstr(name) };
-    let Some(p) = r.path(h, 0) else { return NOT_FOUND };
-    let v = r.find(&p).and_then(|k| r.keys[k].iter().find(|(n, _)| n.eq_ignore_ascii_case(&name))).map(|(_, v)| v.clone());
+    let Some(p) = r.path(h, 0) else {
+        return NOT_FOUND;
+    };
+    let v = r
+        .find(&p)
+        .and_then(|k| {
+            r.keys[k]
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+        })
+        .map(|(_, v)| v.clone());
     if trace() {
         log!("reg: query {p} {name} -> {v:?}");
     }
@@ -243,13 +305,19 @@ fn reg_set_value_ex(c: &mut Cpu) -> u32 {
     let (h, name, t, data, n) = (arg(c, 0), arg(c, 1), arg(c, 3), arg(c, 4), arg(c, 5));
     let mut r = reg();
     let name = if name == 0 { String::new() } else { cstr(name) };
-    let Some(p) = r.path(h, 0) else { return NOT_FOUND };
+    let Some(p) = r.path(h, 0) else {
+        return NOT_FOUND;
+    };
     let d = mem().slice(data, n as usize).to_vec();
     if trace() {
         log!("reg: set {p} {name} = {t} {d:?}");
     }
     let key = r.key_mut(&p);
-    let existing = key.keys().find(|k| k.eq_ignore_ascii_case(&name)).cloned().unwrap_or(name);
+    let existing = key
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case(&name))
+        .cloned()
+        .unwrap_or(name);
     key.insert(existing, (t, d));
     OK
 }

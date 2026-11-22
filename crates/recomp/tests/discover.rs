@@ -13,7 +13,8 @@ const DATA: u32 = 0x402000;
 #[test]
 fn finds_functions() {
     let mut a = CodeAssembler::new(32).unwrap();
-    let (mut called, mut pushed, mut stored) = (a.create_label(), a.create_label(), a.create_label());
+    let (mut called, mut pushed, mut stored) =
+        (a.create_label(), a.create_label(), a.create_label());
     // entry: calls one function, passes another's address (a callback)
     a.call(called).unwrap();
     a.push(0x7777_7777).unwrap(); // patched below: the callback's address
@@ -34,7 +35,12 @@ fn finds_functions() {
     // never referenced
     a.mov(eax, 4).unwrap();
     a.ret().unwrap();
-    let r = a.assemble_options(TEXT as u64, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS).unwrap();
+    let r = a
+        .assemble_options(
+            TEXT as u64,
+            BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS,
+        )
+        .unwrap();
     let at = |l: &CodeLabel| r.label_ip(l).unwrap() as u32;
     let mut text = r.inner.code_buffer.clone();
     // `push imm32` is 68 xx xx xx xx, right after the 5-byte call
@@ -52,12 +58,29 @@ fn finds_functions() {
         base: 0x400000,
         entry: TEXT,
         sections: vec![
-            Section { name: ".text".into(), va: TEXT, vsize: 0x1000, raw: 0, rsize: 0x1000, exec: true },
-            Section { name: ".data".into(), va: DATA, vsize: n, raw: 0x1000, rsize: n, exec: false },
+            Section {
+                name: ".text".into(),
+                va: TEXT,
+                vsize: 0x1000,
+                raw: 0,
+                rsize: 0x1000,
+                exec: true,
+            },
+            Section {
+                name: ".data".into(),
+                va: DATA,
+                vsize: n,
+                raw: 0x1000,
+                rsize: n,
+                exec: false,
+            },
         ],
     };
     let mut code = Code::new(&img);
-    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())]).iter().map(|f| f.0).collect();
+    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())])
+        .iter()
+        .map(|f| f.0)
+        .collect();
     assert_eq!(found, vec![TEXT, at(&called), at(&pushed), at(&stored)]);
 }
 
@@ -77,7 +100,10 @@ fn table_after_noreturn_call() {
     put(f + 12, &[0x6a, 0x00, 0xe8]); // default: push 0; call exit
     put(f + 15, &(exit - (f + 19)).to_le_bytes());
     put(f + 19, &[0x90]);
-    put(TEXT + 0x24, &[case0.to_le_bytes(), case1.to_le_bytes()].concat()); // e5 .. = in eax,..
+    put(
+        TEXT + 0x24,
+        &[case0.to_le_bytes(), case1.to_le_bytes()].concat(),
+    ); // e5 .. = in eax,..
     put(case0, &[0xb8, 1, 0, 0, 0, 0xc3]);
     put(case1, &[0xb8, 2, 0, 0, 0, 0xc3]);
     put(exit, &[0xeb, 0xfe]);
@@ -89,12 +115,29 @@ fn table_after_noreturn_call() {
         base: 0x400000,
         entry: TEXT,
         sections: vec![
-            Section { name: ".text".into(), va: TEXT, vsize: 0x1000, raw: 0, rsize: 0x1000, exec: true },
-            Section { name: ".data".into(), va: DATA, vsize: n, raw: 0x1000, rsize: n, exec: false },
+            Section {
+                name: ".text".into(),
+                va: TEXT,
+                vsize: 0x1000,
+                raw: 0,
+                rsize: 0x1000,
+                exec: true,
+            },
+            Section {
+                name: ".data".into(),
+                va: DATA,
+                vsize: n,
+                raw: 0x1000,
+                rsize: n,
+                exec: false,
+            },
         ],
     };
     let mut code = Code::new(&img);
-    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())]).iter().map(|f| f.0).collect();
+    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())])
+        .iter()
+        .map(|f| f.0)
+        .collect();
     assert_eq!(found, vec![TEXT, f, exit]);
 }
 
@@ -120,12 +163,29 @@ fn operands_before_data() {
         base: 0x400000,
         entry: TEXT,
         sections: vec![
-            Section { name: ".text".into(), va: TEXT, vsize: 0x1000, raw: 0, rsize: 0x1000, exec: true },
-            Section { name: ".data".into(), va: DATA, vsize: n, raw: 0x1000, rsize: n, exec: false },
+            Section {
+                name: ".text".into(),
+                va: TEXT,
+                vsize: 0x1000,
+                raw: 0,
+                rsize: 0x1000,
+                exec: true,
+            },
+            Section {
+                name: ".data".into(),
+                va: DATA,
+                vsize: n,
+                raw: 0x1000,
+                rsize: n,
+                exec: false,
+            },
         ],
     };
     let mut code = Code::new(&img);
-    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())]).iter().map(|f| f.0).collect();
+    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())])
+        .iter()
+        .map(|f| f.0)
+        .collect();
     assert_eq!(found, vec![TEXT, a, b]);
 }
 
@@ -143,7 +203,10 @@ fn build_stops_at_table() {
     put(f + 12, &[0x6a, 0x00, 0xe8]); // default: push 0; call exit
     put(f + 15, &(exit - (f + 19)).to_le_bytes());
     put(f + 19, &[0x90]);
-    put(TEXT + 0x24, &[case0.to_le_bytes(), case1.to_le_bytes()].concat());
+    put(
+        TEXT + 0x24,
+        &[case0.to_le_bytes(), case1.to_le_bytes()].concat(),
+    );
     put(case0, &[0xb8, 1, 0, 0, 0, 0xc3]);
     put(case1, &[0xb8, 2, 0, 0, 0, 0xc3]);
     put(exit, &[0xeb, 0xfe]);
@@ -151,13 +214,26 @@ fn build_stops_at_table() {
         data: text,
         base: 0x400000,
         entry: f,
-        sections: vec![Section { name: ".text".into(), va: TEXT, vsize: 0x1000, raw: 0, rsize: 0x1000, exec: true }],
+        sections: vec![Section {
+            name: ".text".into(),
+            va: TEXT,
+            vsize: 0x1000,
+            raw: 0,
+            rsize: 0x1000,
+            exec: true,
+        }],
     };
     let mut code = Code::new(&img);
-    let prog = Program::build(&mut code, &[(f, exit, "f".into()), (exit, exit + 2, "exit".into())]);
+    let prog = Program::build(
+        &mut code,
+        &[(f, exit, "f".into()), (exit, exit + 2, "exit".into())],
+    );
     let func = &prog.fns[&f];
     assert_eq!(func.table_bytes, vec![(TEXT + 0x24, TEXT + 0x2c)]);
-    assert!(func.ins.range(TEXT + 0x24..TEXT + 0x2c).next().is_none(), "decoded into the table");
+    assert!(
+        func.ins.range(TEXT + 0x24..TEXT + 0x2c).next().is_none(),
+        "decoded into the table"
+    );
     assert!(func.ins.contains(&case0) && func.ins.contains(&case1) && func.ins.contains(&(f + 19)));
 }
 
@@ -173,10 +249,21 @@ fn far_call_is_no_function() {
     text[0] = 0xc3; // the entry: ret
     let mut put = |at: u32, x: &[u8]| text[(at - TEXT) as usize..][..x.len()].copy_from_slice(x);
     // f: push ebx; push esi; push edi; sub esp, 80h; mov eax, 1
-    put(f, &[0x53, 0x56, 0x57, 0x81, 0xec, 0x80, 0, 0, 0, 0xb8, 1, 0, 0, 0]);
+    put(
+        f,
+        &[
+            0x53, 0x56, 0x57, 0x81, 0xec, 0x80, 0, 0, 0, 0xb8, 1, 0, 0, 0,
+        ],
+    );
     // loop: dec eax; jne loop (rel32 -7: f9 ff ff ff); pop edi; pop esi; pop ebx; add esp, 80h; ret
     let lp = f + 14;
-    put(lp, &[0x48, 0x0f, 0x85, 0xf9, 0xff, 0xff, 0xff, 0x5f, 0x5e, 0x5b, 0x81, 0xc4, 0x80, 0, 0, 0, 0xc3]);
+    put(
+        lp,
+        &[
+            0x48, 0x0f, 0x85, 0xf9, 0xff, 0xff, 0xff, 0x5f, 0x5e, 0x5b, 0x81, 0xc4, 0x80, 0, 0, 0,
+            0xc3,
+        ],
+    );
     let tail = lp + 6; // the jne's last byte
     // g: mov edx, f; ret
     put(g, &[0xba]);
@@ -190,11 +277,28 @@ fn far_call_is_no_function() {
         base: 0x400000,
         entry: TEXT,
         sections: vec![
-            Section { name: ".text".into(), va: TEXT, vsize: 0x1000, raw: 0, rsize: 0x1000, exec: true },
-            Section { name: ".data".into(), va: DATA, vsize: n, raw: 0x1000, rsize: n, exec: false },
+            Section {
+                name: ".text".into(),
+                va: TEXT,
+                vsize: 0x1000,
+                raw: 0,
+                rsize: 0x1000,
+                exec: true,
+            },
+            Section {
+                name: ".data".into(),
+                va: DATA,
+                vsize: n,
+                raw: 0x1000,
+                rsize: n,
+                exec: false,
+            },
         ],
     };
     let mut code = Code::new(&img);
-    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())]).iter().map(|f| f.0).collect();
+    let found: Vec<u32> = find_functions(&mut code, &[(TEXT, "entry".into())])
+        .iter()
+        .map(|f| f.0)
+        .collect();
     assert_eq!(found, vec![TEXT, f, g]);
 }

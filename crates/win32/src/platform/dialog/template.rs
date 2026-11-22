@@ -157,8 +157,21 @@ impl Template {
             r.at += extra;
             // 16-bit ids: 0xffff is "no id"
             let id = if !ex && id == 0xffff { u32::MAX } else { id };
-            items.push(Item { class, id, text, style, ex_style, rect });
+            items.push(Item {
+                class,
+                id,
+                text,
+                style,
+                ex_style,
+                rect,
+            });
         }
-        Some(Template { style, title, rect, font, items })
+        Some(Template {
+            style,
+            title,
+            rect,
+            font,
+            items,
+        })
     }
 }

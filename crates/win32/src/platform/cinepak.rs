@@ -65,7 +65,12 @@ fn rgb(y: u8, u: i32, v: i32) -> u32 {
 impl Decoder {
     pub fn new(width: u32, height: u32) -> Decoder {
         let (width, height) = (width as usize, height as usize);
-        Decoder { width, height, pixels: vec![0; width * height], strips: Vec::new() }
+        Decoder {
+            width,
+            height,
+            pixels: vec![0; width * height],
+            strips: Vec::new(),
+        }
     }
 
     /// The picture, 0x00RRGGBB, top row first.
@@ -97,7 +102,10 @@ impl Decoder {
             let h = if y2 > y1 { y2 - y1 } else { y2 };
             while self.strips.len() <= k {
                 let last = self.strips.last().cloned();
-                self.strips.push(last.unwrap_or(Codebooks { v1: [[0; 4]; 256], v4: [[0; 4]; 256] }));
+                self.strips.push(last.unwrap_or(Codebooks {
+                    v1: [[0; 4]; 256],
+                    v4: [[0; 4]; 256],
+                }));
             }
             // codebooks a strip does not send are the strip above's (not for flags bit 0)
             if k > 0 && flags & 1 == 0 {
@@ -133,9 +141,18 @@ impl Decoder {
     fn codebook(&mut self, k: usize, id: u8, d: &[u8]) {
         let grey = id & 4 != 0;
         let partial = id & 1 != 0;
-        let book = if id & 2 != 0 { &mut self.strips[k].v1 } else { &mut self.strips[k].v4 };
+        let book = if id & 2 != 0 {
+            &mut self.strips[k].v1
+        } else {
+            &mut self.strips[k].v4
+        };
         let step = if grey { 4 } else { 6 };
-        let mut flags = Flags { d, at: 0, word: 0, left: 0 };
+        let mut flags = Flags {
+            d,
+            at: 0,
+            word: 0,
+            left: 0,
+        };
         let mut at = 0;
         for e in book.iter_mut() {
             if partial {
@@ -146,9 +163,20 @@ impl Decoder {
                 }
                 at = at.max(flags.at);
             }
-            let Some(v) = d.get(at..at + step) else { return };
-            let (u, w) = if grey { (0, 0) } else { (v[4] as i8 as i32, v[5] as i8 as i32) };
-            *e = [rgb(v[0], u, w), rgb(v[1], u, w), rgb(v[2], u, w), rgb(v[3], u, w)];
+            let Some(v) = d.get(at..at + step) else {
+                return;
+            };
+            let (u, w) = if grey {
+                (0, 0)
+            } else {
+                (v[4] as i8 as i32, v[5] as i8 as i32)
+            };
+            *e = [
+                rgb(v[0], u, w),
+                rgb(v[1], u, w),
+                rgb(v[2], u, w),
+                rgb(v[3], u, w),
+            ];
             at += step;
             if partial {
                 // the next flag word follows the entries read so far
@@ -159,7 +187,12 @@ impl Decoder {
 
     /// 0x30 every block V1 or V4 by a flag; 0x31 a flag to change the block first; 0x32 all V1.
     fn blocks(&mut self, k: usize, id: u8, d: &[u8], top: usize, bottom: usize) {
-        let mut flags = Flags { d, at: 0, word: 0, left: 0 };
+        let mut flags = Flags {
+            d,
+            at: 0,
+            word: 0,
+            left: 0,
+        };
         let mut at = 0;
         let book = &self.strips[k];
         let w = self.width;

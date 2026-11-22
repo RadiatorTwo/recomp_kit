@@ -34,7 +34,9 @@ struct Stream {
 
 impl Stream {
     fn u32(&self, at: usize) -> u32 {
-        self.header.get(at..at + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        self.header
+            .get(at..at + 4)
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     fn kind(&self) -> u32 {
@@ -61,9 +63,15 @@ impl Stream {
     fn read(&self, start: u32, n: u32) -> Vec<u8> {
         let f = &self.file;
         match self.sample_size() {
-            0 => self.chunks.get(start as usize).map_or(Vec::new(), |&(at, len)| f[at..at + len].to_vec()),
+            0 => self
+                .chunks
+                .get(start as usize)
+                .map_or(Vec::new(), |&(at, len)| f[at..at + len].to_vec()),
             s => {
-                let (from, to) = (start as usize * s as usize, (start + n) as usize * s as usize);
+                let (from, to) = (
+                    start as usize * s as usize,
+                    (start + n) as usize * s as usize,
+                );
                 let mut out = Vec::with_capacity(to - from);
                 let mut pos = 0;
                 for &(at, len) in &self.chunks {
@@ -83,7 +91,10 @@ impl Stream {
 /// (strh, strf), LIST 'movi' with the data chunks ('00dc', '01wb': stream number, type).
 fn parse(file: Arc<Vec<u8>>) -> Vec<Stream> {
     let d = &file[..];
-    let le = |at: usize| d.get(at..at + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) as usize;
+    let le = |at: usize| {
+        d.get(at..at + 4)
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) as usize
+    };
     let mut streams: Vec<Stream> = Vec::new();
     let mut chunks: Vec<Vec<(usize, usize)>> = Vec::new();
     // walk chunks in [at, end), going into LISTs
@@ -107,7 +118,12 @@ fn parse(file: Arc<Vec<u8>>) -> Vec<Stream> {
     let _ = le;
     walk(d, 12, d.len(), &mut |id, at, len| match id {
         b"strh" => {
-            streams.push(Stream { header: d[at..at + len].to_vec(), format: Vec::new(), chunks: Vec::new(), file: Arc::clone(&file) });
+            streams.push(Stream {
+                header: d[at..at + len].to_vec(),
+                format: Vec::new(),
+                chunks: Vec::new(),
+                file: Arc::clone(&file),
+            });
             chunks.push(Vec::new());
         }
         b"strf" => {
@@ -145,8 +161,13 @@ struct State {
     rgb: Vec<u32>,
 }
 
-static STATE: Mutex<State> =
-    Mutex::new(State { streams: BTreeMap::new(), codecs: BTreeMap::new(), next: 1, read_size: BTreeMap::new(), rgb: Vec::new() });
+static STATE: Mutex<State> = Mutex::new(State {
+    streams: BTreeMap::new(),
+    codecs: BTreeMap::new(),
+    next: 1,
+    read_size: BTreeMap::new(),
+    rgb: Vec::new(),
+});
 
 fn st() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -174,7 +195,9 @@ fn stream_open_from_file(c: &mut Cpu) -> u32 {
         return AVIERR_FILEOPEN;
     };
     let mut streams = parse(Arc::new(data));
-    let found = (0..streams.len()).filter(|&k| kind == 0 || streams[k].kind() == kind).nth(which as usize);
+    let found = (0..streams.len())
+        .filter(|&k| kind == 0 || streams[k].kind() == kind)
+        .nth(which as usize);
     let Some(k) = found else {
         return AVIERR_NODATA;
     };
@@ -210,13 +233,20 @@ fn stream_info(c: &mut Cpu) -> u32 {
         put(0x1c, s.u32(0x1c)); // start
         put(0x20, s.length());
         put(0x24, s.u32(0x10)); // initial frames
-        put(0x28, s.u32(0x24).max(s.chunks.iter().map(|c| c.1).max().unwrap_or(0) as u32));
+        put(
+            0x28,
+            s.u32(0x24)
+                .max(s.chunks.iter().map(|c| c.1).max().unwrap_or(0) as u32),
+        );
         put(0x2c, s.u32(0x28)); // quality
         put(0x30, s.sample_size());
         // the frame rectangle: from the video's size
         if s.kind() == u32::from_le_bytes(*b"vids") && s.format.len() >= 12 {
             put(0x3c, u32::from_le_bytes(s.format[4..8].try_into().unwrap()));
-            put(0x40, u32::from_le_bytes(s.format[8..12].try_into().unwrap()));
+            put(
+                0x40,
+                u32::from_le_bytes(s.format[8..12].try_into().unwrap()),
+            );
         }
         let n = (size as usize).min(info.len());
         m.slice(p, n).copy_from_slice(&info[..n]);
@@ -248,12 +278,26 @@ fn stream_read_format(c: &mut Cpu) -> u32 {
 /// AVIStreamRead(stream, start, samples (-1: what is convenient), buffer, size, out bytes,
 /// out samples)
 fn stream_read(c: &mut Cpu) -> u32 {
-    let (h, start, n, buf, size, out_bytes, out_samples) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6));
+    let (h, start, n, buf, size, out_bytes, out_samples) = (
+        arg(c, 0),
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 6),
+    );
     let m = mem();
-    let Some(s) = st().streams.get(&h).cloned() else { return AVIERR_BADPARAM };
+    let Some(s) = st().streams.get(&h).cloned() else {
+        return AVIERR_BADPARAM;
+    };
     let len = s.length();
     let n = if n == u32::MAX {
-        if s.sample_size() == 0 { 1 } else { (size / s.sample_size()).max(1) }
+        if s.sample_size() == 0 {
+            1
+        } else {
+            (size / s.sample_size()).max(1)
+        }
     } else {
         n
     };
@@ -327,7 +371,9 @@ fn ic_decompress(c: &mut Cpu) -> u32 {
     let size = g.read_size.get(&data).copied().unwrap_or(0);
     let input = m.slice(data, size).to_vec();
     let State { codecs, rgb, .. } = &mut *g;
-    let Some(codec) = codecs.get_mut(&id) else { return ICERR_BADFORMAT };
+    let Some(codec) = codecs.get_mut(&id) else {
+        return ICERR_BADFORMAT;
+    };
     let (w, h) = match codec {
         Codec::Cinepak(d) => {
             if !input.is_empty() {
@@ -367,7 +413,11 @@ fn write_pixels(rgb: &[u32], w: usize, h: usize, fmt: u32, bits: u32) {
     let comp = m.rd32(fmt + 16);
     let stride = (w * bpp / 8 + 3) & !3;
     let out = m.slice(bits, stride * h);
-    let (rm, gm, bm) = if comp == 3 { (m.rd32(fmt + 40), m.rd32(fmt + 44), m.rd32(fmt + 48)) } else { (0x7c00, 0x03e0, 0x001f) };
+    let (rm, gm, bm) = if comp == 3 {
+        (m.rd32(fmt + 40), m.rd32(fmt + 44), m.rd32(fmt + 48))
+    } else {
+        (0x7c00, 0x03e0, 0x001f)
+    };
     // a mask as (shift of its top bit from bit 7, bits): 8-bit channel to field
     let field = |mask: u32| {
         let top = 31 - mask.leading_zeros() as i32;
@@ -386,7 +436,9 @@ fn write_pixels(rgb: &[u32], w: usize, h: usize, fmt: u32, bits: u32) {
         match bpp {
             16 => {
                 for (o, &p) in line.chunks_exact_mut(2).zip(src) {
-                    let v = put(p >> 16 & 0xff, rf, rm) | put(p >> 8 & 0xff, gf, gm) | put(p & 0xff, bf, bm);
+                    let v = put(p >> 16 & 0xff, rf, rm)
+                        | put(p >> 8 & 0xff, gf, gm)
+                        | put(p & 0xff, bf, bm);
                     o.copy_from_slice(&(v as u16).to_le_bytes());
                 }
             }
@@ -420,4 +472,3 @@ pub const IMPORTS: &[Import] = &[
     // cdecl: the caller removes the arguments
     ("ICDecompress", -1, ic_decompress),
 ];
-

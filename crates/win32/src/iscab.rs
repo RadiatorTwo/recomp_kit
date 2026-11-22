@@ -100,17 +100,24 @@ impl Header {
         let (dirs, count, descs) = (at(0x1c)? as usize, at(0x28)? as usize, at(0x2c)? as usize);
         let offset = |k: usize| u32_at(hdr, table + 4 * k);
 
-        let dirs: Vec<String> = (0..dirs).map(|k| cstr(hdr, table + offset(k)? as usize)).collect::<Option<_>>()?;
+        let dirs: Vec<String> = (0..dirs)
+            .map(|k| cstr(hdr, table + offset(k)? as usize))
+            .collect::<Option<_>>()?;
         let mut files = Vec::with_capacity(count);
         for k in 0..count {
             files.push(if major == 5 {
                 // a list of descriptor offsets after the folders' names
-                let d = hdr.get(table + offset(dirs.len() + k)? as usize..)?.get(..0x2a)?;
+                let d = hdr
+                    .get(table + offset(dirs.len() + k)? as usize..)?
+                    .get(..0x2a)?;
                 let flags = u16_at(d, 8)?;
                 let (name, dir) = if flags & INVALID != 0 {
                     (String::new(), String::new())
                 } else {
-                    (cstr(hdr, table + u32_at(d, 0)? as usize)?, dirs.get(u32_at(d, 4)? as usize)?.clone())
+                    (
+                        cstr(hdr, table + u32_at(d, 0)? as usize)?,
+                        dirs.get(u32_at(d, 4)? as usize)?.clone(),
+                    )
                 };
                 File {
                     name,
@@ -129,7 +136,10 @@ impl Header {
                 let (name, dir) = if flags & INVALID != 0 {
                     (String::new(), String::new())
                 } else {
-                    (cstr(hdr, table + u32_at(d, 0x3a)? as usize)?, dirs.get(u16_at(d, 0x3e)? as usize)?.clone())
+                    (
+                        cstr(hdr, table + u32_at(d, 0x3a)? as usize)?,
+                        dirs.get(u16_at(d, 0x3e)? as usize)?.clone(),
+                    )
                 };
                 File {
                     name,
@@ -157,21 +167,34 @@ impl Header {
                 let range = if major == 5 { 0x4c } else { 0x16 };
                 groups.push(Group {
                     name: text(0)?,
-                    dest: if major == 5 { String::new() } else { text(0x3a)? },
+                    dest: if major == 5 {
+                        String::new()
+                    } else {
+                        text(0x3a)?
+                    },
                     first: u32_at(hdr, g + range)?,
                     last: u32_at(hdr, g + range + 4)?,
                 });
                 entry = u32_at(hdr, cd + entry + 8)? as usize;
             }
         }
-        Some(Header { major, files, groups })
+        Some(Header {
+            major,
+            files,
+            groups,
+        })
     }
 }
 
 /// A file's contents from its `packed` bytes in the cab, checked against its MD5.
 pub fn unpack(f: &File, packed: &[u8]) -> Result<Vec<u8>, String> {
     if packed.len() as u64 != f.packed {
-        return Err(format!("{}: {} of {} bytes in the cab (spans volumes?)", f.name, packed.len(), f.packed));
+        return Err(format!(
+            "{}: {} of {} bytes in the cab (spans volumes?)",
+            f.name,
+            packed.len(),
+            f.packed
+        ));
     }
     if f.flags & OBFUSCATED != 0 {
         return Err(format!("{}: obfuscated (not supported yet)", f.name));
@@ -183,16 +206,24 @@ pub fn unpack(f: &File, packed: &[u8]) -> Result<Vec<u8>, String> {
         let mut at = 0;
         while at < packed.len() {
             let n = u16_at(packed, at).ok_or("cut chunk")? as usize;
-            let chunk = packed.get(at + 2..at + 2 + n).ok_or_else(|| format!("{}: cut chunk", f.name))?;
+            let chunk = packed
+                .get(at + 2..at + 2 + n)
+                .ok_or_else(|| format!("{}: cut chunk", f.name))?;
             out.extend(
-                miniz_oxide::inflate::decompress_to_vec(chunk).map_err(|e| format!("{}: {e:?}", f.name))?,
+                miniz_oxide::inflate::decompress_to_vec(chunk)
+                    .map_err(|e| format!("{}: {e:?}", f.name))?,
             );
             at += 2 + n;
         }
         out
     };
     if out.len() as u64 != f.size {
-        return Err(format!("{}: {} bytes unpacked, {} expected", f.name, out.len(), f.size));
+        return Err(format!(
+            "{}: {} bytes unpacked, {} expected",
+            f.name,
+            out.len(),
+            f.size
+        ));
     }
     if f.md5 != [0; 16] && Md5::digest(&out)[..] != f.md5 {
         return Err(format!("{}: MD5 differs", f.name));

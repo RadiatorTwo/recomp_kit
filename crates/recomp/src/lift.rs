@@ -9,7 +9,10 @@
 use crate::discover::{Func, Program, direct_target};
 use crate::rt::Cpu;
 use crate::smc::{Field, Smc};
-use cranelift_codegen::ir::{self, Block, FuncRef, GlobalValue, InstBuilder, MemFlagsData, SigRef, Type, Value, condcodes::IntCC, types::*};
+use cranelift_codegen::ir::{
+    self, Block, FuncRef, GlobalValue, InstBuilder, MemFlagsData, SigRef, Type, Value,
+    condcodes::IntCC, types::*,
+};
 use cranelift_codegen::isa::TargetFrontendConfig;
 use cranelift_frontend::{FunctionBuilder, Switch, Variable};
 use iced_x86::{ConditionCode, FlowControl, Instruction, MemorySize, Mnemonic, OpKind, Register};
@@ -58,8 +61,35 @@ fn plain(i: &Instruction) -> bool {
     use Mnemonic::*;
     matches!(
         i.mnemonic(),
-        Mov | Movzx | Movsx | Lea | Add | Sub | Adc | Sbb | And | Or | Xor | Not | Neg | Inc | Dec | Cmp | Test | Shl | Shr
-            | Sar | Rol | Ror | Push | Pop | Xchg | Nop | Cdq | Cwde | Cbw | Cwd
+        Mov | Movzx
+            | Movsx
+            | Lea
+            | Add
+            | Sub
+            | Adc
+            | Sbb
+            | And
+            | Or
+            | Xor
+            | Not
+            | Neg
+            | Inc
+            | Dec
+            | Cmp
+            | Test
+            | Shl
+            | Shr
+            | Sar
+            | Rol
+            | Ror
+            | Push
+            | Pop
+            | Xchg
+            | Nop
+            | Cdq
+            | Cwde
+            | Cbw
+            | Cwd
     ) || is_setcc(i)
         || is_cmovcc(i)
         || x87::is_x87(i.mnemonic())
@@ -78,17 +108,22 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
                 let r = i.op_register(k);
                 // segment registers: push/pop and mov (Watcom's start-up and "push ds; pop es"):
                 // flat selectors, writes dropped
-                let seg = r.is_segment_register() && matches!(i.mnemonic(), Mnemonic::Push | Mnemonic::Pop | Mnemonic::Mov);
+                let seg = r.is_segment_register()
+                    && matches!(i.mnemonic(), Mnemonic::Push | Mnemonic::Pop | Mnemonic::Mov);
                 if !(r.is_gpr8() || r.is_gpr16() || r.is_gpr32() || r.is_st() || r.is_mm() || seg) {
                     return Some(format!("register {r:?}"));
                 }
             }
             OpKind::Memory => {
                 // xlat's operand is [ebx + al] (lifted by itself)
-                if i.mnemonic() != Xlatb && (!gpr_ok(i.memory_base()) || !gpr_ok(i.memory_index())) {
+                if i.mnemonic() != Xlatb && (!gpr_ok(i.memory_base()) || !gpr_ok(i.memory_index()))
+                {
                     return Some("16-bit addressing".into());
                 }
-                if !matches!(i.memory_segment(), Register::DS | Register::SS | Register::ES | Register::CS | Register::FS) {
+                if !matches!(
+                    i.memory_segment(),
+                    Register::DS | Register::SS | Register::ES | Register::CS | Register::FS
+                ) {
                     return Some(format!("segment {:?}", i.memory_segment()));
                 }
             }
@@ -112,26 +147,40 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
         return x87::unsupported(i);
     }
     let ok = match m {
-        Mov | Movzx | Movsx | Lea | Add | Adc | Sub | Sbb | Cmp | And | Or | Xor | Test | Inc | Dec | Neg | Not | Shl
-        | Sal | Shr | Sar | Rol | Ror | Rcl | Rcr | Push | Pop | Pushad | Popad | Pushfd | Popfd | Pushf | Popf | Lahf | Sahf | Clc | Stc | Cmc
-        | Cld | Std | Xchg | Bt | Bts | Btr | Btc | Cdq | Cwde | Cbw | Cwd | Xlatb | Div | Idiv | Leave | Nop | Wait
-        | Pause | Cli | Sti | Cpuid | Rdtsc | Movsb | Movsw | Movsd | Stosb | Stosw | Stosd | Lodsb | Lodsw | Lodsd
-        | Scasb | Scasw | Scasd | Cmpsb | Cmpsw | Cmpsd | Jmp | Call | Ret | Loop | Loope | Loopne | Jecxz | Jcxz
-        | Int3 | Hlt | Ud2 | Int | Into | Emms | In | Out => true,
+        Mov | Movzx | Movsx | Lea | Add | Adc | Sub | Sbb | Cmp | And | Or | Xor | Test | Inc
+        | Dec | Neg | Not | Shl | Sal | Shr | Sar | Rol | Ror | Rcl | Rcr | Push | Pop | Pushad
+        | Popad | Pushfd | Popfd | Pushf | Popf | Lahf | Sahf | Clc | Stc | Cmc | Cld | Std
+        | Xchg | Bt | Bts | Btr | Btc | Cdq | Cwde | Cbw | Cwd | Xlatb | Div | Idiv | Leave
+        | Nop | Wait | Pause | Cli | Sti | Cpuid | Rdtsc | Movsb | Movsw | Movsd | Stosb
+        | Stosw | Stosd | Lodsb | Lodsw | Lodsd | Scasb | Scasw | Scasd | Cmpsb | Cmpsw | Cmpsd
+        | Jmp | Call | Ret | Loop | Loope | Loopne | Jecxz | Jcxz | Int3 | Hlt | Ud2 | Int
+        | Into | Emms | In | Out => true,
         // port input without rep (the gameport)
         Insb | Insw | Insd => !(i.has_rep_prefix() || i.has_repe_prefix() || i.has_repne_prefix()),
-        Movd | Movq => (0..i.op_count()).all(|k| i.op_kind(k) != OpKind::Register || !i.op_register(k).is_xmm()),
+        Movd | Movq => (0..i.op_count())
+            .all(|k| i.op_kind(k) != OpKind::Register || !i.op_register(k).is_xmm()),
         Bswap => i.op0_register().is_gpr32(),
         Bsf | Bsr => op_size(i, 0) == 4,
-        Shld | Shrd => i.op0_register().is_gpr32() || (i.op0_kind() == OpKind::Memory && i.memory_size().size() == 4),
+        Shld | Shrd => {
+            i.op0_register().is_gpr32()
+                || (i.op0_kind() == OpKind::Memory && i.memory_size().size() == 4)
+        }
         Mul => i.op_count() == 1 && op_size(i, 0) != 2,
         Imul => !(i.op_count() == 1 && op_size(i, 0) == 2),
         Enter => i.immediate8_2nd() == 0,
-        _ => i.condition_code() != ConditionCode::None && (i.is_jcc_short_or_near() || is_setcc(i) || is_cmovcc(i)),
+        _ => {
+            i.condition_code() != ConditionCode::None
+                && (i.is_jcc_short_or_near() || is_setcc(i) || is_cmovcc(i))
+        }
     };
     // string instructions also exist as SSE (movsd/cmpsd xmm): only the string forms here
-    let string = matches!(m, Movsd | Cmpsd) && !matches!(i.op0_kind(), OpKind::MemoryESEDI | OpKind::MemorySegESI);
-    if ok && !string { None } else { Some(format!("{m:?}")) }
+    let string = matches!(m, Movsd | Cmpsd)
+        && !matches!(i.op0_kind(), OpKind::MemoryESEDI | OpKind::MemorySegESI);
+    if ok && !string {
+        None
+    } else {
+        Some(format!("{m:?}"))
+    }
 }
 
 /// What a segment register reads as: Windows 9x's flat selectors.
@@ -146,14 +195,46 @@ fn selector(r: Register) -> i64 {
 
 pub fn is_setcc(i: &Instruction) -> bool {
     use Mnemonic::*;
-    matches!(i.mnemonic(), Seto | Setno | Setb | Setae | Sete | Setne | Setbe | Seta | Sets | Setns | Setp | Setnp | Setl | Setge | Setle | Setg)
+    matches!(
+        i.mnemonic(),
+        Seto | Setno
+            | Setb
+            | Setae
+            | Sete
+            | Setne
+            | Setbe
+            | Seta
+            | Sets
+            | Setns
+            | Setp
+            | Setnp
+            | Setl
+            | Setge
+            | Setle
+            | Setg
+    )
 }
 
 pub fn is_cmovcc(i: &Instruction) -> bool {
     use Mnemonic::*;
     matches!(
         i.mnemonic(),
-        Cmovo | Cmovno | Cmovb | Cmovae | Cmove | Cmovne | Cmovbe | Cmova | Cmovs | Cmovns | Cmovp | Cmovnp | Cmovl | Cmovge | Cmovle | Cmovg
+        Cmovo
+            | Cmovno
+            | Cmovb
+            | Cmovae
+            | Cmove
+            | Cmovne
+            | Cmovbe
+            | Cmova
+            | Cmovs
+            | Cmovns
+            | Cmovp
+            | Cmovnp
+            | Cmovl
+            | Cmovge
+            | Cmovle
+            | Cmovg
     )
 }
 
@@ -234,7 +315,13 @@ impl<'a, 'f> Lifter<'a, 'f> {
             base => b.ins().iconst(I64, base as i64),
         };
         let r = std::array::from_fn(|_| b.declare_var(I32));
-        let (cf, pf, zf, sf, of) = (b.declare_var(I8), b.declare_var(I8), b.declare_var(I8), b.declare_var(I8), b.declare_var(I8));
+        let (cf, pf, zf, sf, of) = (
+            b.declare_var(I8),
+            b.declare_var(I8),
+            b.declare_var(I8),
+            b.declare_var(I8),
+            b.declare_var(I8),
+        );
         let top = b.declare_var(I32);
         let mut l = Lifter {
             b,
@@ -279,28 +366,38 @@ impl<'a, 'f> Lifter<'a, 'f> {
 
     fn load_state(&mut self) {
         for k in 0..8 {
-            let v = self.b.ins().load(I32, mf(), self.cpu, (offset_of!(Cpu, r) + 4 * k) as i32);
+            let v = self
+                .b
+                .ins()
+                .load(I32, mf(), self.cpu, (offset_of!(Cpu, r) + 4 * k) as i32);
             self.b.def_var(self.r[k], v);
         }
         for (var, off) in self.flag_vars() {
             let v = self.b.ins().load(I8, mf(), self.cpu, off as i32);
             self.b.def_var(var, v);
         }
-        let t = self.b.ins().load(I32, mf(), self.cpu, offset_of!(Cpu, top) as i32);
+        let t = self
+            .b
+            .ins()
+            .load(I32, mf(), self.cpu, offset_of!(Cpu, top) as i32);
         self.b.def_var(self.top, t);
     }
 
     fn store_state(&mut self) {
         for k in 0..8 {
             let v = self.b.use_var(self.r[k]);
-            self.b.ins().store(mf(), v, self.cpu, (offset_of!(Cpu, r) + 4 * k) as i32);
+            self.b
+                .ins()
+                .store(mf(), v, self.cpu, (offset_of!(Cpu, r) + 4 * k) as i32);
         }
         for (var, off) in self.flag_vars() {
             let v = self.b.use_var(var);
             self.b.ins().store(mf(), v, self.cpu, off as i32);
         }
         let t = self.b.use_var(self.top);
-        self.b.ins().store(mf(), t, self.cpu, offset_of!(Cpu, top) as i32);
+        self.b
+            .ins()
+            .store(mf(), t, self.cpu, offset_of!(Cpu, top) as i32);
     }
 
     fn reg(&mut self, k: usize) -> Value {
@@ -358,7 +455,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
             a = self.b.ins().iadd(a, x);
         }
         if i.memory_segment() == Register::FS {
-            let fs = self.b.ins().load(I32, mf(), self.cpu, offset_of!(Cpu, fs_base) as i32);
+            let fs = self
+                .b
+                .ins()
+                .load(I32, mf(), self.cpu, offset_of!(Cpu, fs_base) as i32);
             a = self.b.ins().iadd(a, fs);
         }
         a
@@ -439,7 +539,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
                     return v;
                 }
                 let v = i.immediate(k);
-                let v = if size >= 8 { v } else { v & ((1u64 << (8 * size)) - 1) };
+                let v = if size >= 8 {
+                    v
+                } else {
+                    v & ((1u64 << (8 * size)) - 1)
+                };
                 self.iconst(ty(size), v as i64)
             }
         }
@@ -477,7 +581,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
     fn set_zsp(&mut self, r: Value) {
         let z = self.b.ins().icmp_imm_u(IntCC::Equal, r, 0);
         let s = self.msb(r);
-        let lo = if self.b.func.dfg.value_type(r) == I8 { r } else { self.b.ins().ireduce(I8, r) };
+        let lo = if self.b.func.dfg.value_type(r) == I8 {
+            r
+        } else {
+            self.b.ins().ireduce(I8, r)
+        };
         let n = self.b.ins().popcnt(lo);
         let n = self.b.ins().band_imm_u(n, 1);
         let p = self.b.ins().icmp_imm_u(IntCC::Equal, n, 0);
@@ -510,7 +618,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
             }
             C::None => panic!("no condition"),
         };
-        if negate { self.b.ins().bxor_imm_u(v, 1) } else { v }
+        if negate {
+            self.b.ins().bxor_imm_u(v, 1)
+        } else {
+            v
+        }
     }
 
     // ---- control flow --------------------------------------------------------------------------
@@ -532,7 +644,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
         } else {
             let call = self.b.ins().call(self.refs.lookup, &[self.cpu, tgt]);
             let fp = self.b.inst_results(call)[0];
-            self.b.ins().return_call_indirect(self.refs.guest_sig, fp, &[self.cpu]);
+            self.b
+                .ins()
+                .return_call_indirect(self.refs.guest_sig, fp, &[self.cpu]);
         }
     }
 
@@ -583,11 +697,16 @@ impl<'a, 'f> Lifter<'a, 'f> {
         } else {
             let call = self.b.ins().call(self.refs.lookup, &[self.cpu, tgt]);
             let fp = self.b.inst_results(call)[0];
-            self.b.ins().call_indirect(self.refs.guest_sig, fp, &[self.cpu]);
+            self.b
+                .ins()
+                .call_indirect(self.refs.guest_sig, fp, &[self.cpu]);
         }
         self.load_state();
         // an event handler asked to stop: return all the way out
-        let stop = self.b.ins().load(I32, mf(), self.cpu, offset_of!(Cpu, stop) as i32);
+        let stop = self
+            .b
+            .ins()
+            .load(I32, mf(), self.cpu, offset_of!(Cpu, stop) as i32);
         let (out, on) = (self.b.create_block(), self.b.create_block());
         self.b.ins().brif(stop, out, &[], on, &[]);
         self.b.switch_to_block(out);
@@ -624,7 +743,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
         }
         if crate::rt::count_file().is_some() {
             let ptr = self.cfg.pointer_type();
-            let at = self.b.ins().iconst(ptr, crate::rt::counter(self.f.entry) as *const _ as i64);
+            let at = self
+                .b
+                .ins()
+                .iconst(ptr, crate::rt::counter(self.f.entry) as *const _ as i64);
             let n = self.b.ins().load(I32, mf(), at, 0);
             let n = self.b.ins().iadd_imm_u(n, 1);
             self.b.ins().store(mf(), n, at, 0);
@@ -637,14 +759,24 @@ impl<'a, 'f> Lifter<'a, 'f> {
         }
         // the x87 cache lives along straight runs of instructions: not in functions with a
         // jump through a table (every instruction may be reached from it)
-        let indirect = addrs.iter().any(|&a| code.at(a).unwrap().flow_control() == FlowControl::IndirectBranch);
+        let indirect = addrs
+            .iter()
+            .any(|&a| code.at(a).unwrap().flow_control() == FlowControl::IndirectBranch);
         // nor with rewritten instructions (each version is lifted in its own branch)
         let variants = addrs.iter().any(|a| self.smc.variants.contains_key(a));
-        self.xc.enabled = !indirect && !variants && X87_CACHE.load(std::sync::atomic::Ordering::Relaxed);
-        self.joins = addrs.iter().filter_map(|&a| direct_target(&code.at(a).unwrap()).filter(|&t| self.f.inside(t))).collect();
+        self.xc.enabled =
+            !indirect && !variants && X87_CACHE.load(std::sync::atomic::Ordering::Relaxed);
+        self.joins = addrs
+            .iter()
+            .filter_map(|&a| direct_target(&code.at(a).unwrap()).filter(|&t| self.f.inside(t)))
+            .collect();
         self.joins.insert(self.f.entry);
         self.joins.extend(self.smc.variants.keys().copied());
-        let runs = if self.xc.enabled { self.rz_runs(code, &addrs) } else { HashMap::new() };
+        let runs = if self.xc.enabled {
+            self.rz_runs(code, &addrs)
+        } else {
+            HashMap::new()
+        };
         for run in runs.values() {
             // the run's versions both end with the cache written back
             let last = code.at(*run.last().unwrap()).unwrap();
@@ -653,7 +785,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
         // loop heads: targets of backward branches inside the function
         let heads: std::collections::HashSet<u32> = addrs
             .iter()
-            .filter_map(|&a| direct_target(&code.at(a).unwrap()).filter(|&t| t <= a && self.f.inside(t)))
+            .filter_map(|&a| {
+                direct_target(&code.at(a).unwrap()).filter(|&t| t <= a && self.f.inside(t))
+            })
             .collect();
         for &a in &addrs {
             let i = code.at(a).unwrap();
@@ -710,14 +844,18 @@ impl<'a, 'f> Lifter<'a, 'f> {
         use Mnemonic::*;
         let fits = |i: &Instruction| {
             let m = i.mnemonic();
-            let mem = |s: MemorySize| i.op_count() > 0 && i.op0_kind() == OpKind::Memory && i.memory_size() == s;
+            let mem = |s: MemorySize| {
+                i.op_count() > 0 && i.op0_kind() == OpKind::Memory && i.memory_size() == s
+            };
             let x87_ok = match m {
                 Fld | Fst | Fstp => !mem(MemorySize::Float80),
                 Fild => !mem(MemorySize::Int64),
-                Fist | Fistp | Fisttp | Fxch | Fadd | Faddp | Fiadd | Fsub | Fsubp | Fisub | Fsubr | Fsubrp | Fisubr | Fmul
-                | Fmulp | Fimul | Fdiv | Fdivp | Fidiv | Fdivr | Fdivrp | Fidivr | Fchs | Fabs | Fsqrt | Frndint | Fld1
-                | Fldz | Fcom | Fcomp | Fucom | Fucomp | Ficom | Ficomp | Fcompp | Fucompp | Ftst | Fcomi | Fcomip
-                | Fucomi | Fucomip | Fnstsw | Fnstcw | Fnclex | Fincstp | Fdecstp | Ffree | Fnop => true,
+                Fist | Fistp | Fisttp | Fxch | Fadd | Faddp | Fiadd | Fsub | Fsubp | Fisub
+                | Fsubr | Fsubrp | Fisubr | Fmul | Fmulp | Fimul | Fdiv | Fdivp | Fidiv | Fdivr
+                | Fdivrp | Fidivr | Fchs | Fabs | Fsqrt | Frndint | Fld1 | Fldz | Fcom | Fcomp
+                | Fucom | Fucomp | Ficom | Ficomp | Fcompp | Fucompp | Ftst | Fcomi | Fcomip
+                | Fucomi | Fucomip | Fnstsw | Fnstcw | Fnclex | Fincstp | Fdecstp | Ffree
+                | Fnop => true,
                 _ => !x87::is_x87(m),
             };
             plain(i) && x87_ok && i.flow_control() == FlowControl::Next && unsupported(i).is_none()
@@ -725,8 +863,24 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let arith = |i: &Instruction| {
             matches!(
                 i.mnemonic(),
-                Fadd | Faddp | Fiadd | Fsub | Fsubp | Fisub | Fsubr | Fsubrp | Fisubr | Fmul | Fmulp | Fimul | Fdiv | Fdivp
-                    | Fidiv | Fdivr | Fdivrp | Fidivr | Fsqrt
+                Fadd | Faddp
+                    | Fiadd
+                    | Fsub
+                    | Fsubp
+                    | Fisub
+                    | Fsubr
+                    | Fsubrp
+                    | Fisubr
+                    | Fmul
+                    | Fmulp
+                    | Fimul
+                    | Fdiv
+                    | Fdivp
+                    | Fidiv
+                    | Fdivr
+                    | Fdivrp
+                    | Fidivr
+                    | Fsqrt
             )
         };
         let mut runs = HashMap::new();
@@ -735,7 +889,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
             let (mut j, mut ops) = (k, 0);
             while j < addrs.len() {
                 let i = code.at(addrs[j]).unwrap();
-                let entered = j > k && (self.joins.contains(&addrs[j]) || code.at(addrs[j - 1]).unwrap().next_ip32() != addrs[j]);
+                let entered = j > k
+                    && (self.joins.contains(&addrs[j])
+                        || code.at(addrs[j - 1]).unwrap().next_ip32() != addrs[j]);
                 if entered || !fits(&i) || self.smc.variants.contains_key(&addrs[j]) {
                     break;
                 }
@@ -767,7 +923,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let call = self.b.ins().call(self.refs.mxcsr_rz, &[]);
         self.rz = Some(self.b.inst_results(call)[0]);
         // its own blocks for the run's instructions but the first
-        let kept: Vec<(u32, Block)> = run[1..].iter().map(|&a| (a, self.blocks.insert(a, self.b.create_block()).unwrap())).collect();
+        let kept: Vec<(u32, Block)> = run[1..]
+            .iter()
+            .map(|&a| (a, self.blocks.insert(a, self.b.create_block()).unwrap()))
+            .collect();
         for (n, &a) in run.iter().enumerate() {
             if n > 0 {
                 let blk = self.blocks[&a];
@@ -775,7 +934,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
             }
             self.emit(&code.at(a).unwrap());
         }
-        assert!(self.rz.is_none(), "a version's run ends with the cache written back");
+        assert!(
+            self.rz.is_none(),
+            "a version's run ends with the cache written back"
+        );
         self.blocks.extend(kept);
         // the usual version: the first instruction here, the others as the loop comes to them
         self.b.switch_to_block(other);
@@ -839,7 +1001,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
             self.x87_settle();
         }
         match i.flow_control() {
-            FlowControl::ConditionalBranch | FlowControl::UnconditionalBranch | FlowControl::IndirectBranch => {
+            FlowControl::ConditionalBranch
+            | FlowControl::UnconditionalBranch
+            | FlowControl::IndirectBranch => {
                 return self.jump_insn(i);
             }
             FlowControl::Call | FlowControl::IndirectCall => {
@@ -860,7 +1024,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 return false;
             }
             FlowControl::Return => {
-                let n = if i.op_count() > 0 { i.immediate16() as i64 } else { 0 };
+                let n = if i.op_count() > 0 {
+                    i.immediate16() as i64
+                } else {
+                    0
+                };
                 let sp = self.reg(4);
                 let sp = self.b.ins().iadd_imm_s(sp, 4 + n);
                 self.set_reg(4, sp);
@@ -893,7 +1061,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
         }
         match m {
             Nop | Wait | Pause | Cli | Sti => {}
-            Push | Pop if i.op0_kind() == OpKind::Register && i.op0_register().is_segment_register() => {
+            Push | Pop
+                if i.op0_kind() == OpKind::Register && i.op0_register().is_segment_register() =>
+            {
                 // a flat selector; what is popped is dropped
                 if m == Push {
                     let v = self.iconst(I32, selector(i.op0_register()));
@@ -915,21 +1085,36 @@ impl<'a, 'f> Lifter<'a, 'f> {
             Movzx | Movsx => {
                 let v = self.rd(i, 1, op_size(i, 1));
                 let t = ty(op_size(i, 0));
-                let v = if m == Movzx { self.b.ins().uextend(t, v) } else { self.b.ins().sextend(t, v) };
+                let v = if m == Movzx {
+                    self.b.ins().uextend(t, v)
+                } else {
+                    self.b.ins().sextend(t, v)
+                };
                 self.wr(i, 0, v);
             }
             Lea => {
                 let a = self.addr(i);
-                let v = if op_size(i, 0) == 2 { self.b.ins().ireduce(I16, a) } else { a };
+                let v = if op_size(i, 0) == 2 {
+                    self.b.ins().ireduce(I16, a)
+                } else {
+                    a
+                };
                 self.wr(i, 0, v);
             }
             Add | Adc | Sub | Sbb | Cmp | And | Or | Xor | Test => self.alu(i, m),
             Inc | Dec => {
                 let n = op_size(i, 0);
                 let x = self.rd(i, 0, n);
-                let r = if m == Inc { self.b.ins().iadd_imm_s(x, 1) } else { self.b.ins().iadd_imm_s(x, -1) };
+                let r = if m == Inc {
+                    self.b.ins().iadd_imm_s(x, 1)
+                } else {
+                    self.b.ins().iadd_imm_s(x, -1)
+                };
                 let min = (1u64 << (8 * n - 1)) as i64;
-                let o = self.b.ins().icmp_imm_u(IntCC::Equal, if m == Inc { r } else { x }, min);
+                let o = self
+                    .b
+                    .ins()
+                    .icmp_imm_u(IntCC::Equal, if m == Inc { r } else { x }, min);
                 self.set_flag(self.of, o);
                 self.set_zsp(r);
                 self.wr(i, 0, r);
@@ -939,7 +1124,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let x = self.rd(i, 0, n);
                 let r = self.b.ins().ineg(x);
                 let c = self.b.ins().icmp_imm_u(IntCC::NotEqual, x, 0);
-                let o = self.b.ins().icmp_imm_u(IntCC::Equal, x, (1u64 << (8 * n - 1)) as i64);
+                let o = self
+                    .b
+                    .ins()
+                    .icmp_imm_u(IntCC::Equal, x, (1u64 << (8 * n - 1)) as i64);
                 self.set_flag(self.cf, c);
                 self.set_flag(self.of, o);
                 self.set_zsp(r);
@@ -1003,9 +1191,18 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 }
             }
             Pushfd | Pushf => {
-                let df = self.b.ins().load(I8, mf(), self.cpu, offset_of!(Cpu, df) as i32);
+                let df = self
+                    .b
+                    .ins()
+                    .load(I8, mf(), self.cpu, offset_of!(Cpu, df) as i32);
                 let mut v = self.iconst(I32, 0x202);
-                for (var, bit) in [(self.cf, 0), (self.pf, 2), (self.zf, 6), (self.sf, 7), (self.of, 11)] {
+                for (var, bit) in [
+                    (self.cf, 0),
+                    (self.pf, 2),
+                    (self.zf, 6),
+                    (self.sf, 7),
+                    (self.of, 11),
+                ] {
                     let f = self.flag(var);
                     let f = self.b.ins().uextend(I32, f);
                     let f = self.b.ins().ishl_imm_u(f, bit);
@@ -1041,12 +1238,20 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 } else {
                     self.pop32()
                 };
-                for (var, bit) in [(self.cf, 0), (self.pf, 2), (self.zf, 6), (self.sf, 7), (self.of, 11)] {
+                for (var, bit) in [
+                    (self.cf, 0),
+                    (self.pf, 2),
+                    (self.zf, 6),
+                    (self.sf, 7),
+                    (self.of, 11),
+                ] {
                     let f = self.bit8(v, bit);
                     self.set_flag(var, f);
                 }
                 let d = self.bit8(v, 10);
-                self.b.ins().store(mf(), d, self.cpu, offset_of!(Cpu, df) as i32);
+                self.b
+                    .ins()
+                    .store(mf(), d, self.cpu, offset_of!(Cpu, df) as i32);
                 // AC and ID are in the upper half, which popf leaves
                 if m == Popfd {
                     for (field, bit) in [(offset_of!(Cpu, ac), 18), (offset_of!(Cpu, id), 21)] {
@@ -1086,7 +1291,9 @@ impl<'a, 'f> Lifter<'a, 'f> {
             }
             Cld | Std => {
                 let v = self.iconst(I8, (m == Std) as i64);
-                self.b.ins().store(mf(), v, self.cpu, offset_of!(Cpu, df) as i32);
+                self.b
+                    .ins()
+                    .store(mf(), v, self.cpu, offset_of!(Cpu, df) as i32);
             }
             Xchg => {
                 let n = op_size(i, 0);
@@ -1146,7 +1353,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
             Mul | Imul if i.op_count() == 1 => self.mul1(i, m == Imul),
             Imul => {
                 let n = op_size(i, 0);
-                let (a, b) = if i.op_count() == 2 { (self.rd(i, 0, n), self.rd(i, 1, n)) } else { (self.rd(i, 1, n), self.rd(i, 2, n)) };
+                let (a, b) = if i.op_count() == 2 {
+                    (self.rd(i, 0, n), self.rd(i, 1, n))
+                } else {
+                    (self.rd(i, 1, n), self.rd(i, 2, n))
+                };
                 let (a64, b64) = (self.b.ins().sextend(I64, a), self.b.ins().sextend(I64, b));
                 let p = self.b.ins().imul(a64, b64);
                 let r = self.b.ins().ireduce(ty(n), p);
@@ -1175,7 +1386,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
             Emms => {} // MMX and x87 registers are kept apart
             // hardware ports: the game polls the gameport (0x201); nothing is connected
             In => {
-                let v = self.iconst(ty(op_size(i, 0)), -1i64 & ((1i64 << (8 * op_size(i, 0))) - 1));
+                let v = self.iconst(
+                    ty(op_size(i, 0)),
+                    -1i64 & ((1i64 << (8 * op_size(i, 0))) - 1),
+                );
                 self.wr(i, 0, v);
             }
             Out => {}
@@ -1184,7 +1398,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let v = self.iconst(ty(n), (1i64 << (8 * n)) - 1);
                 let di = self.reg(7);
                 self.store(di, v);
-                let df = self.b.ins().load(I8, mf(), self.cpu, offset_of!(Cpu, df) as i32);
+                let df = self
+                    .b
+                    .ins()
+                    .load(I8, mf(), self.cpu, offset_of!(Cpu, df) as i32);
                 let df = self.b.ins().uextend(I32, df);
                 let step = self.b.ins().imul_imm_u(df, -2 * n as i64);
                 let step = self.b.ins().iadd_imm_s(step, n as i64);
@@ -1212,7 +1429,13 @@ impl<'a, 'f> Lifter<'a, 'f> {
                     Cmpsd => (4, 4),
                     _ => panic!("{m:?} passed the support check but has no lifting"),
                 };
-                let rep = if i.has_repne_prefix() { 2 } else if i.has_rep_prefix() || i.has_repe_prefix() { 1 } else { 0 };
+                let rep = if i.has_repne_prefix() {
+                    2
+                } else if i.has_rep_prefix() || i.has_repe_prefix() {
+                    1
+                } else {
+                    0
+                };
                 self.helper(self.refs.string, Some(kind | size << 4 | rep << 8));
             }
         }
@@ -1222,17 +1445,26 @@ impl<'a, 'f> Lifter<'a, 'f> {
     /// movd/movq between MMX registers (`Cpu::mm`), general registers and memory.
     fn mmx_move(&mut self, i: &Instruction) {
         let n = if i.mnemonic() == Mnemonic::Movd { 4 } else { 8 };
-        let mm = |r: Register| (offset_of!(Cpu, mm) + 8 * (r.number() - Register::MM0.number())) as i32;
+        let mm =
+            |r: Register| (offset_of!(Cpu, mm) + 8 * (r.number() - Register::MM0.number())) as i32;
         let v = match i.op_kind(1) {
             OpKind::Register if i.op1_register().is_mm() => {
                 let v = self.b.ins().load(I64, mf(), self.cpu, mm(i.op1_register()));
-                if n == 4 { self.b.ins().ireduce(I32, v) } else { v }
+                if n == 4 {
+                    self.b.ins().ireduce(I32, v)
+                } else {
+                    v
+                }
             }
             _ => self.rd(i, 1, n),
         };
         match i.op_kind(0) {
             OpKind::Register if i.op0_register().is_mm() => {
-                let v = if n == 4 { self.b.ins().uextend(I64, v) } else { v };
+                let v = if n == 4 {
+                    self.b.ins().uextend(I64, v)
+                } else {
+                    v
+                };
                 self.b.ins().store(mf(), v, self.cpu, mm(i.op0_register()));
             }
             _ => self.wr(i, 0, v),
@@ -1312,13 +1544,21 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let mut go = self.b.ins().icmp_imm_u(IntCC::NotEqual, c, 0);
                 if i.mnemonic() != Loop {
                     let z = self.flag(self.zf);
-                    let z = if i.mnemonic() == Loopne { self.b.ins().bxor_imm_u(z, 1) } else { z };
+                    let z = if i.mnemonic() == Loopne {
+                        self.b.ins().bxor_imm_u(z, 1)
+                    } else {
+                        z
+                    };
                     go = self.b.ins().band(go, z);
                 }
                 go
             }
             Jecxz | Jcxz => {
-                let c = if i.mnemonic() == Jecxz { self.reg(1) } else { self.read_reg(Register::CX) };
+                let c = if i.mnemonic() == Jecxz {
+                    self.reg(1)
+                } else {
+                    self.read_reg(Register::CX)
+                };
                 self.b.ins().icmp_imm_u(IntCC::Equal, c, 0)
             }
             _ => self.cond(i.condition_code()),
@@ -1328,7 +1568,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
     fn alu(&mut self, i: &Instruction, m: Mnemonic) {
         use Mnemonic::*;
         let n = op_size(i, 0);
-        if m == Xor && i.op0_kind() == OpKind::Register && i.op1_kind() == OpKind::Register && i.op0_register() == i.op1_register() {
+        if m == Xor
+            && i.op0_kind() == OpKind::Register
+            && i.op1_kind() == OpKind::Register
+            && i.op0_register() == i.op1_register()
+        {
             let z = self.iconst(ty(n), 0);
             self.wr(i, 0, z);
             self.zero_flags(&[self.cf, self.of, self.sf]);
@@ -1343,7 +1587,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let mut r = self.b.ins().iadd(x, y);
                 let cin = self.flag(self.cf);
                 if m == Adc {
-                    let c = if n == 1 { cin } else { self.b.ins().uextend(ty(n), cin) };
+                    let c = if n == 1 {
+                        cin
+                    } else {
+                        self.b.ins().uextend(ty(n), cin)
+                    };
                     r = self.b.ins().iadd(r, c);
                     let le = self.b.ins().icmp(IntCC::UnsignedLessThanOrEqual, r, x);
                     let lt = self.b.ins().icmp(IntCC::UnsignedLessThan, r, x);
@@ -1363,7 +1611,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let mut r = self.b.ins().isub(x, y);
                 let cin = self.flag(self.cf);
                 if m == Sbb {
-                    let c = if n == 1 { cin } else { self.b.ins().uextend(ty(n), cin) };
+                    let c = if n == 1 {
+                        cin
+                    } else {
+                        self.b.ins().uextend(ty(n), cin)
+                    };
                     r = self.b.ins().isub(r, c);
                     let le = self.b.ins().icmp(IntCC::UnsignedLessThanOrEqual, x, y);
                     let lt = self.b.ins().icmp(IntCC::UnsignedLessThan, x, y);
@@ -1421,8 +1673,16 @@ impl<'a, 'f> Lifter<'a, 'f> {
             }
         };
         let x = self.rd(i, 0, n);
-        let xz = if n == 4 { x } else { self.b.ins().uextend(I32, x) };
-        let xs = if n == 4 { x } else { self.b.ins().sextend(I32, x) };
+        let xz = if n == 4 {
+            x
+        } else {
+            self.b.ins().uextend(I32, x)
+        };
+        let xs = if n == 4 {
+            x
+        } else {
+            self.b.ins().sextend(I32, x)
+        };
         let k1 = self.b.ins().iadd_imm_s(k, -1);
         let one32 = |l: &mut Self, v: Value| {
             let v = l.b.ins().band_imm_u(v, 1);
@@ -1438,7 +1698,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let c = self.b.ins().ushr(xz, wk);
                 let mut c = one32(self, c);
                 if n != 4 {
-                    let fits = self.b.ins().icmp_imm_u(IntCC::UnsignedLessThanOrEqual, k, w);
+                    let fits = self
+                        .b
+                        .ins()
+                        .icmp_imm_u(IntCC::UnsignedLessThanOrEqual, k, w);
                     let z = self.iconst(I8, 0);
                     c = self.b.ins().select(fits, c, z);
                 }
@@ -1489,25 +1752,45 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 } else {
                     let r2 = self.b.ins().ushr_imm_u(r, w - 2);
                     let r2 = self.b.ins().band_imm_u(r2, 1);
-                    let b2 = if n == 1 { r2 } else { self.b.ins().ireduce(I8, r2) };
+                    let b2 = if n == 1 {
+                        r2
+                    } else {
+                        self.b.ins().ireduce(I8, r2)
+                    };
                     self.b.ins().bxor(s, b2)
                 };
                 (r, c, o, false)
             }
             _ => {
                 let kk = self.b.ins().band_imm_u(k, w - 1);
-                let kk = if n == 4 { kk } else { self.b.ins().ireduce(t, kk) };
-                let r = if m == Rol { self.b.ins().rotl(x, kk) } else { self.b.ins().rotr(x, kk) };
+                let kk = if n == 4 {
+                    kk
+                } else {
+                    self.b.ins().ireduce(t, kk)
+                };
+                let r = if m == Rol {
+                    self.b.ins().rotl(x, kk)
+                } else {
+                    self.b.ins().rotr(x, kk)
+                };
                 let s = self.msb(r);
                 if m == Rol {
                     let lo = self.b.ins().band_imm_u(r, 1);
-                    let c = if n == 1 { lo } else { self.b.ins().ireduce(I8, lo) };
+                    let c = if n == 1 {
+                        lo
+                    } else {
+                        self.b.ins().ireduce(I8, lo)
+                    };
                     let o = self.b.ins().bxor(s, c);
                     (r, c, o, false)
                 } else {
                     let r2 = self.b.ins().ushr_imm_u(r, w - 2);
                     let r2 = self.b.ins().band_imm_u(r2, 1);
-                    let b2 = if n == 1 { r2 } else { self.b.ins().ireduce(I8, r2) };
+                    let b2 = if n == 1 {
+                        r2
+                    } else {
+                        self.b.ins().ireduce(I8, r2)
+                    };
                     let o = self.b.ins().bxor(s, b2);
                     (r, s, o, false)
                 }
@@ -1573,12 +1856,21 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let nz = self.b.ins().icmp_imm_u(IntCC::NotEqual, k, 0);
         let r = self.b.ins().select(nz, r, x);
         self.wr(i, 0, r);
-        let old = [self.flag(self.cf), self.flag(self.of), self.flag(self.zf), self.flag(self.sf), self.flag(self.pf)];
+        let old = [
+            self.flag(self.cf),
+            self.flag(self.of),
+            self.flag(self.zf),
+            self.flag(self.sf),
+            self.flag(self.pf),
+        ];
         self.set_flag(self.cf, c);
         let z = self.iconst(I8, 0);
         self.set_flag(self.of, z);
         self.set_zsp(r);
-        for (var, o) in [self.cf, self.of, self.zf, self.sf, self.pf].into_iter().zip(old) {
+        for (var, o) in [self.cf, self.of, self.zf, self.sf, self.pf]
+            .into_iter()
+            .zip(old)
+        {
             let new = self.flag(var);
             let v = self.b.ins().select(nz, new, o);
             self.set_flag(var, v);
@@ -1601,7 +1893,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
         if i.op0_kind() == OpKind::Memory && i.op1_kind() == OpKind::Register {
             // a register bit offset addresses a bit string: it can reach past the dword
             let nreg = self.read_reg(i.op1_register());
-            let nv = if self.b.func.dfg.value_type(nreg) == I32 { nreg } else { self.b.ins().sextend(I32, nreg) };
+            let nv = if self.b.func.dfg.value_type(nreg) == I32 {
+                nreg
+            } else {
+                self.b.ins().sextend(I32, nreg)
+            };
             let base = self.addr(i);
             let word = self.b.ins().sshr_imm_u(nv, 5);
             let word = self.b.ins().ishl_imm_u(word, 2);
@@ -1627,7 +1923,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let bit = self.b.ins().ishl(one, k);
         let c = self.b.ins().ushr(x, k);
         let c = self.b.ins().band_imm_u(c, 1);
-        let c = if n == 1 { c } else { self.b.ins().ireduce(I8, c) };
+        let c = if n == 1 {
+            c
+        } else {
+            self.b.ins().ireduce(I8, c)
+        };
         self.set_flag(self.cf, c);
         if let Some(v) = update(self, x, bit) {
             self.wr(i, 0, v);
@@ -1639,7 +1939,13 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let v = self.rd(i, 0, n);
         if n == 1 {
             let a = self.read_reg(Register::AL);
-            let ext = |l: &mut Self, x: Value| if signed { l.b.ins().sextend(I16, x) } else { l.b.ins().uextend(I16, x) };
+            let ext = |l: &mut Self, x: Value| {
+                if signed {
+                    l.b.ins().sextend(I16, x)
+                } else {
+                    l.b.ins().uextend(I16, x)
+                }
+            };
             let (a, v) = (ext(self, a), ext(self, v));
             let p = self.b.ins().imul(a, v);
             self.write_reg(Register::AX, p);
@@ -1651,7 +1957,11 @@ impl<'a, 'f> Lifter<'a, 'f> {
         } else {
             let a = self.reg(0);
             let lo = self.b.ins().imul(a, v);
-            let hi = if signed { self.b.ins().smulhi(a, v) } else { self.b.ins().umulhi(a, v) };
+            let hi = if signed {
+                self.b.ins().smulhi(a, v)
+            } else {
+                self.b.ins().umulhi(a, v)
+            };
             self.set_reg(0, lo);
             self.set_reg(2, hi);
             let o = if signed {
@@ -1679,11 +1989,19 @@ impl<'a, 'f> Lifter<'a, 'f> {
         // the registers for the report only: flags, TOP and the x87 cache stay as they are
         for k in 0..8 {
             let v = self.b.use_var(self.r[k]);
-            self.b.ins().store(mf(), v, self.cpu, (offset_of!(Cpu, r) + 4 * k) as i32);
+            self.b
+                .ins()
+                .store(mf(), v, self.cpu, (offset_of!(Cpu, r) + 4 * k) as i32);
         }
-        let (a, k) = (self.iconst(I32, i.ip32() as i64), self.iconst(I32, TRAP_DIV0));
+        let (a, k) = (
+            self.iconst(I32, i.ip32() as i64),
+            self.iconst(I32, TRAP_DIV0),
+        );
         self.b.ins().call(self.refs.trap, &[self.cpu, a, k]);
-        let stop = self.b.ins().load(I32, mf(), self.cpu, offset_of!(Cpu, stop) as i32);
+        let stop = self
+            .b
+            .ins()
+            .load(I32, mf(), self.cpu, offset_of!(Cpu, stop) as i32);
         let out = self.b.create_block();
         self.b.ins().brif(stop, out, &[], ok, &[]);
         self.b.switch_to_block(out);
@@ -1704,12 +2022,19 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 } else {
                     (self.reg(2), self.reg(0))
                 };
-                let (hi, lo) = (self.b.ins().uextend(wide, hi), self.b.ins().uextend(wide, lo));
+                let (hi, lo) = (
+                    self.b.ins().uextend(wide, hi),
+                    self.b.ins().uextend(wide, lo),
+                );
                 let hi = self.b.ins().ishl_imm_u(hi, 8 * n as i64);
                 self.b.ins().bor(hi, lo)
             }
         };
-        let dw = if signed { self.b.ins().sextend(wide, d) } else { self.b.ins().uextend(wide, d) };
+        let dw = if signed {
+            self.b.ins().sextend(wide, d)
+        } else {
+            self.b.ins().uextend(wide, d)
+        };
         let (q, r) = if signed {
             (self.b.ins().sdiv(x, dw), self.b.ins().srem(x, dw))
         } else {

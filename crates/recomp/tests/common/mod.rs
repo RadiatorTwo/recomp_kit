@@ -3,13 +3,13 @@
 
 #![allow(dead_code)]
 
+use iced_x86::IcedError;
+use iced_x86::code_asm::CodeAssembler;
 use recomp::discover::{Code, Program};
 use recomp::image::{Image, Section};
 use recomp::jit::{Compiled, compile};
 use recomp::rt::{Cpu, ESP, Memory};
 use recomp::smc::Smc;
-use iced_x86::IcedError;
-use iced_x86::code_asm::CodeAssembler;
 
 pub const TEXT: u32 = 0x401000;
 const STACK_LO: u32 = 0x0010_0000;
@@ -40,19 +40,41 @@ impl Guest {
             data.resize(data.len().next_multiple_of(16), 0xcc);
         }
         let n = data.len() as u32;
-        let img = Image { data, base: 0x400000, entry: TEXT, sections: vec![Section { name: ".text".into(), va: TEXT, vsize: n, raw: 0, rsize: n, exec: true }] };
+        let img = Image {
+            data,
+            base: 0x400000,
+            entry: TEXT,
+            sections: vec![Section {
+                name: ".text".into(),
+                va: TEXT,
+                vsize: n,
+                raw: 0,
+                rsize: n,
+                exec: true,
+            }],
+        };
         let mut code = Code::new(&img);
         let prog = Program::build(&mut code, &ranges);
         // code that writes its own fields is recompiled like the game's renderer
         let smc = Smc::find(&prog, &mut code, &Default::default());
         let c = compile(&prog, &smc, &mut code, &[]);
-        assert_eq!(c.stats.complete, snippets.len(), "not supported: {:?}", c.stats.missing);
+        assert_eq!(
+            c.stats.complete,
+            snippets.len(),
+            "not supported: {:?}",
+            c.stats.missing
+        );
         let mem = Memory::reserve();
         mem.map(TEXT, TEXT + n);
         mem.slice(TEXT, n as usize).copy_from_slice(&img.data);
         mem.map(STACK_LO, STACK_HI);
         mem.map(SCRATCH, SCRATCH + 0x1000);
-        Guest { c, mem, addr: ranges.iter().map(|r| r.0).collect(), smc }
+        Guest {
+            c,
+            mem,
+            addr: ranges.iter().map(|r| r.0).collect(),
+            smc,
+        }
     }
 
     /// cdecl call of snippet `k` with dword arguments; returns the CPU afterwards.
@@ -71,7 +93,6 @@ impl Guest {
     }
 }
 
-
 pub fn dbl(x: f64) -> [u32; 2] {
     let b = x.to_bits();
     [b as u32, (b >> 32) as u32]
@@ -87,13 +108,26 @@ impl Rng {
     }
     /// doubles of every kind: specials, small integers and halves, any bit pattern
     pub fn f64(&mut self) -> f64 {
-        const SPECIAL: [f64; 10] = [0.0, -0.0, 1.0, -1.0, 0.5, 2.5, -2.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+        const SPECIAL: [f64; 10] = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.5,
+            2.5,
+            -2.5,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
         match self.next() % 4 {
             0 => SPECIAL[(self.next() % 10) as usize],
             1 => ((self.next() % 2001) as f64 - 1000.0) / 2.0,
-            2 => ((self.next() >> 11) as f64 - (1u64 << 52) as f64) * 2f64.powi((self.next() % 80) as i32 - 40),
+            2 => {
+                ((self.next() >> 11) as f64 - (1u64 << 52) as f64)
+                    * 2f64.powi((self.next() % 80) as i32 - 40)
+            }
             _ => f64::from_bits(self.next()),
         }
     }
 }
-

@@ -35,7 +35,12 @@ pub fn demux(data: &[u8]) -> Streams {
                 }
             }
             0xbb..=0xff => {
-                let Some(len) = data.get(i..i + 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as usize) else { break };
+                let Some(len) = data
+                    .get(i..i + 2)
+                    .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize)
+                else {
+                    break;
+                };
                 let end = (i + 2 + len).min(data.len());
                 let p = &data[i + 2..end];
                 i = end;
@@ -44,7 +49,11 @@ pub fn demux(data: &[u8]) -> Streams {
                     continue;
                 }
                 let (pts, payload) = packet(p);
-                let (buf, start) = if code == 0xe0 { (&mut s.video, &mut s.video_start) } else { (&mut s.audio, &mut s.audio_start) };
+                let (buf, start) = if code == 0xe0 {
+                    (&mut s.video, &mut s.video_start)
+                } else {
+                    (&mut s.audio, &mut s.audio_start)
+                };
                 if start.is_none() {
                     *start = pts;
                 }
@@ -60,12 +69,18 @@ pub fn demux(data: &[u8]) -> Streams {
 fn packet(p: &[u8]) -> (Option<f64>, &[u8]) {
     let pts = |b: &[u8]| -> Option<f64> {
         let b = b.get(..5)?;
-        let v = ((b[0] as u64 >> 1) & 7) << 30 | (b[1] as u64) << 22 | (b[2] as u64 >> 1) << 15 | (b[3] as u64) << 7 | b[4] as u64 >> 1;
+        let v = ((b[0] as u64 >> 1) & 7) << 30
+            | (b[1] as u64) << 22
+            | (b[2] as u64 >> 1) << 15
+            | (b[3] as u64) << 7
+            | b[4] as u64 >> 1;
         Some(v as f64 / 90000.0)
     };
     if p.first().is_some_and(|b| b & 0xc0 == 0x80) {
         // MPEG-2 PES header
-        let Some(&hl) = p.get(2) else { return (None, &[]) };
+        let Some(&hl) = p.get(2) else {
+            return (None, &[]);
+        };
         let body = p.get(3 + hl as usize..).unwrap_or(&[]);
         let t = if p[1] & 0x80 != 0 { pts(&p[3..]) } else { None };
         return (t, body);
@@ -78,7 +93,9 @@ fn packet(p: &[u8]) -> (Option<f64>, &[u8]) {
         // STD buffer size
         i += 2;
     }
-    let Some(&b) = p.get(i) else { return (None, &[]) };
+    let Some(&b) = p.get(i) else {
+        return (None, &[]);
+    };
     let (t, skip) = match b >> 4 {
         2 => (pts(&p[i..]), 5),
         3 => (pts(&p[i..]), 10),

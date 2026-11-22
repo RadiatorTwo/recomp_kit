@@ -52,10 +52,22 @@ fn index() -> &'static Index {
             scan(&folder(), &mut files);
         }
         // the widest replacement gives the scale (pages are 256 wide)
-        let widest = files.values().filter_map(|p| png_size(p)).map(|(w, _)| w).max().unwrap_or(256);
-        let scale = (widest / 256).clamp(1, MAX_SCALE).next_power_of_two().min(MAX_SCALE);
+        let widest = files
+            .values()
+            .filter_map(|p| png_size(p))
+            .map(|(w, _)| w)
+            .max()
+            .unwrap_or(256);
+        let scale = (widest / 256)
+            .clamp(1, MAX_SCALE)
+            .next_power_of_two()
+            .min(MAX_SCALE);
         if !files.is_empty() {
-            super::log!("hd: {} replacement textures in {}, scale {scale}", files.len(), folder().display());
+            super::log!(
+                "hd: {} replacement textures in {}, scale {scale}",
+                files.len(),
+                folder().display()
+            );
         }
         Index { files, scale }
     })
@@ -63,12 +75,17 @@ fn index() -> &'static Index {
 
 /// PNGs below `dir` whose names end in a 16-digit hex hash.
 fn scan(dir: &Path, files: &mut HashMap<u64, PathBuf>) {
-    let Ok(d) = std::fs::read_dir(dir) else { return };
+    let Ok(d) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in d.flatten() {
         let p = e.path();
         if p.is_dir() {
             // the originals, and pictures (`crate::export`)
-            if !["dump", "pieces"].iter().any(|d| e.file_name().eq_ignore_ascii_case(d)) {
+            if !["dump", "pieces"]
+                .iter()
+                .any(|d| e.file_name().eq_ignore_ascii_case(d))
+            {
                 scan(&p, files);
             }
             continue;
@@ -76,7 +93,11 @@ fn scan(dir: &Path, files: &mut HashMap<u64, PathBuf>) {
         if !p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")) {
             continue;
         }
-        let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let stem = p
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let hex = stem.get(stem.len().saturating_sub(16)..).unwrap_or("");
         if let (16, Ok(h)) = (hex.len(), u64::from_str_radix(hex, 16)) {
             files.insert(h, p);
@@ -100,7 +121,11 @@ pub fn scale() -> u32 {
 /// The hash a download is known by: its format, size and texels (FNV-1a, 64 bits).
 pub fn hash(format: u32, w: u32, h: u32, texels: &[u8]) -> u64 {
     let mut x: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in [format, w, h].iter().flat_map(|v| v.to_le_bytes()).chain(texels.iter().copied()) {
+    for b in [format, w, h]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .chain(texels.iter().copied())
+    {
         x = (x ^ b as u64).wrapping_mul(0x100_0000_01b3);
     }
     x
@@ -148,7 +173,10 @@ pub fn load(path: &Path) -> Result<Image, String> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => px.to_vec(),
         png::ColorType::Rgb => px.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        png::ColorType::GrayscaleAlpha => px.chunks(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        png::ColorType::GrayscaleAlpha => px
+            .chunks(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
         png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         t => return Err(format!("colour type {t:?}")),
     };
@@ -159,12 +187,21 @@ pub fn load(path: &Path) -> Result<Image, String> {
 /// edges; an image of that size stays as it is).
 pub fn resize(img: &Image, w: u32, h: u32) -> Image {
     if (img.w, img.h) == (w, h) {
-        return Image { w, h, rgba: img.rgba.clone() };
+        return Image {
+            w,
+            h,
+            rgba: img.rgba.clone(),
+        };
     }
     let at = |x: u32, y: u32| {
         let p = &img.rgba[4 * (y * img.w + x) as usize..][..4];
         let a = p[3] as f32 / 255.0;
-        [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, p[3] as f32]
+        [
+            p[0] as f32 * a,
+            p[1] as f32 * a,
+            p[2] as f32 * a,
+            p[3] as f32,
+        ]
     };
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
@@ -172,16 +209,23 @@ pub fn resize(img: &Image, w: u32, h: u32) -> Image {
         let (y0, ty) = (fy.floor() as u32, fy.fract());
         let y1 = (y0 + 1).min(img.h - 1);
         for x in 0..w {
-            let fx = ((x as f32 + 0.5) * img.w as f32 / w as f32 - 0.5).clamp(0.0, (img.w - 1) as f32);
+            let fx =
+                ((x as f32 + 0.5) * img.w as f32 / w as f32 - 0.5).clamp(0.0, (img.w - 1) as f32);
             let (x0, tx) = (fx.floor() as u32, fx.fract());
             let x1 = (x0 + 1).min(img.w - 1);
             let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
             let mut p = [0.0; 4];
             for i in 0..4 {
-                p[i] = (a[i] * (1.0 - tx) + b[i] * tx) * (1.0 - ty) + (c[i] * (1.0 - tx) + d[i] * tx) * ty;
+                p[i] = (a[i] * (1.0 - tx) + b[i] * tx) * (1.0 - ty)
+                    + (c[i] * (1.0 - tx) + d[i] * tx) * ty;
             }
             let k = if p[3] > 0.0 { 255.0 / p[3] } else { 0.0 };
-            rgba.extend([(p[0] * k).round() as u8, (p[1] * k).round() as u8, (p[2] * k).round() as u8, p[3].round() as u8]);
+            rgba.extend([
+                (p[0] * k).round() as u8,
+                (p[1] * k).round() as u8,
+                (p[2] * k).round() as u8,
+                p[3].round() as u8,
+            ]);
         }
     }
     Image { w, h, rgba }
@@ -199,7 +243,12 @@ pub fn dump(key: u64, w: u32, h: u32, rgba: &[u8]) {
     if !dumping() {
         return;
     }
-    if !DONE.lock().unwrap().get_or_insert_with(HashSet::new).insert(key) {
+    if !DONE
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashSet::new)
+        .insert(key)
+    {
         return;
     }
     let dir = folder().join("dump");
@@ -213,7 +262,9 @@ pub fn dump(key: u64, w: u32, h: u32, rgba: &[u8]) {
         let mut e = png::Encoder::new(f, w, h);
         e.set_color(png::ColorType::Rgba);
         e.set_depth(png::BitDepth::Eight);
-        e.write_header().and_then(|mut w| w.write_image_data(rgba)).map_err(|e| e.to_string())
+        e.write_header()
+            .and_then(|mut w| w.write_image_data(rgba))
+            .map_err(|e| e.to_string())
     };
     if let Err(e) = write() {
         super::log!("hd: cannot write {}: {e}", path.display());

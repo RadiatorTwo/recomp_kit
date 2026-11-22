@@ -4,8 +4,8 @@
 //! Both .text sections are decoded from start to end and the instructions compared with the
 //! addresses in them masked out; equal runs give the code's moves, the addresses that matched
 //! instructions use give the data's. Only addresses are written, nothing of either EXE.
-use recomp::image::Image;
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction};
+use recomp::image::Image;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -38,7 +38,8 @@ fn decode(img: &Image) -> Vec<Ins> {
         let mut b = bytes[off..off + len].to_vec();
         let c = d.get_constant_offsets(&i);
         let mut addrs = Vec::new();
-        let mask = |o: usize, n: usize, b: &mut Vec<u8>| b[o..o + n].iter_mut().for_each(|x| *x = 0);
+        let mask =
+            |o: usize, n: usize, b: &mut Vec<u8>| b[o..o + n].iter_mut().for_each(|x| *x = 0);
         if c.has_displacement() && c.displacement_size() == 4 {
             let o = c.displacement_offset();
             let v = u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
@@ -50,7 +51,12 @@ fn decode(img: &Image) -> Vec<Ins> {
         if c.has_immediate() && c.immediate_size() == 4 {
             let o = c.immediate_offset();
             let v = u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-            let branch = matches!(i.flow_control(), FlowControl::UnconditionalBranch | FlowControl::ConditionalBranch | FlowControl::Call);
+            let branch = matches!(
+                i.flow_control(),
+                FlowControl::UnconditionalBranch
+                    | FlowControl::ConditionalBranch
+                    | FlowControl::Call
+            );
             if branch {
                 addrs.push(i.near_branch32());
                 mask(o, 4, &mut b);
@@ -58,7 +64,13 @@ fn decode(img: &Image) -> Vec<Ins> {
                 addrs.push(v);
                 mask(o, 4, &mut b);
             }
-        } else if c.has_immediate() && i.is_jcc_short_or_near() | i.is_jmp_short() | i.is_loop() | i.is_loopcc() | i.is_jcx_short() {
+        } else if c.has_immediate()
+            && i.is_jcc_short_or_near()
+                | i.is_jmp_short()
+                | i.is_loop()
+                | i.is_loopcc()
+                | i.is_jcx_short()
+        {
             addrs.push(i.near_branch32());
             mask(c.immediate_offset(), c.immediate_size(), &mut b);
         }
@@ -67,7 +79,12 @@ fn decode(img: &Image) -> Vec<Ins> {
         for x in b {
             h = (h ^ x as u64).wrapping_mul(0x100000001b3);
         }
-        out.push(Ins { ip: i.ip() as u32, len: len as u32, key: h, addrs });
+        out.push(Ins {
+            ip: i.ip() as u32,
+            len: len as u32,
+            key: h,
+            addrs,
+        });
     }
     out
 }
@@ -76,7 +93,12 @@ pub fn run(a: &[String]) {
     let us = Image::load(Path::new(&a[1])).unwrap();
     let ot = Image::load(Path::new(&a[2])).unwrap();
     let functions = std::fs::read_to_string(&a[3]).expect("functions.json");
-    let end = us.sections.iter().map(|s| s.va + s.vsize.max(s.rsize)).max().unwrap_or(us.base);
+    let end = us
+        .sections
+        .iter()
+        .map(|s| s.va + s.vsize.max(s.rsize))
+        .max()
+        .unwrap_or(us.base);
     let _ = RANGE.set((us.base, end + 0x10000));
     let (u, g) = (decode(&us), decode(&ot));
     eprintln!("{} / {} instructions", u.len(), g.len());
@@ -84,7 +106,9 @@ pub fn run(a: &[String]) {
     // align: equal runs, resynchronised on 6 equal instructions within a window
     const RUN: usize = 6;
     const WIN: usize = 400;
-    let same = |i: usize, j: usize| (0..RUN).all(|k| i + k < u.len() && j + k < g.len() && u[i + k].key == g[j + k].key);
+    let same = |i: usize, j: usize| {
+        (0..RUN).all(|k| i + k < u.len() && j + k < g.len() && u[i + k].key == g[j + k].key)
+    };
     let mut pairs = Vec::new(); // (us index, other index)
     let (mut i, mut j) = (0, 0);
     let mut skipped = Vec::new();
@@ -152,11 +176,20 @@ pub fn run(a: &[String]) {
             continue;
         }
         for (&p, &q) in x.addrs.iter().zip(&y.addrs) {
-            *data.entry(p).or_default().entry(q as i64 - p as i64).or_default() += 1;
+            *data
+                .entry(p)
+                .or_default()
+                .entry(q as i64 - p as i64)
+                .or_default() += 1;
         }
     }
     // addresses used by code: each one's most frequent delta (code targets included, as a check)
-    let text_end = us.sections.iter().find(|s| s.name == ".text").map(|s| s.va + s.vsize).unwrap();
+    let text_end = us
+        .sections
+        .iter()
+        .find(|s| s.name == ".text")
+        .map(|s| s.va + s.vsize)
+        .unwrap();
     let mut conflict = 0;
     let mut refs: BTreeMap<u32, i64> = BTreeMap::new();
     for (&p, ds) in &data {
@@ -191,13 +224,22 @@ pub fn run(a: &[String]) {
             refs.remove(&a);
         }
     }
-    eprintln!("{} matched, {} substituted, {} skips, {bad} mismatched operands, {conflict} conflicts", pairs.len(), subst.len(), skipped.len());
+    eprintln!(
+        "{} matched, {} substituted, {} skips, {bad} mismatched operands, {conflict} conflicts",
+        pairs.len(),
+        subst.len(),
+        skipped.len()
+    );
     for (ui, di, gi, dj) in &skipped {
         eprintln!("skip us {ui:x} +{di} / other {gi:x} +{dj}");
     }
 
     // functions of the US version the other one has not: their start matched nothing
-    let mut runs: BTreeMap<u32, Option<i64>> = code.iter().chain(&refs).map(|(&a, &d)| (a, Some(d))).collect();
+    let mut runs: BTreeMap<u32, Option<i64>> = code
+        .iter()
+        .chain(&refs)
+        .map(|(&a, &d)| (a, Some(d)))
+        .collect();
     #[derive(serde::Deserialize)]
     struct F {
         addr: String,
@@ -215,10 +257,12 @@ pub fn run(a: &[String]) {
         let ops = |img: &Image, at: u32| {
             let b = img.read(at, 32).unwrap_or_default();
             let mut dec = Decoder::with_ip(32, &b, at as u64, DecoderOptions::NONE);
-            (0..3).map(|_| {
-                let i = dec.decode();
-                (i.mnemonic(), i.len())
-            }).collect::<Vec<_>>()
+            (0..3)
+                .map(|_| {
+                    let i = dec.decode();
+                    (i.mnemonic(), i.len())
+                })
+                .collect::<Vec<_>>()
         };
         if ops(&us, a) == ops(&ot, (a as i64 + d) as u32) {
             continue;

@@ -13,7 +13,6 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-
 /// our pad buttons (`dinput`)
 const A: u32 = 1 << 3;
 const B: u32 = 1 << 2;
@@ -78,8 +77,15 @@ pub type Came = Option<(usize, (i32, i32))>;
 /// sideways distance counting double. The opposite of the
 /// way the pad came leads back. From outside every rectangle: the one nearest the point.
 /// (Dialogs use it too.)
-pub fn nearest(rects: &[Rect], cur: Option<usize>, came: Came, from: (i32, i32), d: (i32, i32)) -> Option<usize> {
-    let inside = |r: &Rect| from.0 >= r.0 && from.0 < r.0 + r.2 && from.1 >= r.1 && from.1 < r.1 + r.3;
+pub fn nearest(
+    rects: &[Rect],
+    cur: Option<usize>,
+    came: Came,
+    from: (i32, i32),
+    d: (i32, i32),
+) -> Option<usize> {
+    let inside =
+        |r: &Rect| from.0 >= r.0 && from.0 < r.0 + r.2 && from.1 >= r.1 && from.1 < r.1 + r.3;
     let Some(cur) = cur.or_else(|| rects.iter().position(inside)) else {
         return (0..rects.len()).min_by_key(|&k| {
             let c = centre(&rects[k]);
@@ -94,7 +100,13 @@ pub fn nearest(rects: &[Rect], cur: Option<usize>, came: Came, from: (i32, i32),
     let r = rects[cur];
     let rc = centre(&r);
     // a rectangle's extent along an axis (0 x, 1 y)
-    let span = |q: &Rect, axis: usize| if axis == 0 { (q.0, q.0 + q.2) } else { (q.1, q.1 + q.3) };
+    let span = |q: &Rect, axis: usize| {
+        if axis == 0 {
+            (q.0, q.0 + q.2)
+        } else {
+            (q.1, q.1 + q.3)
+        }
+    };
     let (along, across) = if d.0 != 0 { (0, 1) } else { (1, 0) };
     let sign = d.0 + d.1;
     (0..rects.len())
@@ -213,7 +225,11 @@ pub fn step(input: &mut VecDeque<Input>) -> Step {
             overlay: None,
         };
     }
-    let menu = if video { None } else { crate::game::game().menu() };
+    let menu = if video {
+        None
+    } else {
+        crate::game::game().menu()
+    };
     let items = menu.as_ref().map_or(Vec::new(), |m| m.items.clone());
     // the menu changed under the frame: no focus
     if s.focus.is_some_and(|f| !items.contains(&f)) {
@@ -221,14 +237,21 @@ pub fn step(input: &mut VecDeque<Input>) -> Step {
     }
     if !items.is_empty() {
         if let Some(d) = repeat(&mut s, direction(buttons, stick), now) {
-            let from = s.focus.map_or(menu.as_ref().map_or((0, 0), |m| m.mouse), |f| centre(&f));
+            let from = s
+                .focus
+                .map_or(menu.as_ref().map_or((0, 0), |m| m.mouse), |f| centre(&f));
             let cur = s.focus.and_then(|f| items.iter().position(|&r| r == f));
-            let came = s.came.and_then(|(r, way)| Some((items.iter().position(|&q| q == r)?, way)));
+            let came = s
+                .came
+                .and_then(|(r, way)| Some((items.iter().position(|&q| q == r)?, way)));
             if let Some(r) = nearest(&items, cur, came, from, d).map(|k| items[k]) {
                 s.came = s.focus.map(|f| (f, d));
                 let (x, y) = centre(&r);
                 if trace() {
-                    log!("menu pad: {d:?} from {from:?} to {x},{y} ({} items)", items.len());
+                    log!(
+                        "menu pad: {d:?} from {from:?} to {x},{y} ({} items)",
+                        items.len()
+                    );
                 }
                 input.push_back(Input::Move(x, y));
                 s.focus = Some(r);

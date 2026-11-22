@@ -66,7 +66,10 @@ fn tracks() -> Option<&'static [Track]> {
     static T: OnceLock<Option<Vec<Track>>> = OnceLock::new();
     T.get_or_init(|| {
         let dir = super::game_dir();
-        let cue = [Some(dir), dir.parent()].into_iter().flatten().find_map(find_cue)?;
+        let cue = [Some(dir), dir.parent()]
+            .into_iter()
+            .flatten()
+            .find_map(find_cue)?;
         let t = parse_cue(&cue);
         log!("CD audio: {} ({} tracks)", cue.display(), t.len());
         (!t.is_empty()).then_some(t)
@@ -75,16 +78,25 @@ fn tracks() -> Option<&'static [Track]> {
 }
 
 fn find_cue(dir: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")))
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")))
 }
 
 /// Read a cue sheet: FILE "name" BINARY, TRACK nn AUDIO|MODE1/2352, INDEX 01 mm:ss:ff. A track
 /// ends where the next one in the same file begins (its INDEX 00 or 01), or at the file's end.
 fn parse_cue(cue: &Path) -> Vec<Track> {
-    let Ok(text) = std::fs::read_to_string(cue) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(cue) else {
+        return Vec::new();
+    };
     let dir = cue.parent().unwrap_or(Path::new("."));
     let msf = |s: &str| -> Option<u64> {
-        let v: Vec<u64> = s.split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+        let v: Vec<u64> = s
+            .split(':')
+            .map(|x| x.parse().ok())
+            .collect::<Option<_>>()?;
         (v.len() == 3).then(|| (v[0] * 60 + v[1]) * FPS as u64 + v[2])
     };
     // (file, audio, first sector of INDEX 00 or 01, sector of INDEX 01)
@@ -92,10 +104,18 @@ fn parse_cue(cue: &Path) -> Vec<Track> {
     let mut file = PathBuf::new();
     for line in text.lines() {
         let line = line.trim();
-        let word = line.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+        let word = line
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
         match word.as_str() {
             "FILE" => {
-                let name = line.split('"').nth(1).map(str::to_string).or_else(|| line.split_whitespace().nth(1).map(str::to_string));
+                let name = line
+                    .split('"')
+                    .nth(1)
+                    .map(str::to_string)
+                    .or_else(|| line.split_whitespace().nth(1).map(str::to_string));
                 file = dir.join(name.unwrap_or_default());
             }
             "TRACK" => {
@@ -104,7 +124,9 @@ fn parse_cue(cue: &Path) -> Vec<Track> {
             }
             "INDEX" => {
                 let mut it = line.split_whitespace().skip(1);
-                let (Some(n), Some(at)) = (it.next(), it.next().and_then(msf)) else { continue };
+                let (Some(n), Some(at)) = (it.next(), it.next().and_then(msf)) else {
+                    continue;
+                };
                 if let Some(t) = raw.last_mut() {
                     if t.2.is_none() {
                         t.2 = Some(at);
@@ -124,7 +146,12 @@ fn parse_cue(cue: &Path) -> Vec<Track> {
             Some((f, _, Some(next), _)) if f == file => *next,
             _ => std::fs::metadata(file).map_or(start, |m| m.len() / SECTOR),
         };
-        out.push(Track { file: file.clone(), start: start * SECTOR, sectors: end.saturating_sub(start) as u32, audio: *audio });
+        out.push(Track {
+            file: file.clone(),
+            start: start * SECTOR,
+            sectors: end.saturating_sub(start) as u32,
+            audio: *audio,
+        });
     }
     out
 }
@@ -139,7 +166,12 @@ struct State {
     notify: Option<u32>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { open: false, format: FORMAT_MSF, from: (1, 0), notify: None });
+static STATE: Mutex<State> = Mutex::new(State {
+    open: false,
+    format: FORMAT_MSF,
+    from: (1, 0),
+    notify: None,
+});
 
 const MCI_NOTIFY: u32 = 1;
 const MM_MCINOTIFY: u32 = 0x3b9;
@@ -179,7 +211,11 @@ fn position(format: u32, v: u32, tracks: &[Track]) -> (u32, u32) {
         (b(0).max(1), (b(1) * 60 + b(2)) * FPS + b(3))
     } else {
         // MSF or milliseconds on the whole disc: find the track
-        let mut at = if format == FORMAT_MSF { (b(0) * 60 + b(1)) * FPS + b(2) } else { v * FPS / 1000 };
+        let mut at = if format == FORMAT_MSF {
+            (b(0) * 60 + b(1)) * FPS + b(2)
+        } else {
+            v * FPS / 1000
+        };
         for (k, t) in tracks.iter().enumerate() {
             if at < t.sectors {
                 return (k as u32 + 1, at);
@@ -196,7 +232,11 @@ fn read(tracks: &[Track], from: (u32, u32), to: (u32, u32)) -> Vec<i16> {
     for t in from.0..=to.0.min(tracks.len() as u32) {
         let tr = &tracks[t as usize - 1];
         let first = if t == from.0 { from.1 } else { 0 };
-        let last = if t == to.0 { to.1.min(tr.sectors) } else { tr.sectors };
+        let last = if t == to.0 {
+            to.1.min(tr.sectors)
+        } else {
+            tr.sectors
+        };
         if !tr.audio || first >= last {
             continue;
         }
@@ -210,7 +250,10 @@ fn read(tracks: &[Track], from: (u32, u32), to: (u32, u32)) -> Vec<i16> {
             log!("CD audio: track {t}: {}: {e}", tr.file.display());
             continue;
         }
-        out.extend(buf.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+        out.extend(
+            buf.chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]])),
+        );
     }
     out
 }
@@ -253,13 +296,31 @@ pub fn mci_send_command(c: &mut Cpu) -> u32 {
                 let played = super::dsound::cd_state().map_or(0, |(pos, _, _)| pos as u32 / 588);
                 (st.from.0, st.from.1 + played)
             };
-            let to = if flags & MCI_TO != 0 { position(st.format, m.rd32(p + 8), tracks) } else { (tracks.len() as u32, u32::MAX) };
+            let to = if flags & MCI_TO != 0 {
+                position(st.format, m.rd32(p + 8), tracks)
+            } else {
+                (tracks.len() as u32, u32::MAX)
+            };
             if from.0 == 0 || from.0 as usize > tracks.len() {
                 return MCIERR_OUTOFRANGE;
             }
-            log!("CD audio: play track {} at {} to track {} at {} ({} s)", from.0, from.1, to.0, to.1, super::kernel32::ms_since_start() / 1000);
+            log!(
+                "CD audio: play track {} at {} to track {} at {} ({} s)",
+                from.0,
+                from.1,
+                to.0,
+                to.1,
+                super::kernel32::ms_since_start() / 1000
+            );
             st.from = from;
-            notify(&mut st, if flags & MCI_NOTIFY != 0 { MCI_NOTIFY_SUPERSEDED } else { MCI_NOTIFY_ABORTED });
+            notify(
+                &mut st,
+                if flags & MCI_NOTIFY != 0 {
+                    MCI_NOTIFY_SUPERSEDED
+                } else {
+                    MCI_NOTIFY_ABORTED
+                },
+            );
             super::dsound::cd_play(Arc::new(read(tracks, from, to)));
             if flags & MCI_NOTIFY != 0 {
                 st.notify = Some(m.rd32(p));
@@ -274,7 +335,9 @@ pub fn mci_send_command(c: &mut Cpu) -> u32 {
         MCI_RESUME => super::dsound::cd_pause(false),
         MCI_STATUS if flags & MCI_STATUS_ITEM != 0 => {
             let track = m.rd32(p + 12);
-            let tr = (flags & MCI_TRACK != 0).then(|| tracks.get((track as usize).wrapping_sub(1))).flatten();
+            let tr = (flags & MCI_TRACK != 0)
+                .then(|| tracks.get((track as usize).wrapping_sub(1)))
+                .flatten();
             let playing = super::dsound::cd_state();
             let v = match m.rd32(p + 8) {
                 // length: of a track, or of the disc

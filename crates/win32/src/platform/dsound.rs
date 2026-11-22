@@ -6,7 +6,10 @@
 //! an audio device a timer thread advances them instead. A stream of host samples (`stream_*`)
 //! carries the videos' sound, and `cd_*` the CD's music tracks (`cdaudio.rs`).
 
-use super::{Import, ResId, alloc, arg, com_new, cstr, free, guest_call, host_path, log, mem, new_cstr, resource};
+use super::{
+    Import, ResId, alloc, arg, com_new, cstr, free, guest_call, host_path, log, mem, new_cstr,
+    resource,
+};
 use recomp::rt::Cpu;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -32,7 +35,11 @@ impl Format {
 
     fn read(p: u32) -> Format {
         let m = mem();
-        Format { channels: (m.rd16(p + 2) as u32).max(1), rate: m.rd32(p + 4).max(1), bits: if m.rd16(p + 14) == 8 { 8 } else { 16 } }
+        Format {
+            channels: (m.rd16(p + 2) as u32).max(1),
+            rate: m.rd32(p + 4).max(1),
+            bits: if m.rd16(p + 14) == 8 { 8 } else { 16 },
+        }
     }
 
     fn write(&self, p: u32) {
@@ -80,11 +87,22 @@ impl Voice {
         let play = (self.pos as u32).min(self.frames().saturating_sub(1)) * block;
         // the write cursor is where data must already be: a little ahead of the play cursor
         let ahead = (self.rate() as u64 * 20 / 1000).max(out_rate as u64 / 100) as u32 * block;
-        (play, if self.playing { (play + ahead) % self.bytes } else { play })
+        (
+            play,
+            if self.playing {
+                (play + ahead) % self.bytes
+            } else {
+                play
+            },
+        )
     }
 
     fn rate(&self) -> u32 {
-        if self.freq == 0 { self.fmt.rate } else { self.freq }
+        if self.freq == 0 {
+            self.fmt.rate
+        } else {
+            self.freq
+        }
     }
 
     /// The sample of channel `ch` at frame `i`, -1..1.
@@ -92,7 +110,11 @@ impl Voice {
         let ch = ch.min(self.fmt.channels - 1);
         let a = self.data + i * self.fmt.block() + ch * self.fmt.bits / 8;
         let m = mem();
-        if self.fmt.bits == 8 { (m.rd8(a) as f32 - 128.0) / 128.0 } else { m.rd16(a) as i16 as f32 / 32768.0 }
+        if self.fmt.bits == 8 {
+            (m.rd8(a) as f32 - 128.0) / 128.0
+        } else {
+            m.rd16(a) as i16 as f32 / 32768.0
+        }
     }
 
     /// Mix into interleaved stereo frames at `out_rate`, advancing the position.
@@ -112,7 +134,13 @@ impl Voice {
         for o in out.iter_mut() {
             let i = self.pos as u32;
             let frac = (self.pos - i as f64) as f32;
-            let next = if i + 1 < frames { i + 1 } else if self.looping { 0 } else { i };
+            let next = if i + 1 < frames {
+                i + 1
+            } else if self.looping {
+                0
+            } else {
+                i
+            };
             for (ch, g) in [(0, gl), (1, gr)] {
                 let (a, b) = (self.sample(i, ch), self.sample(next, ch));
                 o[ch as usize] += (a + (b - a) * frac) * g;
@@ -146,8 +174,16 @@ struct Mixer {
     started: bool,
 }
 
-static MIX: Mutex<Mixer> =
-    Mutex::new(Mixer { voices: BTreeMap::new(), data_refs: BTreeMap::new(), wave: None, stream: None, cd: None, cd_gain: 1.0, out_rate: 44100, started: false });
+static MIX: Mutex<Mixer> = Mutex::new(Mixer {
+    voices: BTreeMap::new(),
+    data_refs: BTreeMap::new(),
+    wave: None,
+    stream: None,
+    cd: None,
+    cd_gain: 1.0,
+    out_rate: 44100,
+    started: false,
+});
 
 /// CD audio being played: 44.1 kHz 16-bit stereo, interleaved.
 struct Cd {
@@ -186,7 +222,11 @@ impl Cd {
 
 /// Play CD audio samples (replaces what plays).
 pub fn cd_play(samples: std::sync::Arc<Vec<i16>>) {
-    mixer().cd = Some(Cd { samples, pos: 0.0, paused: false });
+    mixer().cd = Some(Cd {
+        samples,
+        pos: 0.0,
+        paused: false,
+    });
 }
 
 pub fn cd_pause(paused: bool) {
@@ -207,7 +247,10 @@ pub fn cd_stop() {
 /// The CD audio's position and length in frames, and whether it is paused; None when nothing
 /// plays.
 pub fn cd_state() -> Option<(usize, usize, bool)> {
-    mixer().cd.as_ref().map(|c| ((c.pos as usize).min(c.frames()), c.frames(), c.paused))
+    mixer()
+        .cd
+        .as_ref()
+        .map(|c| ((c.pos as usize).min(c.frames()), c.frames(), c.paused))
 }
 
 /// Samples the host gives (a video's sound), played once.
@@ -229,7 +272,9 @@ impl Stream {
         }
         let step = self.rate as f64 / out_rate as f64;
         for o in out.iter_mut() {
-            let (Some(a), b) = (self.queue.front().copied(), self.queue.get(1).copied()) else { break };
+            let (Some(a), b) = (self.queue.front().copied(), self.queue.get(1).copied()) else {
+                break;
+            };
             let b = b.unwrap_or(a);
             let f = self.frac as f32;
             o[0] += (a[0] + (b[0] - a[0]) * f) * self.gain;
@@ -246,7 +291,14 @@ impl Stream {
 
 /// Start a stream of host samples at `rate` (replaces one playing).
 pub fn stream_start(rate: u32) {
-    mixer().stream = Some(Stream { queue: VecDeque::new(), rate: rate.max(1), frac: 0.0, played: 0, gain: 1.0, paused: false });
+    mixer().stream = Some(Stream {
+        queue: VecDeque::new(),
+        rate: rate.max(1),
+        frac: 0.0,
+        played: 0,
+        gain: 1.0,
+        paused: false,
+    });
 }
 
 /// Queue samples for the stream.
@@ -258,7 +310,10 @@ pub fn stream_push(frames: &[[f32; 2]]) {
 
 /// Frames queued and not played yet, and frames played since the start.
 pub fn stream_state() -> (usize, u64) {
-    mixer().stream.as_ref().map_or((0, 0), |s| (s.queue.len(), s.played))
+    mixer()
+        .stream
+        .as_ref()
+        .map_or((0, 0), |s| (s.queue.len(), s.played))
 }
 
 /// The stream's volume in hundredths of a dB (0 full, -10000 silent).
@@ -320,7 +375,10 @@ impl Mixer {
 /// Open the audio device and mix into it; without one, advance the positions in real time.
 fn start_output() {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    fn open<T: cpal::SizedSample + cpal::FromSample<f32>>(dev: &cpal::Device, cfg: cpal::StreamConfig) -> Option<cpal::Stream> {
+    fn open<T: cpal::SizedSample + cpal::FromSample<f32>>(
+        dev: &cpal::Device,
+        cfg: cpal::StreamConfig,
+    ) -> Option<cpal::Stream> {
         let ch = cfg.channels as usize;
         let mut buf: Vec<[f32; 2]> = Vec::new();
         let stream = dev
@@ -412,7 +470,15 @@ fn ds_create_sound_buffer(c: &mut Cpu) -> u32 {
     let m = mem();
     let (flags, bytes, wfx) = (m.rd32(desc + 4), m.rd32(desc + 8), m.rd32(desc + 16));
     let primary = flags & DSBCAPS_PRIMARYBUFFER != 0;
-    let fmt = if wfx != 0 { Format::read(wfx) } else { Format { rate: 22050, channels: 2, bits: 16 } };
+    let fmt = if wfx != 0 {
+        Format::read(wfx)
+    } else {
+        Format {
+            rate: 22050,
+            channels: 2,
+            bits: 16,
+        }
+    };
     if !primary && (bytes == 0 || wfx == 0) {
         return DSERR_INVALIDPARAM;
     }
@@ -427,7 +493,19 @@ fn ds_create_sound_buffer(c: &mut Cpu) -> u32 {
     }
     mx.voices.insert(
         obj,
-        Voice { data, bytes, fmt, freq: 0, pos: 0.0, playing: false, looping: false, volume: 0, pan: 0, primary, refs: 1 },
+        Voice {
+            data,
+            bytes,
+            fmt,
+            freq: 0,
+            pos: 0.0,
+            playing: false,
+            looping: false,
+            volume: 0,
+            pan: 0,
+            primary,
+            refs: 1,
+        },
     );
     m.wr32(out, obj);
     OK
@@ -436,10 +514,20 @@ fn ds_create_sound_buffer(c: &mut Cpu) -> u32 {
 fn ds_duplicate_sound_buffer(c: &mut Cpu) -> u32 {
     let (orig, out) = (arg(c, 1), arg(c, 2));
     let mut mx = mixer();
-    let Some(v) = mx.voices.get(&orig).cloned() else { return DSERR_INVALIDPARAM };
+    let Some(v) = mx.voices.get(&orig).cloned() else {
+        return DSERR_INVALIDPARAM;
+    };
     let obj = com_new(BUFFER, 0);
     *mx.data_refs.entry(v.data).or_default() += 1;
-    mx.voices.insert(obj, Voice { pos: 0.0, playing: false, refs: 1, ..v });
+    mx.voices.insert(
+        obj,
+        Voice {
+            pos: 0.0,
+            playing: false,
+            refs: 1,
+            ..v
+        },
+    );
     mem().wr32(out, obj);
     OK
 }
@@ -466,7 +554,11 @@ static DSOUND: &[Import] = &[
     ("IDirectSound::Release", 1, ok),
     ("IDirectSound::CreateSoundBuffer", 4, ds_create_sound_buffer),
     ("IDirectSound::GetCaps", 2, ds_get_caps),
-    ("IDirectSound::DuplicateSoundBuffer", 3, ds_duplicate_sound_buffer),
+    (
+        "IDirectSound::DuplicateSoundBuffer",
+        3,
+        ds_duplicate_sound_buffer,
+    ),
     ("IDirectSound::SetCooperativeLevel", 3, ok),
     ("IDirectSound::Compact", 1, ok),
     ("IDirectSound::GetSpeakerConfig", 2, ds_get_speaker_config),
@@ -496,7 +588,9 @@ fn b_add_ref(c: &mut Cpu) -> u32 {
 fn b_release(c: &mut Cpu) -> u32 {
     let this = arg(c, 0);
     let mut mx = mixer();
-    let Some(v) = mx.voices.get_mut(&this) else { return 0 };
+    let Some(v) = mx.voices.get_mut(&this) else {
+        return 0;
+    };
     v.refs = v.refs.saturating_sub(1);
     let r = v.refs;
     if r == 0 {
@@ -516,7 +610,14 @@ fn b_get_caps(c: &mut Cpu) -> u32 {
     let p = arg(c, 1);
     with_voice(c, |v, _| {
         let m = mem();
-        m.wr32(p + 4, if v.primary { DSBCAPS_PRIMARYBUFFER } else { 0xe0 });
+        m.wr32(
+            p + 4,
+            if v.primary {
+                DSBCAPS_PRIMARYBUFFER
+            } else {
+                0xe0
+            },
+        );
         m.wr32(p + 8, v.bytes);
         m.wr32(p + 12, 0);
         m.wr32(p + 16, 0);
@@ -578,19 +679,42 @@ fn b_get_frequency(c: &mut Cpu) -> u32 {
 fn b_get_status(c: &mut Cpu) -> u32 {
     let p = arg(c, 1);
     with_voice(c, |v, _| {
-        mem().wr32(p, if v.playing { 1 | if v.looping { 4 } else { 0 } } else { 0 });
+        mem().wr32(
+            p,
+            if v.playing {
+                1 | if v.looping { 4 } else { 0 }
+            } else {
+                0
+            },
+        );
         OK
     })
 }
 
 fn b_lock(c: &mut Cpu) -> u32 {
-    let (off, bytes, p1, n1, p2, n2, flags) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6), arg(c, 7));
+    let (off, bytes, p1, n1, p2, n2, flags) = (
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 6),
+        arg(c, 7),
+    );
     with_voice(c, |v, rate| {
         if v.bytes == 0 {
             return DSERR_INVALIDPARAM;
         }
-        let off = if flags & 1 != 0 { v.cursors(rate).1 } else { off % v.bytes };
-        let bytes = if flags & 2 != 0 { v.bytes } else { bytes.min(v.bytes) };
+        let off = if flags & 1 != 0 {
+            v.cursors(rate).1
+        } else {
+            off % v.bytes
+        };
+        let bytes = if flags & 2 != 0 {
+            v.bytes
+        } else {
+            bytes.min(v.bytes)
+        };
         let first = bytes.min(v.bytes - off);
         let m = mem();
         m.wr32(p1, v.data + off);
@@ -678,7 +802,11 @@ static BUFFER: &[Import] = &[
     ("IDirectSoundBuffer::AddRef", 1, b_add_ref),
     ("IDirectSoundBuffer::Release", 1, b_release),
     ("IDirectSoundBuffer::GetCaps", 2, b_get_caps),
-    ("IDirectSoundBuffer::GetCurrentPosition", 3, b_get_current_position),
+    (
+        "IDirectSoundBuffer::GetCurrentPosition",
+        3,
+        b_get_current_position,
+    ),
     ("IDirectSoundBuffer::GetFormat", 4, b_get_format),
     ("IDirectSoundBuffer::GetVolume", 2, b_get_volume),
     ("IDirectSoundBuffer::GetPan", 2, b_get_pan),
@@ -687,7 +815,11 @@ static BUFFER: &[Import] = &[
     ("IDirectSoundBuffer::Initialize", 3, ok),
     ("IDirectSoundBuffer::Lock", 8, b_lock),
     ("IDirectSoundBuffer::Play", 4, b_play),
-    ("IDirectSoundBuffer::SetCurrentPosition", 2, b_set_current_position),
+    (
+        "IDirectSoundBuffer::SetCurrentPosition",
+        2,
+        b_set_current_position,
+    ),
     ("IDirectSoundBuffer::SetFormat", 2, b_set_format),
     ("IDirectSoundBuffer::SetVolume", 2, b_set_volume),
     ("IDirectSoundBuffer::SetPan", 2, b_set_pan),
@@ -717,7 +849,19 @@ fn parse_wave(p: u32, n: u32) -> Option<Voice> {
         at += 8 + ((len + 1) & !1);
     }
     let (fmt, (data, bytes)) = (fmt?, data?);
-    Some(Voice { data, bytes, fmt, freq: 0, pos: 0.0, playing: true, looping: false, volume: 0, pan: 0, primary: false, refs: 1 })
+    Some(Voice {
+        data,
+        bytes,
+        fmt,
+        freq: 0,
+        pos: 0.0,
+        playing: true,
+        looping: false,
+        volume: 0,
+        pan: 0,
+        primary: false,
+        refs: 1,
+    })
 }
 
 /// PlaySoundA(sound, module, flags): a WAVE resource, a file or a sound in memory.

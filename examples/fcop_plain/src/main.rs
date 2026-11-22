@@ -14,8 +14,11 @@ use recomp::smc::{PatchTable, SmcSpec};
 use recomp::ver::{Us, Version};
 use win32::{Game, Identity};
 
-static VERSIONS: [Version; 1] =
-    [Version { sha256: "2dcdd1e78b99947d125712e1a159548e6f5f3929020c29af9e156314ed1c7e5e", name: "US", map: None }];
+static VERSIONS: [Version; 1] = [Version {
+    sha256: "2dcdd1e78b99947d125712e1a159548e6f5f3929020c29af9e156314ed1c7e5e",
+    name: "US",
+    map: None,
+}];
 
 static ID: Identity = Identity {
     title: "Future Cop: L.A.P.D.",
@@ -45,14 +48,22 @@ impl Game for FutureCop {
     }
 
     fn functions(&self, _img: &recomp::image::Image) -> Vec<(u32, u32, String)> {
-        let path = std::env::var("FCOP_FUNCTIONS").unwrap_or("../future_rust_cop/data/functions.json".into());
-        let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e} (set FCOP_FUNCTIONS)"));
+        let path = std::env::var("FCOP_FUNCTIONS")
+            .unwrap_or("../future_rust_cop/data/functions.json".into());
+        let json = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{path}: {e} (set FCOP_FUNCTIONS)"));
         recomp::image::load_functions(&json)
     }
 
     fn smc(&self) -> SmcSpec {
         // the software renderer rewrites code for the 555/565 pixel formats from this table
-        SmcSpec { patch_tables: vec![PatchTable { at: Us(0x48ea20).at(), variants: 2 }], imm_fields: Vec::new() }
+        SmcSpec {
+            patch_tables: vec![PatchTable {
+                at: Us(0x48ea20).at(),
+                variants: 2,
+            }],
+            imm_fields: Vec::new(),
+        }
     }
 }
 

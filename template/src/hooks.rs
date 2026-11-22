@@ -7,9 +7,9 @@
 //! Addresses are the reference version's (`Us(0x...)`), `.at()` gives their place in the
 //! version that runs. Write what you learn about each function into data/symbols.txt.
 
-use recomp::rt::{Cpu, Hook};
 #[allow(unused_imports)]
 use recomp::rt::call_original;
+use recomp::rt::{Cpu, Hook};
 #[allow(unused_imports)]
 use recomp::ver::Us;
 

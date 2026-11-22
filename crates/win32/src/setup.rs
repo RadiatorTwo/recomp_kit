@@ -37,7 +37,10 @@ fn kept() -> Vec<&'static str> {
 
 /// Our program's file name, for messages.
 fn program() -> String {
-    std::env::current_exe().ok().and_then(|p| Some(p.file_name()?.to_string_lossy().into_owned())).unwrap_or("this program".into())
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| Some(p.file_name()?.to_string_lossy().into_owned()))
+        .unwrap_or("this program".into())
 }
 /// our savestate (`platform::savestate`)
 pub const SAVESTATE: &str = "savestate.bin";
@@ -55,7 +58,10 @@ pub fn root() -> PathBuf {
 
 /// The folder our program is in.
 fn home() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
 }
 
 /// Set up the game files in `root` and return the EXE's path, or what the player must do.
@@ -70,13 +76,16 @@ pub fn game_exe(root: &Path) -> Result<PathBuf, String> {
     if exe.is_none() {
         // a CD image in game_files (it goes to the recycle bin afterwards), or next to our program
         // (it stays there)
-        if let Some(image) = find_image(root, 6).or_else(|| home().and_then(|h| find_image(&h, 0))) {
+        if let Some(image) = find_image(root, 6).or_else(|| home().and_then(|h| find_image(&h, 0)))
+        {
             from_image(&image, root)?;
             exe = find(&game, exe_name, 0);
         }
     }
     let Some(exe) = exe else {
-        return Err(format!("The game files of {title} were not found.\n\n{copy_in}"));
+        return Err(format!(
+            "The game files of {title} were not found.\n\n{copy_in}"
+        ));
     };
     check(&exe)?;
     let from = exe.parent().unwrap().to_path_buf();
@@ -88,14 +97,23 @@ pub fn game_exe(root: &Path) -> Result<PathBuf, String> {
     }
     for need in id().required {
         if named(&game, need).is_none() {
-            return Err(format!("{need} is missing next to {exe_name} in {}.\n\n{copy_in}", from.display()));
+            return Err(format!(
+                "{need} is missing next to {exe_name} in {}.\n\n{copy_in}",
+                from.display()
+            ));
         }
     }
     let video = root.join(VIDEO);
     if !video.is_dir() {
-        match id().video_marker.and_then(|m| find(root, m, 6)).and_then(|p| p.parent().map(Path::to_path_buf)) {
+        match id()
+            .video_marker
+            .and_then(|m| find(root, m, 6))
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+        {
             Some(v) if !same(&v, &game) => move_into(&v, &video)?,
-            _ if id().video_marker.is_some() => eprintln!("setup: the game's videos were not found; the game runs without them"),
+            _ if id().video_marker.is_some() => {
+                eprintln!("setup: the game's videos were not found; the game runs without them")
+            }
             _ => {}
         }
     }
@@ -112,17 +130,25 @@ fn find_image(dir: &Path, depth: u32) -> Option<PathBuf> {
     let mut entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     let image = |p: &Path| {
-        let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+        let ext = p
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase());
         matches!(ext.as_deref(), Some("iso" | "bin" | "img")) && Iso::open(p).is_some()
     };
-    let mut files = entries.iter().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).map(|e| e.path());
+    let mut files = entries
+        .iter()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path());
     if let Some(p) = files.find(|p| image(p)) {
         return Some(p);
     }
     if depth == 0 {
         return None;
     }
-    entries.iter().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).find_map(|e| find_image(&e.path(), depth - 1))
+    entries
+        .iter()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .find_map(|e| find_image(&e.path(), depth - 1))
 }
 
 /// Take what the game needs from a CD image into `root`'s layout: the videos, the game folder's
@@ -134,27 +160,48 @@ fn from_image(path: &Path, root: &Path) -> Result<(), String> {
     let top = iso.root();
     let (title, exe_name) = (id().title, id().exe);
     let Some((dir, exe)) = iso.find(&top, exe_name, 6) else {
-        return Err(format!("{} holds no {exe_name}: is it the {title} CD?", path.display()));
+        return Err(format!(
+            "{} holds no {exe_name}: is it the {title} CD?",
+            path.display()
+        ));
     };
     let mut bytes = Vec::new();
     iso.read(&exe, &mut bytes).map_err(fail)?;
     // what is copied, for the progress shown
-    let video_dir = id().video_marker.and_then(|m| iso.find(&top, m, 6)).map(|(v, _)| v);
+    let video_dir = id()
+        .video_marker
+        .and_then(|m| iso.find(&top, m, 6))
+        .map(|(v, _)| v);
     let mut total = exe.size as u64;
-    let parts: Vec<_> = id().required.iter().map(|n| iso.get(&dir, n)).chain([video_dir.clone()]).collect();
+    let parts: Vec<_> = id()
+        .required
+        .iter()
+        .map(|n| iso.get(&dir, n))
+        .chain([video_dir.clone()])
+        .collect();
     for e in parts.into_iter().flatten() {
-        total += if e.dir { iso.size(&e).map_err(fail)? } else { e.size as u64 };
+        total += if e.dir {
+            iso.size(&e).map_err(fail)?
+        } else {
+            e.size as u64
+        };
     }
     let total = total.max(1);
     iso.copied = 0;
     iso.progress = Some(Box::new(move |n| {
-        crate::splash::status(&format!("Copying the game from the CD image... {}%", n * 100 / total))
+        crate::splash::status(&format!(
+            "Copying the game from the CD image... {}%",
+            n * 100 / total
+        ))
     }));
     let hash = hex(&Sha256::digest(&bytes));
     if recomp::ver::known(id().versions, &hash).is_none() {
         return Err(unknown(&format!("{exe_name} on {}", path.display()), &hash));
     }
-    eprintln!("setup: taking the game from the CD image {}", path.display());
+    eprintln!(
+        "setup: taking the game from the CD image {}",
+        path.display()
+    );
     let game = root.join(folder());
     std::fs::create_dir_all(&game).map_err(fail)?;
     let video = root.join(VIDEO);
@@ -167,10 +214,16 @@ fn from_image(path: &Path, root: &Path) -> Result<(), String> {
         match iso.get(&dir, name) {
             Some(e) if e.dir => iso.extract(&e, &game.join(name)).map_err(fail)?,
             Some(e) => {
-                let mut out = std::io::BufWriter::new(std::fs::File::create(game.join(name)).map_err(fail)?);
+                let mut out =
+                    std::io::BufWriter::new(std::fs::File::create(game.join(name)).map_err(fail)?);
                 iso.read(&e, &mut out).map_err(fail)?;
             }
-            None => return Err(format!("{name} is missing next to {exe_name} on {}.", path.display())),
+            None => {
+                return Err(format!(
+                    "{name} is missing next to {exe_name} on {}.",
+                    path.display()
+                ));
+            }
         }
     }
     std::fs::write(game.join(exe_name), &bytes).map_err(fail)
@@ -181,7 +234,11 @@ fn hex(d: &[u8]) -> String {
 }
 
 fn unknown(what: &str, hash: &str) -> String {
-    let known: Vec<String> = id().versions.iter().map(|v| format!("{}: {}", v.name, v.sha256)).collect();
+    let known: Vec<String> = id()
+        .versions
+        .iter()
+        .map(|v| format!("{}: {}", v.name, v.sha256))
+        .collect();
     format!(
         "{what} is a version of {} this port does not know (the versions with these SHA-256 are \
          supported:\n{}).\n\nIts SHA-256: {hash}",
@@ -194,12 +251,17 @@ fn unknown(what: &str, hash: &str) -> String {
 pub fn check(exe: &Path) -> Result<&'static recomp::ver::Version, String> {
     let bytes = std::fs::read(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
     let hash = hex(&Sha256::digest(&bytes));
-    recomp::ver::known(id().versions, &hash).ok_or_else(|| unknown(&exe.display().to_string(), &hash))
+    recomp::ver::known(id().versions, &hash)
+        .ok_or_else(|| unknown(&exe.display().to_string(), &hash))
 }
 
 /// The entry of `dir` called `name`, in any case.
 fn named(dir: &Path, name: &str) -> Option<std::ffi::OsString> {
-    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.file_name()).find(|n| n.to_string_lossy().eq_ignore_ascii_case(name))
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name())
+        .find(|n| n.to_string_lossy().eq_ignore_ascii_case(name))
 }
 
 /// The first file called `name` in `dir` or below it, at most `depth` folders down (links are
@@ -238,12 +300,15 @@ fn move_in(from: &Path, name: &str, to: &Path) -> Result<(), String> {
 
 fn move_into(from: &Path, to: &Path) -> Result<(), String> {
     eprintln!("setup: {} -> {}", from.display(), to.display());
-    std::fs::rename(from, to).map_err(|e| format!("Cannot move {} to {}: {e}", from.display(), to.display()))
+    std::fs::rename(from, to)
+        .map_err(|e| format!("Cannot move {} to {}: {e}", from.display(), to.display()))
 }
 
 /// Files copied from a CD are read-only; the game writes into its folder.
 fn writable(dir: &Path) {
-    let Ok(d) = std::fs::read_dir(dir) else { return };
+    let Ok(d) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in d.flatten() {
         let p = e.path();
         if let Ok(m) = std::fs::symlink_metadata(&p) {

@@ -14,7 +14,9 @@
 
 use super::{Lifter, mf, ty};
 use crate::rt::{Cpu, FpuOp, X87};
-use cranelift_codegen::ir::{Endianness, InstBuilder, Value, condcodes::FloatCC, condcodes::IntCC, types::*};
+use cranelift_codegen::ir::{
+    Endianness, InstBuilder, Value, condcodes::FloatCC, condcodes::IntCC, types::*,
+};
 use iced_x86::{Instruction, MemorySize, Mnemonic, OpKind, Register};
 use std::mem::offset_of;
 
@@ -26,12 +28,81 @@ pub fn is_x87(m: Mnemonic) -> bool {
     use Mnemonic::*;
     matches!(
         m,
-        Fld | Fst | Fstp | Fild | Fist | Fistp | Fisttp | Fxch | Fadd | Faddp | Fiadd | Fsub | Fsubp | Fisub | Fsubr
-            | Fsubrp | Fisubr | Fmul | Fmulp | Fimul | Fdiv | Fdivp | Fidiv | Fdivr | Fdivrp | Fidivr | Fchs | Fabs
-            | Fsqrt | Frndint | Fld1 | Fldz | Fldpi | Fldl2e | Fldl2t | Fldlg2 | Fldln2 | Fcom | Fcomp | Fcompp
-            | Fucom | Fucomp | Fucompp | Ficom | Ficomp | Ftst | Fcomi | Fcomip | Fucomi | Fucomip | Fnstsw | Fnstcw
-            | Fldcw | Fnclex | Fninit | Ffree | Fincstp | Fdecstp | Fnop | Fxam | Fsin | Fcos | Fsincos | Fptan
-            | Fpatan | F2xm1 | Fyl2x | Fyl2xp1 | Fscale | Fprem | Fprem1 | Fxtract | Fnstenv | Fldenv | Fnsave | Frstor
+        Fld | Fst
+            | Fstp
+            | Fild
+            | Fist
+            | Fistp
+            | Fisttp
+            | Fxch
+            | Fadd
+            | Faddp
+            | Fiadd
+            | Fsub
+            | Fsubp
+            | Fisub
+            | Fsubr
+            | Fsubrp
+            | Fisubr
+            | Fmul
+            | Fmulp
+            | Fimul
+            | Fdiv
+            | Fdivp
+            | Fidiv
+            | Fdivr
+            | Fdivrp
+            | Fidivr
+            | Fchs
+            | Fabs
+            | Fsqrt
+            | Frndint
+            | Fld1
+            | Fldz
+            | Fldpi
+            | Fldl2e
+            | Fldl2t
+            | Fldlg2
+            | Fldln2
+            | Fcom
+            | Fcomp
+            | Fcompp
+            | Fucom
+            | Fucomp
+            | Fucompp
+            | Ficom
+            | Ficomp
+            | Ftst
+            | Fcomi
+            | Fcomip
+            | Fucomi
+            | Fucomip
+            | Fnstsw
+            | Fnstcw
+            | Fldcw
+            | Fnclex
+            | Fninit
+            | Ffree
+            | Fincstp
+            | Fdecstp
+            | Fnop
+            | Fxam
+            | Fsin
+            | Fcos
+            | Fsincos
+            | Fptan
+            | Fpatan
+            | F2xm1
+            | Fyl2x
+            | Fyl2xp1
+            | Fscale
+            | Fprem
+            | Fprem1
+            | Fxtract
+            | Fnstenv
+            | Fldenv
+            | Fnsave
+            | Frstor
     )
 }
 
@@ -39,7 +110,10 @@ pub fn is_x87(m: Mnemonic) -> bool {
 pub fn unsupported(i: &Instruction) -> Option<String> {
     use MemorySize::*;
     if i.op_kind(0) == OpKind::Memory || i.op_kind(1) == OpKind::Memory {
-        let ok = matches!(i.memory_size(), Float32 | Float64 | Float80 | Int16 | Int32 | Int64 | UInt16 | FpuEnv28 | FpuState108);
+        let ok = matches!(
+            i.memory_size(),
+            Float32 | Float64 | Float80 | Int16 | Int32 | Int64 | UInt16 | FpuEnv28 | FpuState108
+        );
         if !ok {
             return Some(format!("{:?} {:?}", i.mnemonic(), i.memory_size()));
         }
@@ -120,7 +194,12 @@ impl Lifter<'_, '_> {
         let at = offset_of!(Cpu, x87_mode) as i32;
         self.b.ins().store(mf(), add, self.cpu, at);
         self.b.ins().store(mf(), flag, self.cpu, at + 8);
-        let m = Mode { cw, usual, near_or_trunc, add };
+        let m = Mode {
+            cw,
+            usual,
+            near_or_trunc,
+            add,
+        };
         self.xc.mode = Some(m);
         m
     }
@@ -130,7 +209,10 @@ impl Lifter<'_, '_> {
         if let Some(v) = self.xc.cw.filter(|_| self.xc.enabled) {
             return v;
         }
-        let v = self.b.ins().load(I16, mf(), self.cpu, offset_of!(Cpu, fcw) as i32);
+        let v = self
+            .b
+            .ins()
+            .load(I16, mf(), self.cpu, offset_of!(Cpu, fcw) as i32);
         self.xc.cw = Some(v);
         v
     }
@@ -143,7 +225,11 @@ impl Lifter<'_, '_> {
     /// Host pointer to the physical slot of ST(k), as a byte offset into the 8-entry arrays.
     fn slot(&mut self, k: u32) -> Value {
         let t = self.b.use_var(self.top);
-        let t = if k == 0 { t } else { self.b.ins().iadd_imm_s(t, k as i64) };
+        let t = if k == 0 {
+            t
+        } else {
+            self.b.ins().iadd_imm_s(t, k as i64)
+        };
         let t = self.b.ins().band_imm_u(t, 7);
         let t = self.b.ins().uextend(I64, t);
         let t = self.b.ins().ishl_imm_u(t, 3);
@@ -195,17 +281,25 @@ impl Lifter<'_, '_> {
             return;
         }
         let (ps, pd) = (self.slot(src), self.slot(dst));
-        for (off, t) in [(offset_of!(Cpu, st), F64), (offset_of!(Cpu, st_int), I64), (offset_of!(Cpu, st_int_of), I64)] {
+        for (off, t) in [
+            (offset_of!(Cpu, st), F64),
+            (offset_of!(Cpu, st_int), I64),
+            (offset_of!(Cpu, st_int_of), I64),
+        ] {
             let v = self.b.ins().load(t, mf(), ps, off as i32);
             self.b.ins().store(mf(), v, pd, off as i32);
         }
     }
 
     fn fsw(&mut self) -> Value {
-        self.b.ins().load(I16, mf(), self.cpu, offset_of!(Cpu, fsw) as i32)
+        self.b
+            .ins()
+            .load(I16, mf(), self.cpu, offset_of!(Cpu, fsw) as i32)
     }
     fn set_fsw(&mut self, v: Value) {
-        self.b.ins().store(mf(), v, self.cpu, offset_of!(Cpu, fsw) as i32);
+        self.b
+            .ins()
+            .store(mf(), v, self.cpu, offset_of!(Cpu, fsw) as i32);
     }
 
     // ---- memory operands -------------------------------------------------------------------
@@ -273,14 +367,25 @@ impl Lifter<'_, '_> {
     /// A double as a `size`-byte integer, rounded by the control word (`truncate` for
     /// fisttp); out of range or NaN gives the "integer indefinite" (the smallest integer).
     fn to_int(&mut self, v: Value, size: u32, truncate: bool) -> Value {
-        let r = if truncate { self.b.ins().trunc(v) } else { self.round_rc(v) };
+        let r = if truncate {
+            self.b.ins().trunc(v)
+        } else {
+            self.round_rc(v)
+        };
         let lim = (1u64 << (8 * size - 1)) as f64;
         let (lo, hi) = (self.b.ins().f64const(-lim), self.b.ins().f64const(lim));
         let ge = self.b.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
         let lt = self.b.ins().fcmp(FloatCC::LessThan, r, hi);
         let fits = self.b.ins().band(ge, lt);
-        let x = self.b.ins().fcvt_to_sint_sat(if size == 8 { I64 } else { I32 }, r);
-        let x = if size == 2 { self.b.ins().ireduce(I16, x) } else { x };
+        let x = self
+            .b
+            .ins()
+            .fcvt_to_sint_sat(if size == 8 { I64 } else { I32 }, r);
+        let x = if size == 2 {
+            self.b.ins().ireduce(I16, x)
+        } else {
+            x
+        };
         let min = self.iconst(ty(size), (1u64 << (8 * size - 1)) as i64);
         self.b.ins().select(fits, x, min)
     }
@@ -302,10 +407,19 @@ impl Lifter<'_, '_> {
         };
         // the double nearest the exact result (for a store: x itself)
         let s = if matches!(op, FpuOp::Round) { x } else { fast };
-        let fast = if matches!(op, FpuOp::Round) { self.b.ins().fpromote(F64, fast) } else { fast };
+        let fast = if matches!(op, FpuOp::Round) {
+            self.b.ins().fpromote(F64, fast)
+        } else {
+            fast
+        };
         let md = self.mode();
         let (cw, usual) = (md.cw, md.usual);
-        let (slow, edge, call_blk, done) = (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let (slow, edge, call_blk, done) = (
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+        );
         self.b.append_block_param(done, F64);
         self.b.ins().brif(usual, done, &[fast.into()], slow, &[]);
         self.b.switch_to_block(slow);
@@ -342,17 +456,29 @@ impl Lifter<'_, '_> {
         let mag = self.b.ins().band_imm_u(bits, i64::MAX);
         // (not the largest double: truncating, an overflow gives it)
         let from_lo = self.b.ins().iadd_imm_s(mag, -0x0010_0000_0000_0000);
-        let normal = self.b.ins().icmp_imm_u(IntCC::UnsignedLessThan, from_lo, 0x7fdf_ffff_ffff_ffff);
+        let normal =
+            self.b
+                .ins()
+                .icmp_imm_u(IntCC::UnsignedLessThan, from_lo, 0x7fdf_ffff_ffff_ffff);
         // cut in a vector register (see `round24_between`)
         let le = mf().with_endianness(Endianness::Little);
         let v = self.b.ins().scalar_to_vector(F64X2, s);
         let v = self.b.ins().bitcast(I64X2, le, v);
-        let mask = self.b.func.dfg.constants.insert((!(UNIT - 1)).to_le_bytes().repeat(2).into());
+        let mask = self
+            .b
+            .func
+            .dfg
+            .constants
+            .insert((!(UNIT - 1)).to_le_bytes().repeat(2).into());
         let mask = self.b.ins().vconst(I64X2, mask);
         let v = self.b.ins().band(v, mask);
         let v = self.b.ins().bitcast(F64X2, le, v);
         let r = self.b.ins().extractlane(v, 0);
-        let (other, call_blk, done) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let (other, call_blk, done) = (
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+        );
         self.b.append_block_param(done, F64);
         self.b.ins().brif(normal, done, &[r.into()], other, &[]);
         // zero: exact unless a product or quotient of nonzero numbers came out below the
@@ -362,7 +488,10 @@ impl Lifter<'_, '_> {
         let f0 = self.b.ins().f64const(0.0);
         let exact = match op {
             FpuOp::Mul => {
-                let (xz, yz) = (self.b.ins().fcmp(FloatCC::Equal, x, f0), self.b.ins().fcmp(FloatCC::Equal, y, f0));
+                let (xz, yz) = (
+                    self.b.ins().fcmp(FloatCC::Equal, x, f0),
+                    self.b.ins().fcmp(FloatCC::Equal, y, f0),
+                );
                 self.b.ins().bor(xz, yz)
             }
             FpuOp::Div => self.b.ins().fcmp(FloatCC::Equal, x, f0),
@@ -384,7 +513,14 @@ impl Lifter<'_, '_> {
     /// The usual cases of `round24`: s between two 24-bit numbers and not in their middle (its
     /// low 29 bits neither 0 nor 0x10000000), or on one without an error; normal (for a store:
     /// in a float's normal range) or an exact zero. (done, the result.)
-    fn round24_between(&mut self, op: FpuOp, x: Value, y: Value, s: Value, md: Mode) -> (Value, Value) {
+    fn round24_between(
+        &mut self,
+        op: FpuOp,
+        x: Value,
+        y: Value,
+        s: Value,
+        md: Mode,
+    ) -> (Value, Value) {
         const UNIT: i64 = 1 << 29;
         const HALF: i64 = 1 << 28;
         let bits = self.b.ins().bitcast(I64, mf(), s);
@@ -411,9 +547,16 @@ impl Lifter<'_, '_> {
         };
         // the magnitude's bits: a normal double (or a float's normal range for a store)
         let mag = self.b.ins().band_imm_u(bits, i64::MAX);
-        let (lo, hi) = if matches!(op, FpuOp::Round) { (0x3810_0000_0000_0000, 0x47f0_0000_0000_0000) } else { (0x0010_0000_0000_0000, 0x7ff0_0000_0000_0000) };
+        let (lo, hi) = if matches!(op, FpuOp::Round) {
+            (0x3810_0000_0000_0000, 0x47f0_0000_0000_0000)
+        } else {
+            (0x0010_0000_0000_0000, 0x7ff0_0000_0000_0000)
+        };
         let from_lo = self.b.ins().iadd_imm_s(mag, -lo);
-        let range = self.b.ins().icmp_imm_u(IntCC::UnsignedLessThan, from_lo, hi - lo);
+        let range = self
+            .b
+            .ins()
+            .icmp_imm_u(IntCC::UnsignedLessThan, from_lo, hi - lo);
         // or an exact zero (x * 0: ~2 million a second)
         let zero = self.b.ins().icmp_imm_u(IntCC::Equal, mag, 0);
         let zero = match exact {
@@ -431,7 +574,12 @@ impl Lifter<'_, '_> {
         let v = self.b.ins().bitcast(I64X2, le, v);
         let add = self.b.ins().scalar_to_vector(I64X2, md.add);
         let v = self.b.ins().iadd(v, add);
-        let mask = self.b.func.dfg.constants.insert((!(UNIT - 1)).to_le_bytes().repeat(2).into());
+        let mask = self
+            .b
+            .func
+            .dfg
+            .constants
+            .insert((!(UNIT - 1)).to_le_bytes().repeat(2).into());
         let mask = self.b.ins().vconst(I64X2, mask);
         let v = self.b.ins().band(v, mask);
         let v = self.b.ins().bitcast(F64X2, le, v);
@@ -445,7 +593,11 @@ impl Lifter<'_, '_> {
         match op {
             FpuOp::Add | FpuOp::Sub => {
                 // TwoSum
-                let y = if matches!(op, FpuOp::Sub) { self.b.ins().fneg(y) } else { y };
+                let y = if matches!(op, FpuOp::Sub) {
+                    self.b.ins().fneg(y)
+                } else {
+                    y
+                };
                 let b = self.b.ins().fsub(s, x);
                 let sb = self.b.ins().fsub(s, b);
                 let ex = self.b.ins().fsub(x, sb);
@@ -490,7 +642,10 @@ impl Lifter<'_, '_> {
         let eb = self.b.ins().bitcast(I64, mf(), e);
         // e has the sign of s: the exact result is farther from zero
         let signs = self.b.ins().bxor(bits, eb);
-        let away = self.b.ins().icmp_imm_u(IntCC::SignedGreaterThanOrEqual, signs, 0);
+        let away = self
+            .b
+            .ins()
+            .icmp_imm_u(IntCC::SignedGreaterThanOrEqual, signs, 0);
         let pcrc = self.b.ins().band_imm_u(cw, 0xf00);
         let trunc = self.b.ins().icmp_imm_u(IntCC::Equal, pcrc, 0xc00);
         let near = self.b.ins().icmp_imm_u(IntCC::Equal, pcrc, 0);
@@ -523,15 +678,25 @@ impl Lifter<'_, '_> {
         // exponent keeps), or an exact zero
         let exp = self.b.ins().band_imm_u(bits, 0x7ff0_0000_0000_0000);
         let normal = self.b.ins().icmp_imm_u(IntCC::NotEqual, exp, 0);
-        let finite = self.b.ins().icmp_imm_u(IntCC::NotEqual, exp, 0x7ff0_0000_0000_0000);
+        let finite = self
+            .b
+            .ins()
+            .icmp_imm_u(IntCC::NotEqual, exp, 0x7ff0_0000_0000_0000);
         let normal = self.b.ins().band(normal, finite);
         let mag = self.b.ins().band_imm_u(bits, i64::MAX);
         let zero = self.b.ins().icmp_imm_u(IntCC::Equal, mag, 0);
         let zero = self.b.ins().band(zero, exact);
         let normal = if matches!(op, FpuOp::Round) {
             // a float's own range: below it a store keeps fewer bits, above it infinity
-            let lo = self.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, mag, 0x3810_0000_0000_0000);
-            let hi = self.b.ins().icmp_imm_u(IntCC::UnsignedLessThan, mag, 0x47f0_0000_0000_0000);
+            let lo = self.b.ins().icmp_imm_u(
+                IntCC::UnsignedGreaterThanOrEqual,
+                mag,
+                0x3810_0000_0000_0000,
+            );
+            let hi = self
+                .b
+                .ins()
+                .icmp_imm_u(IntCC::UnsignedLessThan, mag, 0x47f0_0000_0000_0000);
             let f32_range = self.b.ins().band(lo, hi);
             self.b.ins().band(normal, f32_range)
         } else {
@@ -559,7 +724,10 @@ impl Lifter<'_, '_> {
         let c2 = bit(self, FloatCC::Unordered, C2);
         let c3 = bit(self, FloatCC::UnorderedOrEqual, C3);
         let sw = self.fsw();
-        let sw = self.b.ins().band_imm_u(sw, 0xffff & !(C0 | C2 | C3 | 0x200));
+        let sw = self
+            .b
+            .ins()
+            .band_imm_u(sw, 0xffff & !(C0 | C2 | C3 | 0x200));
         let sw = self.b.ins().bor(sw, c0);
         let sw = self.b.ins().bor(sw, c2);
         let sw = self.b.ins().bor(sw, c3);
@@ -596,9 +764,13 @@ impl Lifter<'_, '_> {
                         let a = self.addr(i);
                         let x = self.load(a, 8);
                         let p = self.slot(0);
-                        self.b.ins().store(mf(), x, p, offset_of!(Cpu, st_int) as i32);
+                        self.b
+                            .ins()
+                            .store(mf(), x, p, offset_of!(Cpu, st_int) as i32);
                         let bits = self.b.ins().bitcast(I64, mf(), v);
-                        self.b.ins().store(mf(), bits, p, offset_of!(Cpu, st_int_of) as i32);
+                        self.b
+                            .ins()
+                            .store(mf(), bits, p, offset_of!(Cpu, st_int_of) as i32);
                     }
                 } else {
                     // fld st(i): push a copy (ST(i) is ST(i+1) after the push)
@@ -643,8 +815,14 @@ impl Lifter<'_, '_> {
                     // the exact integer, if this double came from a fild qword
                     let p = self.slot(0);
                     let bits = self.b.ins().bitcast(I64, mf(), v);
-                    let of = self.b.ins().load(I64, mf(), p, offset_of!(Cpu, st_int_of) as i32);
-                    let exact = self.b.ins().load(I64, mf(), p, offset_of!(Cpu, st_int) as i32);
+                    let of = self
+                        .b
+                        .ins()
+                        .load(I64, mf(), p, offset_of!(Cpu, st_int_of) as i32);
+                    let exact = self
+                        .b
+                        .ins()
+                        .load(I64, mf(), p, offset_of!(Cpu, st_int) as i32);
                     let same = self.b.ins().icmp(IntCC::Equal, bits, of);
                     x = self.b.ins().select(same, exact, x);
                 }
@@ -663,15 +841,19 @@ impl Lifter<'_, '_> {
             Fxch => {
                 let k = sti(1); // fxch st(0), st(i)
                 let (p0, pk) = (self.slot(0), self.slot(k));
-                for (off, t) in [(offset_of!(Cpu, st), F64), (offset_of!(Cpu, st_int), I64), (offset_of!(Cpu, st_int_of), I64)] {
+                for (off, t) in [
+                    (offset_of!(Cpu, st), F64),
+                    (offset_of!(Cpu, st_int), I64),
+                    (offset_of!(Cpu, st_int_of), I64),
+                ] {
                     let a = self.b.ins().load(t, mf(), p0, off as i32);
                     let b = self.b.ins().load(t, mf(), pk, off as i32);
                     self.b.ins().store(mf(), b, p0, off as i32);
                     self.b.ins().store(mf(), a, pk, off as i32);
                 }
             }
-            Fadd | Faddp | Fiadd | Fsub | Fsubp | Fisub | Fsubr | Fsubrp | Fisubr | Fmul | Fmulp | Fimul | Fdiv | Fdivp
-            | Fidiv | Fdivr | Fdivrp | Fidivr => {
+            Fadd | Faddp | Fiadd | Fsub | Fsubp | Fisub | Fsubr | Fsubrp | Fisubr | Fmul
+            | Fmulp | Fimul | Fdiv | Fdivp | Fidiv | Fdivr | Fdivrp | Fidivr => {
                 // dst = dst op src (or src op dst for the reversed forms)
                 let (dst, src) = if mem0 {
                     (0, self.fmem(i))
@@ -760,12 +942,17 @@ impl Lifter<'_, '_> {
                 self.wr(i, 0, v);
             }
             Fnstcw => {
-                let v = self.b.ins().load(I16, mf(), self.cpu, offset_of!(Cpu, fcw) as i32);
+                let v = self
+                    .b
+                    .ins()
+                    .load(I16, mf(), self.cpu, offset_of!(Cpu, fcw) as i32);
                 self.wr(i, 0, v);
             }
             Fldcw => {
                 let v = self.rd(i, 0, 2);
-                self.b.ins().store(mf(), v, self.cpu, offset_of!(Cpu, fcw) as i32);
+                self.b
+                    .ins()
+                    .store(mf(), v, self.cpu, offset_of!(Cpu, fcw) as i32);
                 self.xc.cw = Some(v);
                 self.xc.mode = None;
             }
@@ -777,7 +964,9 @@ impl Lifter<'_, '_> {
             Fninit => {
                 self.x87_settle();
                 let cw = self.iconst(I16, 0x37f);
-                self.b.ins().store(mf(), cw, self.cpu, offset_of!(Cpu, fcw) as i32);
+                self.b
+                    .ins()
+                    .store(mf(), cw, self.cpu, offset_of!(Cpu, fcw) as i32);
                 self.xc.cw = Some(cw);
                 self.xc.mode = None;
                 let z = self.iconst(I16, 0);

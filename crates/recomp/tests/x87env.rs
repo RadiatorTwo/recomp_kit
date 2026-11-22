@@ -40,11 +40,17 @@ fn x87_environment() {
     let m = &g.mem;
     let (x, y) = (3.25, -1.5);
     let cpu = g.call(0, &[dbl(x)[0], dbl(x)[1], dbl(y)[0], dbl(y)[1], SCRATCH]);
-    let got = f64::from_bits(u64::from_le_bytes(m.slice(SCRATCH + 108, 8).try_into().unwrap()));
+    let got = f64::from_bits(u64::from_le_bytes(
+        m.slice(SCRATCH + 108, 8).try_into().unwrap(),
+    ));
     assert_eq!(got, x - y, "registers kept by fnsave/frstor");
     assert_eq!(cpu.top, 0, "stack empty again");
 
     let cpu = g.call(1, &[0x0e7f, SCRATCH]);
-    assert_eq!(u16::from_le_bytes([m.rd8(SCRATCH + 28), m.rd8(SCRATCH + 29)]), 0x0e7f, "control word kept by fnstenv/fldenv");
+    assert_eq!(
+        u16::from_le_bytes([m.rd8(SCRATCH + 28), m.rd8(SCRATCH + 29)]),
+        0x0e7f,
+        "control word kept by fnstenv/fldenv"
+    );
     assert_eq!(cpu.fcw, 0x0e7f);
 }

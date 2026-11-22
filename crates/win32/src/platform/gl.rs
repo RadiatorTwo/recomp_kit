@@ -3,8 +3,11 @@
 //! something else rendered (the Glide scene); a video and the dialog overlay go on top.
 
 use glow::HasContext;
-use glutin::context::{ContextApi, ContextAttributesBuilder, GlProfile, NotCurrentContext, NotCurrentGlContext, PossiblyCurrentContext, Version};
 use glutin::config::GlConfig;
+use glutin::context::{
+    ContextApi, ContextAttributesBuilder, GlProfile, NotCurrentContext, NotCurrentGlContext,
+    PossiblyCurrentContext, Version,
+};
 use glutin::display::{GetGlDisplay, GlDisplay};
 use glutin::surface::{GlSurface, Surface, SwapInterval, WindowSurface};
 use glutin_winit::GlWindow;
@@ -46,8 +49,16 @@ thread_local! {
 
 /// A uniform's location in program `p`, asked of the driver once (asking for each in every
 /// picture cost the effects' passes ~0.2 ms).
-pub fn uniform(gl: &glow::Context, p: glow::Program, name: &'static str) -> Option<glow::UniformLocation> {
-    UNIFORMS.with_borrow_mut(|u| u.entry((p, name)).or_insert_with(|| unsafe { gl.get_uniform_location(p, name) }).clone())
+pub fn uniform(
+    gl: &glow::Context,
+    p: glow::Program,
+    name: &'static str,
+) -> Option<glow::UniformLocation> {
+    UNIFORMS.with_borrow_mut(|u| {
+        u.entry((p, name))
+            .or_insert_with(|| unsafe { gl.get_uniform_location(p, name) })
+            .clone()
+    })
 }
 
 /// Deletes program `p` and forgets its uniforms (a new program may get its number).
@@ -84,8 +95,16 @@ pub fn texture(gl: &glow::Context, linear: bool) -> glow::Texture {
         let f = if linear { glow::LINEAR } else { glow::NEAREST } as i32;
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, f);
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, f);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
         t
     }
 }
@@ -140,7 +159,17 @@ impl Gl {
         let template = glutin::config::ConfigTemplateBuilder::new().with_alpha_size(8);
         let (win, config) = glutin_winit::DisplayBuilder::new()
             .with_window_attributes(Some(attrs))
-            .build(el, template, |configs| configs.reduce(|a, b| if b.num_samples() < a.num_samples() { b } else { a }).unwrap())
+            .build(el, template, |configs| {
+                configs
+                    .reduce(|a, b| {
+                        if b.num_samples() < a.num_samples() {
+                            b
+                        } else {
+                            a
+                        }
+                    })
+                    .unwrap()
+            })
             .expect("cannot create an OpenGL window");
         let win = win.expect("no window");
         let display = config.display();
@@ -149,13 +178,22 @@ impl Gl {
             .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
             .with_profile(GlProfile::Core)
             .build(handle);
-        let context = unsafe { display.create_context(&config, &attrs) }.expect("cannot create an OpenGL 3.3 context");
-        let sattrs = win.build_surface_attributes(Default::default()).expect("surface attributes");
-        let surface = Box::new(unsafe { display.create_window_surface(&config, &sattrs) }.expect("cannot create the GL surface"));
-        let context = context.make_current(&*surface).expect("cannot make the GL context current");
+        let context = unsafe { display.create_context(&config, &attrs) }
+            .expect("cannot create an OpenGL 3.3 context");
+        let sattrs = win
+            .build_surface_attributes(Default::default())
+            .expect("surface attributes");
+        let surface = Box::new(
+            unsafe { display.create_window_surface(&config, &sattrs) }
+                .expect("cannot create the GL surface"),
+        );
+        let context = context
+            .make_current(&*surface)
+            .expect("cannot make the GL context current");
         // the game paces itself
         let _ = surface.set_swap_interval(&context, SwapInterval::DontWait);
-        let gl = unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
+        let gl =
+            unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
         let blit = compile(&gl, BLIT_VS, BLIT_FS);
         let vao = unsafe { gl.create_vertex_array() }.expect("GL vertex array");
         let frame = texture(&gl, false);
@@ -163,7 +201,10 @@ impl Gl {
         let overlay = texture(&gl, true);
         let video = texture(&gl, true);
         let staged = [(texture(&gl, true), 0, 0), (texture(&gl, true), 0, 0)];
-        let copy_fbo = [unsafe { gl.create_framebuffer() }.expect("GL framebuffer"), unsafe { gl.create_framebuffer() }.expect("GL framebuffer")];
+        let copy_fbo = [
+            unsafe { gl.create_framebuffer() }.expect("GL framebuffer"),
+            unsafe { gl.create_framebuffer() }.expect("GL framebuffer"),
+        ];
         let g = Gl {
             gl,
             surface,
@@ -188,7 +229,11 @@ impl Gl {
 
     /// The look's parts for other threads (`PARTS`).
     fn parts(&self) {
-        *PARTS.lock().unwrap() = Some((self.blit, self.has_overlay.then_some(self.overlay), self.video_size.map(|(vw, vh)| (self.video, vw, vh))));
+        *PARTS.lock().unwrap() = Some((
+            self.blit,
+            self.has_overlay.then_some(self.overlay),
+            self.video_size.map(|(vw, vh)| (self.video, vw, vh)),
+        ));
     }
 
     /// Show a 2D frame of 0RGB pixels.
@@ -246,7 +291,11 @@ impl Gl {
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
             self.vsync = vsync;
-            let interval = if vsync { SwapInterval::Wait(NonZeroU32::MIN) } else { SwapInterval::DontWait };
+            let interval = if vsync {
+                SwapInterval::Wait(NonZeroU32::MIN)
+            } else {
+                SwapInterval::DontWait
+            };
             let _ = self.surface.set_swap_interval(&self.context, interval);
         }
         let _ = self.surface.swap_buffers(&self.context);
@@ -262,21 +311,33 @@ impl Gl {
             .with_sharing(&self.context)
             .build(self.raw);
         let display = self.config.display();
-        let context = unsafe { display.create_context(&self.config, &attrs) }.expect("cannot create a shared OpenGL context");
-        SharedParts { context, surface: &*self.surface, display }
+        let context = unsafe { display.create_context(&self.config, &attrs) }
+            .expect("cannot create a shared OpenGL context");
+        SharedParts {
+            context,
+            surface: &*self.surface,
+            display,
+        }
     }
 }
 
 /// The two copies of rendered pictures for the present thread (texture, size; textures are
 /// shared by all contexts), and the one copied into last. Made with the window's context.
-static STAGED: std::sync::Mutex<Option<([(glow::Texture, u32, u32); 2], usize)>> = std::sync::Mutex::new(None);
+static STAGED: std::sync::Mutex<Option<([(glow::Texture, u32, u32); 2], usize)>> =
+    std::sync::Mutex::new(None);
 
 /// A copy of the rendered texture `tex` (w x h) for the present thread, in one of two
 /// textures taking turns, through this thread's framebuffers `fbos`: the game draws on into
 /// its own meanwhile (it may draw only what changes). Waits on the GPU until the present
 /// thread has drawn the copy made into the same one two pictures ago (`DONE`). Returns the
 /// copy, a fence after it, and its slot.
-pub fn stage(gl: &glow::Context, fbos: [glow::Framebuffer; 2], tex: glow::Texture, w: u32, h: u32) -> Option<(glow::Texture, Fence, usize)> {
+pub fn stage(
+    gl: &glow::Context,
+    fbos: [glow::Framebuffer; 2],
+    tex: glow::Texture,
+    w: u32,
+    h: u32,
+) -> Option<(glow::Texture, Fence, usize)> {
     let mut st = STAGED.lock().unwrap();
     let (staged, slot) = st.as_mut()?;
     *slot ^= 1;
@@ -289,17 +350,52 @@ pub fn stage(gl: &glow::Context, fbos: [glow::Framebuffer; 2], tex: glow::Textur
         let t = staged[k].0;
         if (staged[k].1, staged[k].2) != (w, h) {
             gl.bind_texture(glow::TEXTURE_2D, Some(t));
-            gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                w as i32,
+                h as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
             staged[k] = (t, w, h);
         }
         gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbos[0]));
-        gl.framebuffer_texture_2d(glow::READ_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(tex), 0);
+        gl.framebuffer_texture_2d(
+            glow::READ_FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(tex),
+            0,
+        );
         gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(fbos[1]));
-        gl.framebuffer_texture_2d(glow::DRAW_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
+        gl.framebuffer_texture_2d(
+            glow::DRAW_FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(t),
+            0,
+        );
         gl.disable(glow::SCISSOR_TEST);
-        gl.blit_framebuffer(0, 0, w as i32, h as i32, 0, 0, w as i32, h as i32, glow::COLOR_BUFFER_BIT, glow::NEAREST);
+        gl.blit_framebuffer(
+            0,
+            0,
+            w as i32,
+            h as i32,
+            0,
+            0,
+            w as i32,
+            h as i32,
+            glow::COLOR_BUFFER_BIT,
+            glow::NEAREST,
+        );
         gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        let f = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).expect("GL fence");
+        let f = gl
+            .fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0)
+            .expect("GL fence");
         // the present thread's context sees the commands only once they are sent
         gl.flush();
         Some((t, Fence(f), k))
@@ -308,13 +404,25 @@ pub fn stage(gl: &glow::Context, fbos: [glow::Framebuffer; 2], tex: glow::Textur
 
 /// What the window shows besides the picture (the blit program, overlay, video), for threads
 /// other than the window's: set by the window's thread whenever it changes.
-static PARTS: std::sync::Mutex<Option<(glow::Program, Option<glow::Texture>, Option<(glow::Texture, u32, u32)>)>> = std::sync::Mutex::new(None);
+static PARTS: std::sync::Mutex<
+    Option<(
+        glow::Program,
+        Option<glow::Texture>,
+        Option<(glow::Texture, u32, u32)>,
+    )>,
+> = std::sync::Mutex::new(None);
 
 /// The window's look with `shown` as the picture, in a window of `size` (None before the window
 /// exists).
 pub fn look_with(shown: (glow::Texture, u32, u32, bool, f32), size: (u32, u32)) -> Option<Look> {
     let (blit, overlay, video) = (*PARTS.lock().unwrap())?;
-    Some(Look { blit, shown, overlay, video, size })
+    Some(Look {
+        blit,
+        shown,
+        overlay,
+        video,
+        size,
+    })
 }
 
 /// A GL fence (shared by the contexts of a share group).
@@ -342,89 +450,132 @@ pub struct Look {
 static PAINT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Draw `l` into the window's back buffer; with `shot`, read back the picture's area.
-fn paint(gl: &glow::Context, vao: glow::VertexArray, l: &Look, shot: bool) -> Option<(Vec<u32>, u32, u32)> {
-        let (w, h) = l.size;
-        let (tex, fw, fh, words, gamma) = l.shown;
-        let (ox, oy, s) = super::window::fit(fw, fh, w, h);
-        let (x0, y0) = (ox / w as f64 * 2.0 - 1.0, 1.0 - oy / h as f64 * 2.0);
-        let (x1, y1) = (x0 + fw as f64 * s / w as f64 * 2.0, y0 - fh as f64 * s / h as f64 * 2.0);
-        unsafe {
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            gl.viewport(0, 0, w as i32, h as i32);
-            gl.disable(glow::SCISSOR_TEST);
-            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+fn paint(
+    gl: &glow::Context,
+    vao: glow::VertexArray,
+    l: &Look,
+    shot: bool,
+) -> Option<(Vec<u32>, u32, u32)> {
+    let (w, h) = l.size;
+    let (tex, fw, fh, words, gamma) = l.shown;
+    let (ox, oy, s) = super::window::fit(fw, fh, w, h);
+    let (x0, y0) = (ox / w as f64 * 2.0 - 1.0, 1.0 - oy / h as f64 * 2.0);
+    let (x1, y1) = (
+        x0 + fw as f64 * s / w as f64 * 2.0,
+        y0 - fh as f64 * s / h as f64 * 2.0,
+    );
+    unsafe {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        gl.viewport(0, 0, w as i32, h as i32);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.clear_color(0.0, 0.0, 0.0, 1.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+        // the window stays opaque: 2D frames' 0RGB words have alpha 0, and a compositor that
+        // blends windows by their alpha (Wayland) showed what is behind through the menu
+        gl.color_mask(true, true, true, false);
+        gl.use_program(Some(l.blit));
+        gl.bind_vertex_array(Some(vao));
+        gl.active_texture(glow::TEXTURE0);
+        // asked of the driver once: NVIDIA's lookup makes system calls (a picture's five
+        // cost ~10% of a game thread that shows its own pictures)
+        let u = |n: &'static str| uniform(gl, l.blit, n);
+        gl.uniform_4_f32(
+            u("rect").as_ref(),
+            x0 as f32,
+            y1 as f32,
+            x1 as f32,
+            y0 as f32,
+        );
+        gl.uniform_1_i32(u("tex").as_ref(), 0);
+        gl.disable(glow::BLEND);
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.uniform_1_i32(u("words").as_ref(), words as i32);
+        // rendered scenes have their first row at the bottom, uploaded frames at the top
+        gl.uniform_1_i32(u("flip").as_ref(), !words as i32);
+        gl.uniform_1_f32(u("gamma").as_ref(), gamma);
+        gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        // dialogs stay 4:3 over a wide picture
+        let (sx, sw) = super::window::overlay_span(fw, fh);
+        let (ox0, ox1) = (
+            x0 + (x1 - x0) * sx as f64 / fw as f64,
+            x0 + (x1 - x0) * (sx + sw) as f64 / fw as f64,
+        );
+        // videos fill the window as far as their aspect allows, centred (the game placed
+        // them in its 640x480 screen, briefings small and high up)
+        if let Some((video, vw, vh)) = l.video {
             gl.clear(glow::COLOR_BUFFER_BIT);
-            // the window stays opaque: 2D frames' 0RGB words have alpha 0, and a compositor that
-            // blends windows by their alpha (Wayland) showed what is behind through the menu
-            gl.color_mask(true, true, true, false);
-            gl.use_program(Some(l.blit));
-            gl.bind_vertex_array(Some(vao));
-            gl.active_texture(glow::TEXTURE0);
-            // asked of the driver once: NVIDIA's lookup makes system calls (a picture's five
-            // cost ~10% of a game thread that shows its own pictures)
-            let u = |n: &'static str| uniform(gl, l.blit, n);
-            gl.uniform_4_f32(u("rect").as_ref(), x0 as f32, y1 as f32, x1 as f32, y0 as f32);
-            gl.uniform_1_i32(u("tex").as_ref(), 0);
-            gl.disable(glow::BLEND);
-            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            gl.uniform_1_i32(u("words").as_ref(), words as i32);
-            // rendered scenes have their first row at the bottom, uploaded frames at the top
-            gl.uniform_1_i32(u("flip").as_ref(), !words as i32);
-            gl.uniform_1_f32(u("gamma").as_ref(), gamma);
+            let (vx, vy, s) = super::window::fit(vw, vh, w, h);
+            let (ax, ay) = (vx / w as f64 * 2.0 - 1.0, 1.0 - vy / h as f64 * 2.0);
+            let (bx, by) = (
+                ax + vw as f64 * s / w as f64 * 2.0,
+                ay - vh as f64 * s / h as f64 * 2.0,
+            );
+            gl.uniform_4_f32(
+                u("rect").as_ref(),
+                ax as f32,
+                by as f32,
+                bx as f32,
+                ay as f32,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, Some(video));
+            gl.uniform_1_i32(u("words").as_ref(), 1);
+            gl.uniform_1_i32(u("flip").as_ref(), 0);
+            gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
-            // dialogs stay 4:3 over a wide picture
-            let (sx, sw) = super::window::overlay_span(fw, fh);
-            let (ox0, ox1) = (x0 + (x1 - x0) * sx as f64 / fw as f64, x0 + (x1 - x0) * (sx + sw) as f64 / fw as f64);
-            // videos fill the window as far as their aspect allows, centred (the game placed
-            // them in its 640x480 screen, briefings small and high up)
-            if let Some((video, vw, vh)) = l.video {
-                gl.clear(glow::COLOR_BUFFER_BIT);
-                let (vx, vy, s) = super::window::fit(vw, vh, w, h);
-                let (ax, ay) = (vx / w as f64 * 2.0 - 1.0, 1.0 - vy / h as f64 * 2.0);
-                let (bx, by) = (ax + vw as f64 * s / w as f64 * 2.0, ay - vh as f64 * s / h as f64 * 2.0);
-                gl.uniform_4_f32(u("rect").as_ref(), ax as f32, by as f32, bx as f32, ay as f32);
-                gl.bind_texture(glow::TEXTURE_2D, Some(video));
-                gl.uniform_1_i32(u("words").as_ref(), 1);
-                gl.uniform_1_i32(u("flip").as_ref(), 0);
-                gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
-                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
-            }
-            if let Some(overlay) = l.overlay {
-                gl.uniform_4_f32(u("rect").as_ref(), ox0 as f32, y1 as f32, ox1 as f32, y0 as f32);
-                gl.enable(glow::BLEND);
-                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-                gl.bind_texture(glow::TEXTURE_2D, Some(overlay));
-                gl.uniform_1_i32(u("words").as_ref(), 1);
-                gl.uniform_1_i32(u("flip").as_ref(), 0);
-                gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
-                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
-                gl.disable(glow::BLEND);
-            }
-            gl.color_mask(true, true, true, true);
         }
-        let out = shot.then(|| {
-            // the picture's area of the window, top row first
-            let (rx, ry) = (ox.round() as i32, oy.round() as i32);
-            let (rw, rh) = ((fw as f64 * s).round() as i32, (fh as f64 * s).round() as i32);
-            let mut buf = vec![0u8; (rw * rh * 4) as usize];
-            unsafe {
-                gl.read_pixels(rx, h as i32 - ry - rh, rw, rh, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(&mut buf)));
-            }
-            let px = (0..rh)
-                .rev()
-                .flat_map(|y| (0..rw).map(move |x| (x, y)))
-                .map(|(x, y)| {
-                    let i = ((y * rw + x) * 4) as usize;
-                    (buf[i] as u32) << 16 | (buf[i + 1] as u32) << 8 | buf[i + 2] as u32
-                })
-                .collect();
-            (px, rw as u32, rh as u32)
-        });
-        // <PREFIX>_STATS' display, after the screenshot
-        if let Some(new) = super::stats::on().then(super::stats::pixels) {
-            draw_stats(gl, l.blit, new, w, h);
+        if let Some(overlay) = l.overlay {
+            gl.uniform_4_f32(
+                u("rect").as_ref(),
+                ox0 as f32,
+                y1 as f32,
+                ox1 as f32,
+                y0 as f32,
+            );
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            gl.bind_texture(glow::TEXTURE_2D, Some(overlay));
+            gl.uniform_1_i32(u("words").as_ref(), 1);
+            gl.uniform_1_i32(u("flip").as_ref(), 0);
+            gl.uniform_1_f32(u("gamma").as_ref(), 1.0);
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            gl.disable(glow::BLEND);
         }
-        out
+        gl.color_mask(true, true, true, true);
+    }
+    let out = shot.then(|| {
+        // the picture's area of the window, top row first
+        let (rx, ry) = (ox.round() as i32, oy.round() as i32);
+        let (rw, rh) = (
+            (fw as f64 * s).round() as i32,
+            (fh as f64 * s).round() as i32,
+        );
+        let mut buf = vec![0u8; (rw * rh * 4) as usize];
+        unsafe {
+            gl.read_pixels(
+                rx,
+                h as i32 - ry - rh,
+                rw,
+                rh,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut buf)),
+            );
+        }
+        let px = (0..rh)
+            .rev()
+            .flat_map(|y| (0..rw).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let i = ((y * rw + x) * 4) as usize;
+                (buf[i] as u32) << 16 | (buf[i + 1] as u32) << 8 | buf[i + 2] as u32
+            })
+            .collect();
+        (px, rw as u32, rh as u32)
+    });
+    // <PREFIX>_STATS' display, after the screenshot
+    if let Some(new) = super::stats::on().then(super::stats::pixels) {
+        draw_stats(gl, l.blit, new, w, h);
+    }
+    out
 }
 
 /// <PREFIX>_STATS' display in the top left corner, twice its size from 900 rows on (`new`: its
@@ -437,7 +588,10 @@ fn draw_stats(gl: &glow::Context, blit: glow::Program, new: Option<Vec<u32>>, w:
     }
     let scale = if h >= 900 { 2.0 } else { 1.0 };
     let (x0, y0) = (-1.0 + 2.0 * 8.0 / w as f32, 1.0 - 2.0 * 8.0 / h as f32);
-    let (x1, y1) = (x0 + 2.0 * super::stats::W as f32 * scale / w as f32, y0 - 2.0 * super::stats::H as f32 * scale / h as f32);
+    let (x1, y1) = (
+        x0 + 2.0 * super::stats::W as f32 * scale / w as f32,
+        y0 - 2.0 * super::stats::H as f32 * scale / h as f32,
+    );
     let u = |n: &'static str| uniform(gl, blit, n);
     unsafe {
         gl.color_mask(true, true, true, false);
@@ -481,27 +635,53 @@ pub struct Shared {
 
 impl SharedParts {
     pub fn make_current(self) -> Shared {
-        let context = self.context.make_current(unsafe { &*self.surface }).expect("cannot make the shared GL context current");
+        let context = self
+            .context
+            .make_current(unsafe { &*self.surface })
+            .expect("cannot make the shared GL context current");
         let display = self.display;
-        let gl = unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
+        let gl =
+            unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
         let vao = unsafe { gl.create_vertex_array() }.expect("GL vertex array");
         let _ = unsafe { &*self.surface }.set_swap_interval(&context, SwapInterval::DontWait);
-        let copy_fbo = unsafe { [gl.create_framebuffer().expect("GL framebuffer"), gl.create_framebuffer().expect("GL framebuffer")] };
-        Shared { gl, context, surface: self.surface, vao, vsync: false, copy_fbo }
+        let copy_fbo = unsafe {
+            [
+                gl.create_framebuffer().expect("GL framebuffer"),
+                gl.create_framebuffer().expect("GL framebuffer"),
+            ]
+        };
+        Shared {
+            gl,
+            context,
+            surface: self.surface,
+            vao,
+            vsync: false,
+            copy_fbo,
+        }
     }
 }
 
 impl Shared {
     /// Draw `l` into the window and swap, once the GPU has done `fence` (the staged copy); the
     /// staged texture `slot`'s fence of being drawn goes to `DONE`.
-    pub fn present(&mut self, l: &Look, fence: Fence, slot: usize, shot: bool) -> Option<(Vec<u32>, u32, u32)> {
+    pub fn present(
+        &mut self,
+        l: &Look,
+        fence: Fence,
+        slot: usize,
+        shot: bool,
+    ) -> Option<(Vec<u32>, u32, u32)> {
         let _p = PAINT.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: the window's surface lives as long as the window (see SharedParts)
         let surface = unsafe { &*self.surface };
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
             self.vsync = vsync;
-            let interval = if vsync { SwapInterval::Wait(NonZeroU32::MIN) } else { SwapInterval::DontWait };
+            let interval = if vsync {
+                SwapInterval::Wait(NonZeroU32::MIN)
+            } else {
+                SwapInterval::DontWait
+            };
             let _ = surface.set_swap_interval(&self.context, interval);
         }
         unsafe {

@@ -7,8 +7,8 @@
 
 #[cfg(windows)]
 mod win {
-    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use std::thread::JoinHandle;
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::Graphics::Gdi::*;
@@ -110,10 +110,33 @@ mod win {
             }
             let font = |size: i32, weight: i32| {
                 let face = wide("Segoe UI");
-                CreateFontW(-px(size), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, face.as_ptr())
+                CreateFontW(
+                    -px(size),
+                    0,
+                    0,
+                    0,
+                    weight,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    5,
+                    0,
+                    face.as_ptr(),
+                )
             };
             let (big, normal) = (font(22, 600), font(15, 400));
-            let child = |class: &str, text: &str, style: u32, x: i32, y: i32, w: i32, h: i32, id: usize, f: HFONT| {
+            let child = |class: &str,
+                         text: &str,
+                         style: u32,
+                         x: i32,
+                         y: i32,
+                         w: i32,
+                         h: i32,
+                         id: usize,
+                         f: HFONT| {
                 let (c, t) = (wide(class), wide(text));
                 let c = CreateWindowExW(
                     0,
@@ -133,9 +156,39 @@ mod win {
                 c
             };
             // SS_NOPREFIX: an & in a path is not an underline; SS_EDITCONTROL: long paths wrap
-            child("STATIC", crate::game::id().title, WS_VISIBLE | 0x80, 20, 16, 510, 32, 0, big);
-            let text = child("STATIC", "Starting...", WS_VISIBLE | 0x80 | 0x2000, 20, 58, 510, 190, 0, normal);
-            let button = child("BUTTON", "Close", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP, 430, 255, 100, 28, CLOSE_ID, normal);
+            child(
+                "STATIC",
+                crate::game::id().title,
+                WS_VISIBLE | 0x80,
+                20,
+                16,
+                510,
+                32,
+                0,
+                big,
+            );
+            let text = child(
+                "STATIC",
+                "Starting...",
+                WS_VISIBLE | 0x80 | 0x2000,
+                20,
+                58,
+                510,
+                190,
+                0,
+                normal,
+            );
+            let button = child(
+                "BUTTON",
+                "Close",
+                BS_DEFPUSHBUTTON as u32 | WS_TABSTOP,
+                430,
+                255,
+                100,
+                28,
+                CLOSE_ID,
+                normal,
+            );
             TEXT.store(text as isize, Ordering::Release);
             BUTTON.store(button as isize, Ordering::Release);
             WINDOW.store(hwnd as isize, Ordering::Release);
@@ -205,8 +258,17 @@ mod unix {
         if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
             return;
         }
-        let Ok(exe) = std::env::current_exe() else { return };
-        let Ok(mut child) = Command::new(exe).arg("--splash").stdin(Stdio::piped()).stdout(Stdio::null()).spawn() else { return };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let Ok(mut child) = Command::new(exe)
+            .arg("--splash")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+        else {
+            return;
+        };
         *PIPE.lock().unwrap() = child.stdin.take();
         *w = Some(std::thread::spawn(move || {
             let _ = child.wait();
@@ -272,17 +334,28 @@ mod unix {
 
     /// `fcop --splash`: the window, until its input ends or the player closes it.
     pub fn child() {
-        let Ok(el) = EventLoop::<Msg>::with_user_event().build() else { return };
+        let Ok(el) = EventLoop::<Msg>::with_user_event().build() else {
+            return;
+        };
         let proxy = el.create_proxy();
         std::thread::spawn(move || {
             for line in std::io::stdin().lines() {
                 let Ok(line) = line else { break };
                 let text = line.get(1..).unwrap_or("").replace('\u{1f}', "\n");
-                let _ = proxy.send_event(if line.starts_with('f') { Msg::Fail(text) } else { Msg::Status(text) });
+                let _ = proxy.send_event(if line.starts_with('f') {
+                    Msg::Fail(text)
+                } else {
+                    Msg::Status(text)
+                });
             }
             let _ = proxy.send_event(Msg::End);
         });
-        let mut app = App { text: "Starting...".into(), failed: false, cursor: (0.0, 0.0), window: None };
+        let mut app = App {
+            text: "Starting...".into(),
+            failed: false,
+            cursor: (0.0, 0.0),
+            window: None,
+        };
         let _ = el.run_app(&mut app);
     }
 
@@ -292,7 +365,11 @@ mod unix {
         for para in text.split('\n') {
             let mut line = String::new();
             for word in para.split(' ') {
-                let joined = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+                let joined = if line.is_empty() {
+                    word.to_string()
+                } else {
+                    format!("{line} {word}")
+                };
                 if text_width(&joined) <= width {
                     line = joined;
                     continue;
@@ -334,7 +411,9 @@ mod unix {
 
     impl App {
         fn draw(&mut self) {
-            let Some((win, gl)) = &mut self.window else { return };
+            let Some((win, gl)) = &mut self.window else {
+                return;
+            };
             let mut px = vec![BACK; (W * H) as usize];
             text(&mut px, 10, 10, crate::game::id().title, TITLE);
             let bottom = if self.failed { BUTTON[1] - 4 } else { H - 10 };
@@ -353,7 +432,13 @@ mod unix {
                         px[(y * W + x) as usize] = if edge { EDGE } else { FACE };
                     }
                 }
-                text(&mut px, (x0 + x1 - text_width("Close")) / 2, (y0 + y1 - 8) / 2 + 1, "Close", TEXT);
+                text(
+                    &mut px,
+                    (x0 + x1 - text_width("Close")) / 2,
+                    (y0 + y1 - 8) / 2 + 1,
+                    "Close",
+                    TEXT,
+                );
             }
             let size = win.inner_size();
             gl.frame(&px, W as u32, H as u32);
@@ -362,10 +447,20 @@ mod unix {
 
         /// The cursor in picture pixels.
         fn at(&self) -> (i32, i32) {
-            let Some((win, _)) = &self.window else { return (-1, -1) };
+            let Some((win, _)) = &self.window else {
+                return (-1, -1);
+            };
             let size = win.inner_size();
-            let (ox, oy, s) = crate::platform::window::fit(W as u32, H as u32, size.width.max(1), size.height.max(1));
-            (((self.cursor.0 - ox) / s) as i32, ((self.cursor.1 - oy) / s) as i32)
+            let (ox, oy, s) = crate::platform::window::fit(
+                W as u32,
+                H as u32,
+                size.width.max(1),
+                size.height.max(1),
+            );
+            (
+                ((self.cursor.0 - ox) / s) as i32,
+                ((self.cursor.1 - oy) / s) as i32,
+            )
         }
     }
 
@@ -408,7 +503,11 @@ mod unix {
                 }
                 WindowEvent::RedrawRequested => self.draw(),
                 WindowEvent::CursorMoved { position, .. } => self.cursor = (position.x, position.y),
-                WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } if self.failed => {
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } if self.failed => {
                     let (x, y) = self.at();
                     let [x0, y0, x1, y1] = BUTTON;
                     if (x0..x1).contains(&x) && (y0..y1).contains(&y) {

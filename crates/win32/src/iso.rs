@@ -107,7 +107,12 @@ impl Iso {
         self.udf = Some(start);
         let root = start + le32(&fsd, 404);
         let size = self.udf_entry(root).ok()?.0;
-        self.root = Entry { name: String::new(), dir: true, sector: root, size };
+        self.root = Entry {
+            name: String::new(),
+            dir: true,
+            sector: root,
+            size,
+        };
         Some(())
     }
 
@@ -129,8 +134,14 @@ impl Iso {
         let start = self.udf.unwrap_or(0);
         // short or long allocation descriptors (length, block in the partition), or the data
         let extents = match le16(&d, 34) & 7 {
-            0 => ads.chunks_exact(8).map(|a| (start + le32(a, 4), le32(a, 0) & 0x3fff_ffff)).collect(),
-            1 => ads.chunks_exact(16).map(|a| (start + le32(a, 4), le32(a, 0) & 0x3fff_ffff)).collect(),
+            0 => ads
+                .chunks_exact(8)
+                .map(|a| (start + le32(a, 4), le32(a, 0) & 0x3fff_ffff))
+                .collect(),
+            1 => ads
+                .chunks_exact(16)
+                .map(|a| (start + le32(a, 4), le32(a, 0) & 0x3fff_ffff))
+                .collect(),
             3 => return Ok((size, Err(ads.to_vec()))),
             _ => return Err(bad()),
         };
@@ -146,7 +157,10 @@ impl Iso {
         while at + 38 <= data.len() && tag(&data[at..]) == 257 {
             let fid = &data[at..];
             let (kind, lfi, liu) = (fid[18], fid[19] as usize, le16(fid, 36) as usize);
-            let name = fid.get(38 + liu..38 + liu + lfi).map(dstring).unwrap_or_default();
+            let name = fid
+                .get(38 + liu..38 + liu + lfi)
+                .map(dstring)
+                .unwrap_or_default();
             at += (38 + liu + lfi + 3) & !3;
             // deleted, or the parent folder
             if kind & (4 | 8) != 0 || name.is_empty() {
@@ -154,14 +168,20 @@ impl Iso {
             }
             let sector = self.udf.unwrap_or(0) + le32(fid, 24);
             let size = self.udf_entry(sector)?.0;
-            out.push(Entry { name, dir: kind & 2 != 0, sector, size });
+            out.push(Entry {
+                name,
+                dir: kind & 2 != 0,
+                sector,
+                size,
+            });
         }
         Ok(out)
     }
 
     fn sector(&mut self, n: u32) -> std::io::Result<[u8; 2048]> {
         let mut b = [0u8; 2048];
-        self.file.seek(SeekFrom::Start(n as u64 * self.sector_size + self.data_at))?;
+        self.file
+            .seek(SeekFrom::Start(n as u64 * self.sector_size + self.data_at))?;
         self.file.read_exact(&mut b)?;
         Ok(b)
     }
@@ -182,7 +202,9 @@ impl Iso {
             // records do not cross sectors; a length of 0 ends the sector's
             while at < 2048 && d[at] != 0 {
                 let len = d[at] as usize;
-                if let Some(e) = record(&d[at..(at + len).min(2048)], self.joliet).filter(|e| !e.name.is_empty()) {
+                if let Some(e) =
+                    record(&d[at..(at + len).min(2048)], self.joliet).filter(|e| !e.name.is_empty())
+                {
                     out.push(e);
                 }
                 at += len;
@@ -193,19 +215,27 @@ impl Iso {
 
     /// The entry called `name` (any case) in `dir`.
     pub fn get(&mut self, dir: &Entry, name: &str) -> Option<Entry> {
-        self.list(dir).ok()?.into_iter().find(|e| e.name.eq_ignore_ascii_case(name))
+        self.list(dir)
+            .ok()?
+            .into_iter()
+            .find(|e| e.name.eq_ignore_ascii_case(name))
     }
 
     /// The first file called `name` in `dir` or below, with its folder.
     pub fn find(&mut self, dir: &Entry, name: &str, depth: u32) -> Option<(Entry, Entry)> {
         let list = self.list(dir).ok()?;
-        if let Some(e) = list.iter().find(|e| !e.dir && e.name.eq_ignore_ascii_case(name)) {
+        if let Some(e) = list
+            .iter()
+            .find(|e| !e.dir && e.name.eq_ignore_ascii_case(name))
+        {
             return Some((dir.clone(), e.clone()));
         }
         if depth == 0 {
             return None;
         }
-        list.iter().filter(|e| e.dir).find_map(|d| self.find(d, name, depth - 1))
+        list.iter()
+            .filter(|e| e.dir)
+            .find_map(|d| self.find(d, name, depth - 1))
     }
 
     /// Copy a file's contents to `out`.
@@ -282,7 +312,12 @@ impl Iso {
 
 impl Default for Entry {
     fn default() -> Self {
-        Entry { name: String::new(), dir: true, sector: 0, size: 0 }
+        Entry {
+            name: String::new(),
+            dir: true,
+            sector: 0,
+            size: 0,
+        }
     }
 }
 
@@ -303,7 +338,12 @@ fn tag(d: &[u8]) -> u16 {
 fn dstring(d: &[u8]) -> String {
     match d.split_first() {
         Some((8, rest)) => rest.iter().map(|&b| b as char).collect(),
-        Some((16, rest)) => String::from_utf16_lossy(&rest.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect::<Vec<_>>()),
+        Some((16, rest)) => String::from_utf16_lossy(
+            &rest
+                .chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        ),
         _ => String::new(),
     }
 }
@@ -327,7 +367,10 @@ fn record(r: &[u8], joliet: bool) -> Option<Entry> {
         return Some(entry(String::new()));
     }
     let mut name = if joliet {
-        let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
         String::from_utf16_lossy(&units)
     } else {
         raw.iter().map(|&b| b as char).collect()

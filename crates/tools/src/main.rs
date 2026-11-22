@@ -28,12 +28,16 @@ use recomp::smc::{PatchTable, Smc, SmcSpec};
 use std::path::Path;
 
 fn hex(s: &str) -> u32 {
-    u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or_else(|_| panic!("not a hex address: {s}"))
+    u32::from_str_radix(s.trim_start_matches("0x"), 16)
+        .unwrap_or_else(|_| panic!("not a hex address: {s}"))
 }
 
 /// The value of option `--name`, if given.
 fn opt<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|k| args.get(k + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|k| args.get(k + 1))
+        .map(String::as_str)
 }
 
 /// The arguments without the options and their values.
@@ -56,10 +60,16 @@ fn load(args: &[String]) -> (Image, Vec<(u32, u32, String)>) {
     let p = plain(args);
     let img = Image::load(Path::new(p.get(1).expect("path to the EXE"))).unwrap();
     if let Some(s) = opt(args, "--symbols") {
-        recomp::image::set_symbols(Box::leak(std::fs::read_to_string(s).expect("symbols.txt").into_boxed_str()));
+        recomp::image::set_symbols(Box::leak(
+            std::fs::read_to_string(s)
+                .expect("symbols.txt")
+                .into_boxed_str(),
+        ));
     }
     let ranges = match opt(args, "--functions") {
-        Some(f) => recomp::image::load_functions(&std::fs::read_to_string(f).expect("functions.json")),
+        Some(f) => {
+            recomp::image::load_functions(&std::fs::read_to_string(f).expect("functions.json"))
+        }
         None => {
             // from the entry point and the exports (a DLL)
             let mut seeds = vec![(img.entry, "entry".to_string())];
@@ -77,10 +87,16 @@ fn smc_spec(args: &[String]) -> SmcSpec {
         .filter(|w| w[0] == "--patch")
         .map(|w| {
             let (at, n) = w[1].split_once(':').expect("--patch <address>:<variants>");
-            PatchTable { at: hex(at), variants: n.parse().expect("variants") }
+            PatchTable {
+                at: hex(at),
+                variants: n.parse().expect("variants"),
+            }
         })
         .collect();
-    SmcSpec { patch_tables, imm_fields: Vec::new() }
+    SmcSpec {
+        patch_tables,
+        imm_fields: Vec::new(),
+    }
 }
 
 fn main() {
@@ -97,7 +113,9 @@ fn main() {
         Some("movie") => movie(&args),
         Some("vermap") => vermap::run(&args),
         _ => {
-            eprintln!("usage: rtools imports|missing|dis|at|smc|dialogs|iso|iscab|movie|vermap ... (see the source's head)");
+            eprintln!(
+                "usage: rtools imports|missing|dis|at|smc|dialogs|iso|iscab|movie|vermap ... (see the source's head)"
+            );
             std::process::exit(2);
         }
     }
@@ -142,7 +160,9 @@ fn dis(args: &[String]) {
     let mut code = Code::new(&img);
     let prog = Program::build(&mut code, &ranges);
     let line = |a: u32, i: &iced_x86::Instruction| {
-        let target = (i.near_branch_target() as u32 != 0).then(|| symbols().get(&(i.near_branch_target() as u32))).flatten();
+        let target = (i.near_branch_target() as u32 != 0)
+            .then(|| symbols().get(&(i.near_branch_target() as u32)))
+            .flatten();
         match target {
             Some(n) => println!("{a:08x}  {i}  ; {n}"),
             None => println!("{a:08x}  {i}"),
@@ -150,7 +170,10 @@ fn dis(args: &[String]) {
     };
     if p[2] == "all" {
         for (addr, f) in &prog.fns {
-            println!("== {addr:08x} {}", symbols().get(addr).map_or("", |n| n.as_str()));
+            println!(
+                "== {addr:08x} {}",
+                symbols().get(addr).map_or("", |n| n.as_str())
+            );
             for &a in &f.ins {
                 line(a, &code.at(a).unwrap());
             }
@@ -173,7 +196,10 @@ fn at(args: &[String]) {
     let mut code = Code::new(&img);
     for a in &args[2..] {
         let a = hex(a);
-        println!("{a:08x}  {}", code.at(a).map_or("?".into(), |i| i.to_string()));
+        println!(
+            "{a:08x}  {}",
+            code.at(a).map_or("?".into(), |i| i.to_string())
+        );
     }
 }
 
@@ -182,22 +208,37 @@ fn smc(args: &[String]) {
     let mut code = Code::new(&img);
     let prog = Program::build(&mut code, &ranges);
     let smc = Smc::find(&prog, &mut code, &smc_spec(args));
-    let show = |what: &str, m: &std::collections::HashMap<u32, recomp::smc::Field>, code: &mut Code| {
-        let mut v: Vec<_> = m.iter().collect();
-        v.sort_by_key(|e| e.0);
-        for (a, f) in v {
-            println!("{what:<5} {a:#x}  {:<36} field {:#x} ({} bytes)", code.at(*a).unwrap().to_string(), f.at, f.size);
-        }
-    };
+    let show =
+        |what: &str, m: &std::collections::HashMap<u32, recomp::smc::Field>, code: &mut Code| {
+            let mut v: Vec<_> = m.iter().collect();
+            v.sort_by_key(|e| e.0);
+            for (a, f) in v {
+                println!(
+                    "{what:<5} {a:#x}  {:<36} field {:#x} ({} bytes)",
+                    code.at(*a).unwrap().to_string(),
+                    f.at,
+                    f.size
+                );
+            }
+        };
     show("imm", &smc.imm, &mut code);
     show("disp", &smc.disp, &mut code);
     let mut v: Vec<_> = smc.variants.iter().collect();
     v.sort_by_key(|e| e.0);
     for (a, vs) in v {
         let alts: Vec<String> = vs.iter().map(|(_, i)| i.to_string()).collect();
-        println!("var   {a:#x}  {:<36} -> {}", code.at(*a).unwrap().to_string(), alts.join(" | "));
+        println!(
+            "var   {a:#x}  {:<36} -> {}",
+            code.at(*a).unwrap().to_string(),
+            alts.join(" | ")
+        );
     }
-    println!("{} immediates/offsets, {} displacements, {} rewritten instructions", smc.imm.len(), smc.disp.len(), smc.variants.len());
+    println!(
+        "{} immediates/offsets, {} displacements, {} rewritten instructions",
+        smc.imm.len(),
+        smc.disp.len(),
+        smc.variants.len()
+    );
 }
 
 fn dialogs(args: &[String]) {
@@ -211,9 +252,19 @@ fn dialogs(args: &[String]) {
             println!("{name:?}: cannot parse");
             continue;
         };
-        println!("{name:?} \"{}\" {:?} style {:#x} font {:?}", t.title, t.rect, t.style, t.font);
+        println!(
+            "{name:?} \"{}\" {:?} style {:#x} font {:?}",
+            t.title, t.rect, t.style, t.font
+        );
         for i in &t.items {
-            println!("    {:>5} {:<12} {:?} style {:#010x} {:?}", i.id as i32, format!("{:?}", i.class), i.rect, i.style, i.text);
+            println!(
+                "    {:>5} {:<12} {:?} style {:#010x} {:?}",
+                i.id as i32,
+                format!("{:?}", i.class),
+                i.rect,
+                i.style,
+                i.text
+            );
         }
     }
 }
@@ -222,7 +273,13 @@ fn iso(args: &[String]) {
     use win32::iso::{Entry, Iso};
     fn show(iso: &mut Iso, dir: &Entry, indent: usize) {
         for e in iso.list(dir).expect("cannot read the image") {
-            println!("{:indent$}{}{} {}", "", e.name, if e.dir { "/" } else { "" }, e.size);
+            println!(
+                "{:indent$}{}{} {}",
+                "",
+                e.name,
+                if e.dir { "/" } else { "" },
+                e.size
+            );
             if e.dir {
                 show(iso, &e, indent + 2);
             }
@@ -231,7 +288,8 @@ fn iso(args: &[String]) {
     let mut iso = Iso::open(args[1].as_ref()).expect("not a CD image");
     let root = iso.root();
     if let (Some("--extract"), Some(to)) = (args.get(2).map(String::as_str), args.get(3)) {
-        iso.extract(&root, to.as_ref()).expect("cannot extract the image");
+        iso.extract(&root, to.as_ref())
+            .expect("cannot extract the image");
         return;
     }
     show(&mut iso, &root, 0);
@@ -244,7 +302,12 @@ fn iscab(args: &[String]) {
     let hdr = std::fs::read(path).expect("cannot read the header");
     let head = Header::parse(&hdr).unwrap_or_else(|e| panic!("{e}"));
     let to = opt(args, "--extract").map(Path::new);
-    println!("InstallShield {}: {} files, {} groups", head.major, head.files.len(), head.groups.len());
+    println!(
+        "InstallShield {}: {} files, {} groups",
+        head.major,
+        head.files.len(),
+        head.groups.len()
+    );
     // the cabs by volume: data1.cab, data2.cab, ... beside the header (the header itself when
     // it is data1.cab)
     let mut cabs: std::collections::HashMap<u16, Vec<u8>> = Default::default();
@@ -252,11 +315,17 @@ fn iscab(args: &[String]) {
     for g in &head.groups {
         println!("{} ({}..={}) {}", g.name, g.first, g.last, g.dest);
         for k in g.first..=g.last {
-            let Some(f) = head.files.get(k as usize) else { continue };
+            let Some(f) = head.files.get(k as usize) else {
+                continue;
+            };
             if f.flags & INVALID != 0 {
                 continue;
             }
-            let name = if f.dir.is_empty() { f.name.clone() } else { format!("{}\\{}", f.dir, f.name) };
+            let name = if f.dir.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{}\\{}", f.dir, f.name)
+            };
             println!("  {name} {}", f.size);
             let Some(to) = to else { continue };
             if f.beside() {
@@ -265,9 +334,15 @@ fn iscab(args: &[String]) {
             }
             let cab = cabs.entry(f.volume).or_insert_with(|| {
                 let file = path.with_file_name(format!("data{}.cab", f.volume));
-                if file == path { hdr.clone() } else { std::fs::read(&file).expect("cannot read the cab") }
+                if file == path {
+                    hdr.clone()
+                } else {
+                    std::fs::read(&file).expect("cannot read the cab")
+                }
             });
-            let packed = cab.get(f.offset as usize..(f.offset + f.packed) as usize).unwrap_or(&[]);
+            let packed = cab
+                .get(f.offset as usize..(f.offset + f.packed) as usize)
+                .unwrap_or(&[]);
             match iscab::unpack(f, packed) {
                 Ok(data) => {
                     let out = name.split('\\').fold(to.join(&g.name), |p, s| p.join(s));
@@ -294,24 +369,35 @@ fn movie(args: &[String]) {
     let out = args.get(2);
     let t = std::time::Instant::now();
     let s = mpeg::demux(&data);
-    println!("video {} bytes (start {:?}), audio {} bytes (start {:?})", s.video.len(), s.video_start, s.audio.len(), s.audio_start);
+    println!(
+        "video {} bytes (start {:?}), audio {} bytes (start {:?})",
+        s.video.len(),
+        s.video_start,
+        s.audio.len(),
+        s.audio_start
+    );
     let mut v = mpeg::video::Decoder::new(&s.video).expect("no video sequence header");
     println!("{}x{} at {} fps", v.width, v.height, v.fps);
     let mut rgb = Vec::new();
-    let mut frames = out.map(|d| std::io::BufWriter::new(std::fs::File::create(format!("{d}/frames.rgb")).unwrap()));
+    let mut frames = out.map(|d| {
+        std::io::BufWriter::new(std::fs::File::create(format!("{d}/frames.rgb")).unwrap())
+    });
     let mut n = 0;
     while let Some(f) = v.next_frame() {
         f.to_rgb(&mut rgb);
         if let Some(w) = &mut frames {
             for p in &rgb {
-                w.write_all(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]).unwrap();
+                w.write_all(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8])
+                    .unwrap();
             }
         }
         n += 1;
     }
     println!("{n} frames ({:.2} s)", n as f64 / v.fps);
     if let Some(mut a) = mpeg::mp2::Decoder::new(&s.audio) {
-        let mut raw = out.map(|d| std::io::BufWriter::new(std::fs::File::create(format!("{d}/audio.raw")).unwrap()));
+        let mut raw = out.map(|d| {
+            std::io::BufWriter::new(std::fs::File::create(format!("{d}/audio.raw")).unwrap())
+        });
         let mut samples = 0;
         while let Some(frame) = a.next_frame() {
             if let Some(w) = &mut raw {
@@ -322,7 +408,11 @@ fn movie(args: &[String]) {
             }
             samples += frame.len();
         }
-        println!("audio {} Hz, {samples} samples ({:.2} s)", a.sample_rate, samples as f64 / a.sample_rate as f64);
+        println!(
+            "audio {} Hz, {samples} samples ({:.2} s)",
+            a.sample_rate,
+            samples as f64 / a.sample_rate as f64
+        );
     }
     println!("decoded in {:.2} s", t.elapsed().as_secs_f64());
 }

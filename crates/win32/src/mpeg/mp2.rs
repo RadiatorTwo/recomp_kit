@@ -7,28 +7,41 @@ use super::tables::SYNTHESIS_WINDOW;
 pub const SAMPLES_PER_FRAME: usize = 1152;
 
 const SAMPLE_RATE: [u32; 3] = [44100, 48000, 32000];
-const BIT_RATE: [u32; 14] = [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
+const BIT_RATE: [u32; 14] = [
+    32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384,
+];
 const SCALEFACTOR_BASE: [i32; 3] = [0x0200_0000, 0x0196_5fea, 0x0142_8a30];
 
 const MODE_JOINT_STEREO: u32 = 1;
 const MODE_MONO: u32 = 3;
 
 // Quantizer lookup, step 1: bitrate classes (mono; stereo, by bitrate per channel)
-const QUANT_LUT_STEP_1: [[u8; 14]; 2] = [[0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2], [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2]];
+const QUANT_LUT_STEP_1: [[u8; 14]; 2] = [
+    [0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+    [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2],
+];
 
 // Step 2: bitrate class, sample rate -> B.2 table (64: high-rate) | sblimit
 const TAB_A: u8 = 27 | 64;
 const TAB_B: u8 = 30 | 64;
 const TAB_C: u8 = 8;
 const TAB_D: u8 = 12;
-const QUANT_LUT_STEP_2: [[u8; 3]; 3] = [[TAB_C, TAB_C, TAB_D], [TAB_A, TAB_A, TAB_A], [TAB_B, TAB_A, TAB_B]];
+const QUANT_LUT_STEP_2: [[u8; 3]; 3] = [
+    [TAB_C, TAB_C, TAB_D],
+    [TAB_A, TAB_A, TAB_A],
+    [TAB_B, TAB_A, TAB_B],
+];
 
 // Step 3: B.2 table, subband -> number of allocation bits << 4 | row of step 4
 const QUANT_LUT_STEP_3: [[u8; 32]; 2] = [
-    [0x44, 0x44, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [
-        0x43, 0x43, 0x43, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x20,
-        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0, 0,
+        0x44, 0x44, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0x34, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+        0x43, 0x43, 0x43, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x31, 0x31, 0x31, 0x31,
+        0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0, 0,
     ],
 ];
 
@@ -51,7 +64,11 @@ struct Quantizer {
 }
 
 const fn q(levels: i32, group: bool, bits: u32) -> Quantizer {
-    Quantizer { levels, group, bits }
+    Quantizer {
+        levels,
+        group,
+        bits,
+    }
 }
 
 const QUANT_TAB: [Quantizer; 17] = [
@@ -167,7 +184,11 @@ impl<'a> Decoder<'a> {
         self.bits.skip(1); // private
         let mode = self.bits.read(2);
         // a different header after the first: a false sync word
-        if self.has_header && (self.bitrate_index != bitrate_index || self.samplerate_index != samplerate_index || self.mode != mode) {
+        if self.has_header
+            && (self.bitrate_index != bitrate_index
+                || self.samplerate_index != samplerate_index
+                || self.mode != mode)
+        {
             return None;
         }
         self.bitrate_index = bitrate_index;
@@ -184,7 +205,8 @@ impl<'a> Decoder<'a> {
         if has_crc {
             self.bits.skip(16);
         }
-        let size = (144000 * BIT_RATE[bitrate_index] / SAMPLE_RATE[samplerate_index]) as usize + padding;
+        let size =
+            (144000 * BIT_RATE[bitrate_index] / SAMPLE_RATE[samplerate_index]) as usize + padding;
         Some(size - if has_crc { 6 } else { 4 })
     }
 
@@ -341,7 +363,11 @@ impl<'a> Decoder<'a> {
             val /= adj;
             [a, val % adj, val / adj]
         } else {
-            [self.bits.read(q.bits) as i32, self.bits.read(q.bits) as i32, self.bits.read(q.bits) as i32]
+            [
+                self.bits.read(q.bits) as i32,
+                self.bits.read(q.bits) as i32,
+                self.bits.read(q.bits) as i32,
+            ]
         };
         // postmultiply
         let scale = 65536 / (adj + 1);
@@ -355,7 +381,12 @@ impl<'a> Decoder<'a> {
 }
 
 /// The 32-point matrixing of sub-sample `ss` of all subbands into `d[dp..dp + 64]`.
-#[allow(unused_assignments, clippy::excessive_precision, clippy::approx_constant, clippy::identity_op)]
+#[allow(
+    unused_assignments,
+    clippy::excessive_precision,
+    clippy::approx_constant,
+    clippy::identity_op
+)]
 fn idct36(s: &[[i32; 3]; 32], ss: usize, d: &mut [f32; 1024], dp: usize) {
     let mut t01: f32 = (s[0][ss] + s[31][ss]) as f32;
     let mut t02: f32 = (s[0][ss] - s[31][ss]) as f32 * 0.500602998235;

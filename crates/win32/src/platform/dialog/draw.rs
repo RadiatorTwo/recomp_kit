@@ -53,7 +53,12 @@ impl Canvas {
     /// Text with its top left at (x, y), clipped to `r`.
     fn text(&mut self, x: i32, y: i32, s: &str, c: u32, r: [i32; 4]) {
         let keep = self.clip;
-        self.clip = [r[0].max(keep[0]), r[1].max(keep[1]), r[2].min(keep[2]), r[3].min(keep[3])];
+        self.clip = [
+            r[0].max(keep[0]),
+            r[1].max(keep[1]),
+            r[2].min(keep[2]),
+            r[3].min(keep[3]),
+        ];
         let mut x = x;
         for ch in s.chars() {
             let Some((g, l, w)) = glyph(ch) else {
@@ -118,7 +123,10 @@ static CARET: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::n
 /// The text caret blinks as Windows' does: shown and hidden for 530 ms each.
 pub fn caret_phase() -> u64 {
     let mut c = CARET.lock().unwrap();
-    c.get_or_insert_with(std::time::Instant::now).elapsed().as_millis() as u64 / 530
+    c.get_or_insert_with(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+        / 530
 }
 
 /// After a key or a click into the text the caret shows at once and blinks from there.
@@ -148,7 +156,9 @@ fn inset(r: [i32; 4], d: i32) -> [i32; 4] {
 
 /// Text drawn for `&`-marked mnemonics: without the `&`.
 fn plain(s: &str) -> String {
-    s.replace("&&", "\u{1}").replace('&', "").replace('\u{1}', "&")
+    s.replace("&&", "\u{1}")
+        .replace('&', "")
+        .replace('\u{1}', "&")
 }
 
 fn control(cv: &mut Canvas, d: &Dialog, k: usize) {
@@ -205,7 +215,16 @@ fn control(cv: &mut Canvas, d: &Dialog, k: usize) {
             let boxed = c.style & 0x0080_0000 != 0 || c.style & 0x1000 != 0;
             let mut t = r;
             if boxed {
-                cv.fill(r, if c.inverted { MARK } else if hot { FACE_HOT } else { WELL });
+                cv.fill(
+                    r,
+                    if c.inverted {
+                        MARK
+                    } else if hot {
+                        FACE_HOT
+                    } else {
+                        WELL
+                    },
+                );
                 cv.frame(r, if hot { EDGE_HI } else { EDGE });
                 t = [r[0] + 3, r[1], r[2] - 3, r[3]];
             }
@@ -228,17 +247,37 @@ fn control(cv: &mut Canvas, d: &Dialog, k: usize) {
         Kind::Edit { .. } => {
             cv.fill(r, WELL);
             cv.frame(r, if d.focus == Some(k) { EDGE_HI } else { EDGE });
-            typed_text(cv, [r[0] + 1, r[1], r[2] - 1, r[3]], &c.text, d.focus == Some(k), false, fg);
+            typed_text(
+                cv,
+                [r[0] + 1, r[1], r[2] - 1, r[3]],
+                &c.text,
+                d.focus == Some(k),
+                false,
+                fg,
+            );
         }
         Kind::List { items, sel, top } => {
             cv.fill(r, WELL);
             cv.frame(r, EDGE);
             rows(cv, inset(r, 1), items, *sel, *top, fg);
         }
-        Kind::Combo { items, sel, edit, whole, .. } => {
+        Kind::Combo {
+            items,
+            sel,
+            edit,
+            whole,
+            ..
+        } => {
             let f = c.face();
             cv.fill(inset(f, 1), if hot { FACE_HOT } else { FACE });
-            cv.frame(f, if hot || d.focus == Some(k) { EDGE_HI } else { EDGE });
+            cv.frame(
+                f,
+                if hot || d.focus == Some(k) {
+                    EDGE_HI
+                } else {
+                    EDGE
+                },
+            );
             if *edit {
                 // the text that can be typed: in a well, selected as a whole or with a caret
                 let w = [f[0] + 2, f[1] + 2, f[2] - 14, f[3] - 2];
@@ -305,7 +344,13 @@ fn dialog(cv: &mut Canvas, d: &Dialog, above: bool) {
     }
     // open combo lists go over everything
     for c in &d.controls {
-        if let (Some(lr), Kind::Combo { items, sel, top, .. }) = (c.drop_rect(), &c.kind) {
+        if let (
+            Some(lr),
+            Kind::Combo {
+                items, sel, top, ..
+            },
+        ) = (c.drop_rect(), &c.kind)
+        {
             cv.fill(lr, 0xff05_0a28);
             cv.frame(lr, EDGE_HI);
             rows(cv, inset(lr, 1), items, *sel, *top, TEXT);
@@ -315,7 +360,10 @@ fn dialog(cv: &mut Canvas, d: &Dialog, above: bool) {
 
 /// All open dialogs, the topmost last, as ARGB pixels of OV_W x OV_H.
 pub fn render(dialogs: &[Dialog]) -> Vec<u32> {
-    let mut cv = Canvas { px: vec![0; (OV_W * OV_H) as usize], clip: [0, 0, OV_W, OV_H] };
+    let mut cv = Canvas {
+        px: vec![0; (OV_W * OV_H) as usize],
+        clip: [0, 0, OV_W, OV_H],
+    };
     for (k, d) in dialogs.iter().enumerate() {
         dialog(&mut cv, d, k > 0);
     }

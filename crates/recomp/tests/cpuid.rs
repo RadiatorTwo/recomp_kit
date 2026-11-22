@@ -5,9 +5,9 @@
 mod common;
 
 use common::{Guest, SCRATCH, Snippet};
-use recomp::rt::{EAX, EBX, ECX, EDX};
 use iced_x86::IcedError;
 use iced_x86::code_asm::*;
+use recomp::rt::{EAX, EBX, ECX, EDX};
 
 /// eax = family/model/stepping, edx = feature bits of leaf 1, ebx = ecx = 0
 fn cpuid1(a: &mut CodeAssembler) -> Result<(), IcedError> {
@@ -38,7 +38,10 @@ fn mmx_bit() {
     let cpu = g.call(0, &[]);
     assert_eq!(cpu.r[EAX], 0x543, "a Pentium");
     assert_eq!((cpu.r[EBX], cpu.r[ECX]), (0, 0));
-    assert_eq!(cpu.r[EDX], 0x0000_8111, "FPU, TSC, CX8, CMOV, no MMX by default");
+    assert_eq!(
+        cpu.r[EDX], 0x0000_8111,
+        "FPU, TSC, CX8, CMOV, no MMX by default"
+    );
     recomp::config::set_cpuid_mmx(true);
     assert_eq!(g.call(0, &[]).r[EDX], 0x0080_8111, "with MMX");
     recomp::config::set_cpuid_mmx(false);

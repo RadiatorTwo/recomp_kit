@@ -26,7 +26,11 @@ struct Fonts {
     found: Option<Vec<(String, bool, PathBuf)>>,
 }
 
-static FONTS: Mutex<Fonts> = Mutex::new(Fonts { specs: Vec::new(), files: BTreeMap::new(), found: None });
+static FONTS: Mutex<Fonts> = Mutex::new(Fonts {
+    specs: Vec::new(),
+    files: BTreeMap::new(),
+    found: None,
+});
 
 fn fonts() -> MutexGuard<'static, Fonts> {
     FONTS.lock().unwrap_or_else(|e| e.into_inner())
@@ -42,7 +46,12 @@ pub fn add(spec: Spec) -> u32 {
 fn load(f: &mut Fonts, path: &Path) -> Option<Arc<FontVec>> {
     f.files
         .entry(path.to_path_buf())
-        .or_insert_with(|| std::fs::read(path).ok().and_then(|d| FontVec::try_from_vec(d).ok()).map(Arc::new))
+        .or_insert_with(|| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|d| FontVec::try_from_vec(d).ok())
+                .map(Arc::new)
+        })
         .clone()
 }
 
@@ -50,7 +59,10 @@ fn load(f: &mut Fonts, path: &Path) -> Option<Arc<FontVec>> {
 fn family(data: &[u8]) -> Option<(String, bool)> {
     let face = ttf_parser::Face::parse(data, 0).ok()?;
     let name = |id: u16| {
-        face.names().into_iter().filter(|n| n.name_id == id && n.is_unicode()).find_map(|n| n.to_string())
+        face.names()
+            .into_iter()
+            .filter(|n| n.name_id == id && n.is_unicode())
+            .find_map(|n| n.to_string())
     };
     let fam = name(1)?;
     let sub = name(2).unwrap_or_default().to_ascii_lowercase();
@@ -96,7 +108,11 @@ fn file_for(f: &mut Fonts, spec: &Spec) -> Option<Arc<FontVec>> {
     let bold = spec.weight >= 600;
     let found = f.found.clone().unwrap_or_default();
     let same: Vec<&(String, bool, PathBuf)> = found.iter().filter(|x| x.0 == face).collect();
-    let pick = same.iter().find(|x| x.1 == bold).or(same.first()).map(|x| x.2.clone());
+    let pick = same
+        .iter()
+        .find(|x| x.1 == bold)
+        .or(same.first())
+        .map(|x| x.2.clone());
     let path = pick
         .or_else(|| windows_font(&face, bold))
         .or_else(|| found.first().map(|x| x.2.clone()))
@@ -121,7 +137,10 @@ fn sized(k: u32) -> Option<Sized> {
         h if h > 0 => h as f32,
         h => -h as f32 * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0),
     };
-    Some(Sized { font, scale: PxScale::from(px) })
+    Some(Sized {
+        font,
+        scale: PxScale::from(px),
+    })
 }
 
 /// TEXTMETRIC's numbers: cell height, ascent, descent, average and widest advance.
@@ -136,14 +155,28 @@ pub struct Metrics {
 
 pub fn metrics(k: u32) -> Metrics {
     let Some(s) = sized(k) else {
-        return Metrics { height: 16, ascent: 13, descent: 3, internal_leading: 0, avg_width: 8, max_width: 16 };
+        return Metrics {
+            height: 16,
+            ascent: 13,
+            descent: 3,
+            internal_leading: 0,
+            avg_width: 8,
+            max_width: 16,
+        };
     };
     let f = s.font.as_scaled(s.scale);
     let (ascent, descent) = (f.ascent().round() as i32, (-f.descent()).round() as i32);
     let adv = |c: char| f.h_advance(f.glyph_id(c)).round() as i32;
     let em = s.scale.y * s.font.units_per_em().unwrap_or(1000.0) / s.font.height_unscaled();
     let max_width = (0x20u8..0x7f).map(|b| adv(b as char)).max().unwrap_or(0);
-    Metrics { height: ascent + descent, ascent, descent, internal_leading: (ascent + descent - em.round() as i32).max(0), avg_width: adv('x'), max_width }
+    Metrics {
+        height: ascent + descent,
+        ascent,
+        descent,
+        internal_leading: (ascent + descent - em.round() as i32).max(0),
+        avg_width: adv('x'),
+        max_width,
+    }
 }
 
 /// A byte of text (Windows-1252 read as Latin-1) as a character.
@@ -153,9 +186,13 @@ fn ch(b: u8) -> char {
 
 /// Whole-pixel advance of each byte.
 pub fn advances(k: u32, text: &[u8]) -> Vec<i32> {
-    let Some(s) = sized(k) else { return text.iter().map(|_| 8).collect() };
+    let Some(s) = sized(k) else {
+        return text.iter().map(|_| 8).collect();
+    };
     let f = s.font.as_scaled(s.scale);
-    text.iter().map(|&b| f.h_advance(f.glyph_id(ch(b))).round() as i32).collect()
+    text.iter()
+        .map(|&b| f.h_advance(f.glyph_id(ch(b))).round() as i32)
+        .collect()
 }
 
 /// The size of a text: the sum of its advances, the cell height.
@@ -165,7 +202,13 @@ pub fn extent(k: u32, text: &[u8]) -> (i32, i32) {
 
 /// Draw a text with the top of its cell at `y` and its first character at `x`; `dx` the
 /// advances to use (ExtTextOutA's), else the font's. `put(x, y, coverage)` for each pixel.
-pub fn draw(k: u32, text: &[u8], (x, y): (i32, i32), dx: Option<&[i32]>, mut put: impl FnMut(i32, i32, f32)) {
+pub fn draw(
+    k: u32,
+    text: &[u8],
+    (x, y): (i32, i32),
+    dx: Option<&[i32]>,
+    mut put: impl FnMut(i32, i32, f32),
+) {
     let Some(s) = sized(k) else { return };
     let f = s.font.as_scaled(s.scale);
     let base = y as f32 + f.ascent().round();
@@ -178,7 +221,11 @@ pub fn draw(k: u32, text: &[u8], (x, y): (i32, i32), dx: Option<&[i32]>, mut put
             let r = o.px_bounds();
             o.draw(|gx, gy, c| {
                 if c > 0.0 {
-                    put(r.min.x as i32 + gx as i32, r.min.y as i32 + gy as i32, c.min(1.0));
+                    put(
+                        r.min.x as i32 + gx as i32,
+                        r.min.y as i32 + gy as i32,
+                        c.min(1.0),
+                    );
                 }
             });
         }

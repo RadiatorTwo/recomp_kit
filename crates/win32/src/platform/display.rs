@@ -19,7 +19,9 @@ fn packed() -> u32 {
     if v != u32::MAX {
         return v;
     }
-    let v = advapi32::value("", "RenderSize").and_then(|(_, d)| Some(u32::from_le_bytes(d.get(..4)?.try_into().ok()?))).unwrap_or(0);
+    let v = advapi32::value("", "RenderSize")
+        .and_then(|(_, d)| Some(u32::from_le_bytes(d.get(..4)?.try_into().ok()?)))
+        .unwrap_or(0);
     CHOSEN.store(v, Ordering::Relaxed);
     v
 }

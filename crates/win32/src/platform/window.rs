@@ -2,10 +2,10 @@
 //! on the game's main thread: the game creates its window, pumps its messages and presents its
 //! frames there.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
 use super::gl::Gl;
 use super::log;
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
@@ -21,7 +21,12 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 /// Input for the game, in game terms: Windows virtual-key codes and frame pixels.
 #[derive(Clone, Copy, Debug)]
 pub enum Input {
-    Key { vk: u8, scan: u8, down: bool, repeat: bool },
+    Key {
+        vk: u8,
+        scan: u8,
+        down: bool,
+        repeat: bool,
+    },
     Char(u8),
     Move(i32, i32),
     /// 0 left, 1 right, 2 middle, 3 back/X1, 4 forward/X2
@@ -180,7 +185,12 @@ pub fn pump(wait: Duration) {
         // a pad's Start is the Escape key (pause)
         if let Some(down) = super::dinput::poll() {
             let (vk, scan) = vk_of(KeyCode::Escape).unwrap();
-            h.app.input.push_back(Input::Key { vk, scan, down, repeat: false });
+            h.app.input.push_back(Input::Key {
+                vk,
+                scan,
+                down,
+                repeat: false,
+            });
         }
         let step = super::menupad::step(&mut h.app.input);
         h.app.pad_focus = step.focus;
@@ -231,7 +241,9 @@ fn scripted(input: &mut VecDeque<Input>) {
 pub fn script_text() -> &'static str {
     static TEXT: OnceLock<String> = OnceLock::new();
     TEXT.get_or_init(|| {
-        let Ok(v) = recomp::config::env("INPUT").ok_or(()) else { return String::new() };
+        let Ok(v) = recomp::config::env("INPUT").ok_or(()) else {
+            return String::new();
+        };
         let text = match v.strip_prefix('@') {
             Some(path) => std::fs::read_to_string(path).unwrap_or_else(|e| {
                 log!("INPUT: cannot read {path}: {e}");
@@ -239,14 +251,19 @@ pub fn script_text() -> &'static str {
             }),
             None => v,
         };
-        text.lines().map(|l| l.split('#').next().unwrap_or("")).collect::<Vec<_>>().join("\n")
+        text.lines()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
     })
 }
 
 fn parse_script(text: &str) -> VecDeque<(u64, Input)> {
     let mut ev = Vec::new();
     for item in text.split_whitespace() {
-        let Some((t, what)) = item.split_once(':') else { continue };
+        let Some((t, what)) = item.split_once(':') else {
+            continue;
+        };
         let Ok(t) = t.parse::<u64>() else { continue };
         let at = |s: &str| -> Option<(i32, i32)> {
             let (x, y) = s.split_once(',')?;
@@ -255,28 +272,46 @@ fn parse_script(text: &str) -> VecDeque<(u64, Input)> {
         if let Some(text) = what.strip_prefix("text@") {
             // typed characters (WM_CHAR), 50 ms apart; `_` is a space
             for (n, ch) in text.chars().filter(|&c| (c as u32) < 256).enumerate() {
-                ev.push((t + 50 * n as u64, Input::Char(if ch == '_' { b' ' } else { ch as u8 })));
+                ev.push((
+                    t + 50 * n as u64,
+                    Input::Char(if ch == '_' { b' ' } else { ch as u8 }),
+                ));
             }
-        } else if let Some(ch) = what.strip_prefix("char@").and_then(|h| u8::from_str_radix(h, 16).ok()) {
+        } else if let Some(ch) = what
+            .strip_prefix("char@")
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
             ev.push((t, Input::Char(ch)));
         } else if let Some(n) = what.strip_prefix("wheel@").and_then(|n| n.parse().ok()) {
             ev.push((t, Input::Wheel(n)));
         } else if let Some(p) = what.strip_prefix("pad@") {
-            let (name, hold) = p.split_once('*').map_or((p, 100), |(n, h)| (n, h.parse().unwrap_or(100)));
-            let (name, v) = name.split_once('=').map_or((name, 1.0), |(n, v)| (n, v.parse().unwrap_or(0.0)));
+            let (name, hold) = p
+                .split_once('*')
+                .map_or((p, 100), |(n, h)| (n, h.parse().unwrap_or(100)));
+            let (name, v) = name
+                .split_once('=')
+                .map_or((name, 1.0), |(n, v)| (n, v.parse().unwrap_or(0.0)));
             let Some(k) = super::dinput::CONTROLS.iter().position(|&c| c == name) else {
-                eprintln!("INPUT: unknown pad control {name} ({})", super::dinput::CONTROLS.join(", "));
+                eprintln!(
+                    "INPUT: unknown pad control {name} ({})",
+                    super::dinput::CONTROLS.join(", ")
+                );
                 continue;
             };
             ev.push((t, Input::Pad(k, v)));
             ev.push((t + hold, Input::Pad(k, 0.0)));
         } else if let Some(p) = what.strip_prefix("poke@") {
             let hex = |s: &str| u32::from_str_radix(s, 16).ok();
-            if let Some((a, v)) = p.split_once('=').and_then(|(a, v)| Some((hex(a)?, hex(v)?))) {
+            if let Some((a, v)) = p
+                .split_once('=')
+                .and_then(|(a, v)| Some((hex(a)?, hex(v)?)))
+            {
                 ev.push((t, Input::Poke(a, v)));
             }
         } else if let Some((b, xy)) = what.split_once('@') {
-            let (xy, hold) = xy.split_once('*').map_or((xy, 100), |(p, h)| (p, h.parse().unwrap_or(100)));
+            let (xy, hold) = xy
+                .split_once('*')
+                .map_or((xy, 100), |(p, h)| (p, h.parse().unwrap_or(100)));
             let Some((x, y)) = at(xy) else { continue };
             ev.push((t, Input::Move(x, y)));
             let b = match b {
@@ -296,13 +331,34 @@ fn parse_script(text: &str) -> VecDeque<(u64, Input)> {
         } else if let Some(k) = super::cheats::find(what) {
             ev.push((t, Input::Cheat(k)));
         } else {
-            let (name, hold) = what.split_once('*').map_or((what, 100), |(n, h)| (n, h.parse().unwrap_or(100)));
+            let (name, hold) = what
+                .split_once('*')
+                .map_or((what, 100), |(n, h)| (n, h.parse().unwrap_or(100)));
             let Some((vk, scan)) = key_by_name(name).and_then(vk_of) else {
-                eprintln!("INPUT: unknown key {name} (cheats: {})", super::cheats::names());
+                eprintln!(
+                    "INPUT: unknown key {name} (cheats: {})",
+                    super::cheats::names()
+                );
                 continue;
             };
-            ev.push((t, Input::Key { vk, scan, down: true, repeat: false }));
-            ev.push((t + hold, Input::Key { vk, scan, down: false, repeat: false }));
+            ev.push((
+                t,
+                Input::Key {
+                    vk,
+                    scan,
+                    down: true,
+                    repeat: false,
+                },
+            ));
+            ev.push((
+                t + hold,
+                Input::Key {
+                    vk,
+                    scan,
+                    down: false,
+                    repeat: false,
+                },
+            ));
         }
     }
     ev.sort_by_key(|e| e.0);
@@ -310,18 +366,32 @@ fn parse_script(text: &str) -> VecDeque<(u64, Input)> {
 }
 
 const FN: [KeyCode; 12] = [
-    KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5, KeyCode::F6, KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10,
-    KeyCode::F11, KeyCode::F12,
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
 ];
 
 fn key_by_name(n: &str) -> Option<KeyCode> {
     use KeyCode::*;
     const LETTERS: [KeyCode; 26] = [
-        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU,
-        KeyV, KeyW, KeyX, KeyY, KeyZ,
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
     ];
-    const DIGITS: [KeyCode; 10] = [Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9];
-    const PAD: [KeyCode; 10] = [Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9];
+    const DIGITS: [KeyCode; 10] = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    const PAD: [KeyCode; 10] = [
+        Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
+    ];
     let b = n.as_bytes();
     if b.len() == 1 && b[0].is_ascii_alphabetic() {
         return Some(LETTERS[(b[0].to_ascii_uppercase() - b'A') as usize]);
@@ -329,7 +399,10 @@ fn key_by_name(n: &str) -> Option<KeyCode> {
     if b.len() == 1 && b[0].is_ascii_digit() {
         return Some(DIGITS[(b[0] - b'0') as usize]);
     }
-    if let Some(d) = n.strip_prefix("Numpad").and_then(|d| d.parse::<usize>().ok()) {
+    if let Some(d) = n
+        .strip_prefix("Numpad")
+        .and_then(|d| d.parse::<usize>().ok())
+    {
         return PAD.get(d).copied();
     }
     if let Some(d) = n.strip_prefix('F').and_then(|d| d.parse::<usize>().ok()) {
@@ -340,7 +413,11 @@ fn key_by_name(n: &str) -> Option<KeyCode> {
         "Esc" => return Some(Escape),
         _ => {}
     }
-    SHORT.iter().find(|s| s.0 == n).map(|s| s.1).or_else(|| OTHER.into_iter().find(|k| format!("{k:?}") == n))
+    SHORT
+        .iter()
+        .find(|s| s.0 == n)
+        .map(|s| s.1)
+        .or_else(|| OTHER.into_iter().find(|k| format!("{k:?}") == n))
 }
 
 /// Keys with a short name in <PREFIX>_INPUT besides letters, digits, Numpad<n> and F<n>.
@@ -364,20 +441,49 @@ const SHORT: [(&str, KeyCode); 13] = [
 const OTHER: [KeyCode; 26] = {
     use KeyCode::*;
     [
-        NumpadEnter, ShiftRight, ControlRight, AltRight, Insert, Home, End, PageUp, PageDown, NumpadAdd, NumpadSubtract,
-        NumpadMultiply, NumpadDivide, NumpadDecimal, Minus, Equal, Comma, Period, Slash, Semicolon, Quote, BracketLeft,
-        BracketRight, Backslash, Backquote, Pause,
+        NumpadEnter,
+        ShiftRight,
+        ControlRight,
+        AltRight,
+        Insert,
+        Home,
+        End,
+        PageUp,
+        PageDown,
+        NumpadAdd,
+        NumpadSubtract,
+        NumpadMultiply,
+        NumpadDivide,
+        NumpadDecimal,
+        Minus,
+        Equal,
+        Comma,
+        Period,
+        Slash,
+        Semicolon,
+        Quote,
+        BracketLeft,
+        BracketRight,
+        Backslash,
+        Backquote,
+        Pause,
     ]
 };
 
 /// The <PREFIX>_INPUT name of the key with this virtual-key and scan code (`record.rs`).
 pub fn key_name(vk: u8, scan: u8) -> Option<String> {
     let mut names: Vec<String> = SHORT.iter().map(|s| s.0.to_string()).collect();
-    names.extend((b'A'..=b'Z').chain(b'0'..=b'9').map(|c| (c as char).to_string()));
+    names.extend(
+        (b'A'..=b'Z')
+            .chain(b'0'..=b'9')
+            .map(|c| (c as char).to_string()),
+    );
     names.extend((0..10).map(|d| format!("Numpad{d}")));
     names.extend((1..=12).map(|d| format!("F{d}")));
     names.extend(OTHER.iter().map(|k| format!("{k:?}")));
-    names.into_iter().find(|n| key_by_name(n).and_then(vk_of) == Some((vk, scan)))
+    names
+        .into_iter()
+        .find(|n| key_by_name(n).and_then(vk_of) == Some((vk, scan)))
 }
 
 /// The next input event, if any (call `pump` first).
@@ -438,7 +544,10 @@ pub fn gl_here() -> bool {
             return true;
         }
         // made at the window thread's next pump
-        spare = SPARE_CV.wait_timeout(spare, Duration::from_millis(50)).unwrap().0;
+        spare = SPARE_CV
+            .wait_timeout(spare, Duration::from_millis(50))
+            .unwrap()
+            .0;
     }
 }
 
@@ -466,22 +575,35 @@ pub fn show_texture(tex: glow::Texture, w: u32, h: u32, gamma: f32) {
     super::stats::picture();
     if !on_main() {
         let size = *SIZE.lock().unwrap();
-        let Some(look) = super::gl::look_with((tex, w, h, false, gamma), size).filter(|_| size.0 > 0 && size.1 > 0) else { return };
+        let Some(look) = super::gl::look_with((tex, w, h, false, gamma), size)
+            .filter(|_| size.0 > 0 && size.1 > 0)
+        else {
+            return;
+        };
         let staged = SHARED.with_borrow(|sh| {
             let s = sh.as_ref()?;
             super::gl::stage(&s.gl, s.copy_fbo, tex, w, h)
         });
-        let Some((copy, fence, slot)) = staged else { return };
+        let Some((copy, fence, slot)) = staged else {
+            return;
+        };
         // the window's thread shows it too when it draws next (a resize, the overlay)
         *OTHER_SHOWN.lock().unwrap() = Some((copy, w, h, false, gamma));
         let mut look = look;
         look.shown = (copy, w, h, false, gamma);
-        present_later(Job { look, fence, slot, shot: shot_due(false) });
+        present_later(Job {
+            look,
+            fence,
+            slot,
+            shot: shot_due(false),
+        });
         return;
     }
     with_host(|host| {
         let app = &mut host.app;
-        let (Some(win), Some(gl)) = (&app.window, &mut app.gl) else { return };
+        let (Some(win), Some(gl)) = (&app.window, &mut app.gl) else {
+            return;
+        };
         let size = win.inner_size();
         *OTHER_SHOWN.lock().unwrap() = None;
         if !present_thread() || app.mark_shot.is_some() || size.width == 0 || size.height == 0 {
@@ -489,11 +611,18 @@ pub fn show_texture(tex: glow::Texture, w: u32, h: u32, gamma: f32) {
             app.draw();
             return;
         }
-        let Some((copy, fence, slot)) = super::gl::stage(&gl.gl, gl.copy_fbo, tex, w, h) else { return };
+        let Some((copy, fence, slot)) = super::gl::stage(&gl.gl, gl.copy_fbo, tex, w, h) else {
+            return;
+        };
         gl.shown = (copy, w, h, false, gamma);
         let shot = shot_due(app.overlay_changed);
         app.overlay_changed &= !shot;
-        let job = Job { look: gl.look(size.width, size.height), fence, slot, shot };
+        let job = Job {
+            look: gl.look(size.width, size.height),
+            fence,
+            slot,
+            shot,
+        };
         present_later(job);
     });
 }
@@ -540,7 +669,10 @@ fn present_later(job: Job) {
 fn start_present(gl: &Gl) {
     PRESENT_THREAD.call_once(|| {
         let parts = gl.share();
-        std::thread::Builder::new().name("present".into()).spawn(move || present_loop(parts)).expect("present thread");
+        std::thread::Builder::new()
+            .name("present".into())
+            .spawn(move || present_loop(parts))
+            .expect("present thread");
     });
 }
 
@@ -556,7 +688,9 @@ pub fn present_wait() {
 fn present_loop(parts: super::gl::SharedParts) {
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+        };
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     }
     let mut sh = parts.make_current();
@@ -583,13 +717,19 @@ fn present_loop(parts: super::gl::SharedParts) {
 /// picture is kept.
 fn shot_path() -> Option<&'static String> {
     static PATH: OnceLock<Option<String>> = OnceLock::new();
-    PATH.get_or_init(|| recomp::config::env("SHOT").ok_or(()).ok()).as_ref()
+    PATH.get_or_init(|| recomp::config::env("SHOT").ok_or(()).ok())
+        .as_ref()
 }
 
 static LAST_SHOT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 fn shot_due(force: bool) -> bool {
-    shot_path().is_some() && (force || LAST_SHOT.lock().unwrap().is_none_or(|t| t.elapsed() >= Duration::from_millis(500)))
+    shot_path().is_some()
+        && (force
+            || LAST_SHOT
+                .lock()
+                .unwrap()
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(500)))
 }
 
 fn write_shot(px: &[u32], w: u32, h: u32) {
@@ -607,7 +747,11 @@ fn png(pixels: &[u32], w: u32, h: u32) -> Vec<u8> {
         for &b in data {
             c ^= b as u32;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xedb8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
         }
         !c
@@ -692,7 +836,12 @@ pub fn frame_size() -> (u32, u32) {
     if !on_main() {
         return (640, 480);
     }
-    with_host(|h| h.app.gl.as_ref().map_or((640, 480), |g| (g.shown.1, g.shown.2)))
+    with_host(|h| {
+        h.app
+            .gl
+            .as_ref()
+            .map_or((640, 480), |g| (g.shown.1, g.shown.2))
+    })
 }
 
 /// The window's drawable size in pixels (1280x960 before it exists).
@@ -701,7 +850,14 @@ pub fn window_size() -> (u32, u32) {
         let s = *SIZE.lock().unwrap();
         return if s.0 > 0 && s.1 > 0 { s } else { (1280, 960) };
     }
-    with_host(|h| h.app.window.as_ref().map(|w| w.inner_size()).filter(|s| s.width > 0 && s.height > 0).map_or((1280, 960), |s| (s.width, s.height)))
+    with_host(|h| {
+        h.app
+            .window
+            .as_ref()
+            .map(|w| w.inner_size())
+            .filter(|s| s.width > 0 && s.height > 0)
+            .map_or((1280, 960), |s| (s.width, s.height))
+    })
 }
 
 /// The display the window is on: its size and the sizes of its video modes (largest first,
@@ -712,9 +868,15 @@ pub fn display_modes() -> ((u32, u32), Vec<(u32, u32)>) {
         return none;
     }
     with_host(|h| {
-        let Some(m) = h.app.window.as_ref().and_then(|w| w.current_monitor()) else { return none };
+        let Some(m) = h.app.window.as_ref().and_then(|w| w.current_monitor()) else {
+            return none;
+        };
         let desktop = (m.size().width, m.size().height);
-        let mut modes: Vec<(u32, u32)> = m.video_modes().map(|v| (v.size().width, v.size().height)).filter(|&(w, h)| w >= 640 && h >= 480).collect();
+        let mut modes: Vec<(u32, u32)> = m
+            .video_modes()
+            .map(|v| (v.size().width, v.size().height))
+            .filter(|&(w, h)| w >= 640 && h >= 480)
+            .collect();
         modes.sort_unstable_by(|a, b| b.cmp(a));
         modes.dedup();
         (desktop, modes)
@@ -723,7 +885,13 @@ pub fn display_modes() -> ((u32, u32), Vec<(u32, u32)>) {
 
 /// Is the window fullscreen?
 pub fn is_fullscreen() -> bool {
-    on_main() && with_host(|h| h.app.window.as_ref().is_some_and(|w| w.fullscreen().is_some()))
+    on_main()
+        && with_host(|h| {
+            h.app
+                .window
+                .as_ref()
+                .is_some_and(|w| w.fullscreen().is_some())
+        })
 }
 
 /// Borderless fullscreen on the window's display, or a window again.
@@ -746,7 +914,12 @@ pub fn set_window_size(w: u32, h: u32) {
         return;
     }
     with_host(|host| {
-        if let Some(win) = host.app.window.as_ref().filter(|w| w.fullscreen().is_none()) {
+        if let Some(win) = host
+            .app
+            .window
+            .as_ref()
+            .filter(|w| w.fullscreen().is_none())
+        {
             let _ = win.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
         }
     });
@@ -761,7 +934,11 @@ pub fn overlay_span(w: u32, h: u32) -> (u32, u32) {
 /// Where a frame of w x h lands in a window of ww x wh: offset and scale.
 pub fn fit(w: u32, h: u32, ww: u32, wh: u32) -> (f64, f64, f64) {
     let s = (ww as f64 / w as f64).min(wh as f64 / h as f64);
-    ((ww as f64 - w as f64 * s) / 2.0, (wh as f64 - h as f64 * s) / 2.0, s)
+    (
+        (ww as f64 - w as f64 * s) / 2.0,
+        (wh as f64 - h as f64 * s) / 2.0,
+        s,
+    )
 }
 
 impl App {
@@ -777,7 +954,9 @@ impl App {
     }
 
     fn draw(&mut self) {
-        let (Some(win), Some(gl)) = (&self.window, &mut self.gl) else { return };
+        let (Some(win), Some(gl)) = (&self.window, &mut self.gl) else {
+            return;
+        };
         let size = win.inner_size();
         *SIZE.lock().unwrap() = (size.width, size.height);
         if size.width == 0 || size.height == 0 {
@@ -811,15 +990,23 @@ impl App {
     }
 
     fn create(&mut self, el: &ActiveEventLoop) {
-        let Some(title) = self.want.take() else { return };
+        let Some(title) = self.want.take() else {
+            return;
+        };
         // <PREFIX>_WINDOW=1920x1080: the window's starting size in pixels (tests); else the
         // resolution chosen in Preferences, else 1280x960
-        let size = recomp::config::env("WINDOW").ok_or(())
+        let size = recomp::config::env("WINDOW")
+            .ok_or(())
             .ok()
-            .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))))
+            .and_then(|v| {
+                v.split_once('x')
+                    .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+            })
             .or_else(super::display::chosen);
         let attrs = Window::default_attributes().with_title(title);
-        let attrs = attrs.with_fullscreen(super::display::fullscreen().then_some(winit::window::Fullscreen::Borderless(None)));
+        let attrs = attrs.with_fullscreen(
+            super::display::fullscreen().then_some(winit::window::Fullscreen::Borderless(None)),
+        );
         let attrs = match size {
             Some((w, h)) => attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)),
             None => attrs.with_inner_size(LogicalSize::new(1280.0, 960.0)),
@@ -857,7 +1044,8 @@ impl App {
         }
         self.cursor_caught = catch;
         let grab = if catch {
-            win.set_cursor_grab(CursorGrabMode::Confined).or_else(|_| win.set_cursor_grab(CursorGrabMode::Locked))
+            win.set_cursor_grab(CursorGrabMode::Confined)
+                .or_else(|_| win.set_cursor_grab(CursorGrabMode::Locked))
         } else {
             win.set_cursor_grab(CursorGrabMode::None)
         };
@@ -868,9 +1056,14 @@ impl App {
 
     /// The cursor in frame pixels.
     fn frame_pos(&self) -> (i32, i32) {
-        let Some(win) = &self.window else { return (0, 0) };
+        let Some(win) = &self.window else {
+            return (0, 0);
+        };
         let size = win.inner_size();
-        let (w, h) = self.gl.as_ref().map_or((640, 480), |g| (g.shown.1, g.shown.2));
+        let (w, h) = self
+            .gl
+            .as_ref()
+            .map_or((640, 480), |g| (g.shown.1, g.shown.2));
         let (ox, oy, s) = fit(w, h, size.width.max(1), size.height.max(1));
         let x = (self.cursor.x - ox) / s;
         let y = (self.cursor.y - oy) / s;
@@ -893,7 +1086,12 @@ impl ApplicationHandler for App {
         self.create(el);
     }
 
-    fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, e: winit::event::DeviceEvent) {
+    fn device_event(
+        &mut self,
+        _: &ActiveEventLoop,
+        _: winit::event::DeviceId,
+        e: winit::event::DeviceEvent,
+    ) {
         // DirectInput's mouse is relative: the raw motion, while the window has the focus (a
         // scripted run moves it by its own items)
         if let winit::event::DeviceEvent::MouseMotion { delta } = e {
@@ -960,12 +1158,19 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
-                if self.alt && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)) {
+                if self.alt
+                    && matches!(
+                        event.physical_key,
+                        PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
+                    )
+                {
                     // Alt+Enter: borderless fullscreen on the window's display, or back
                     if down && !event.repeat {
                         if let Some(w) = &self.window {
                             let full = w.fullscreen().is_some();
-                            w.set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
+                            w.set_fullscreen(
+                                (!full).then_some(winit::window::Fullscreen::Borderless(None)),
+                            );
                             super::display::remember_fullscreen(!full);
                         }
                     }
@@ -989,7 +1194,12 @@ impl ApplicationHandler for App {
                         return;
                     }
                     if let Some((vk, scan)) = vk_of(code) {
-                        self.push(Input::Key { vk, scan, down, repeat: event.repeat });
+                        self.push(Input::Key {
+                            vk,
+                            scan,
+                            down,
+                            repeat: event.repeat,
+                        });
                     }
                 }
                 if down {
@@ -1009,26 +1219,39 @@ impl ApplicationHandler for App {
 fn vk_of(k: KeyCode) -> Option<(u8, u8)> {
     use KeyCode::*;
     let letters = [
-        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU,
-        KeyV, KeyW, KeyX, KeyY, KeyZ,
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
     ];
-    const LETTER_SCAN: [u8; 26] =
-        [0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1f, 0x14, 0x16, 0x2f, 0x11, 0x2d, 0x15, 0x2c];
+    const LETTER_SCAN: [u8; 26] = [
+        0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18,
+        0x19, 0x10, 0x13, 0x1f, 0x14, 0x16, 0x2f, 0x11, 0x2d, 0x15, 0x2c,
+    ];
     if let Some(i) = letters.iter().position(|&l| l == k) {
         return Some((b'A' + i as u8, LETTER_SCAN[i]));
     }
-    let digits = [Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9];
+    let digits = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
     if let Some(i) = digits.iter().position(|&d| d == k) {
         return Some((b'0' + i as u8, if i == 0 { 0x0b } else { 1 + i as u8 }));
     }
-    let pad = [Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9];
+    let pad = [
+        Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
+    ];
     const PAD_SCAN: [u8; 10] = [0x52, 0x4f, 0x50, 0x51, 0x4b, 0x4c, 0x4d, 0x47, 0x48, 0x49];
     if let Some(i) = pad.iter().position(|&d| d == k) {
         return Some((0x60 + i as u8, PAD_SCAN[i]));
     }
     let f = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
     if let Some(i) = f.iter().position(|&d| d == k) {
-        return Some((0x70 + i as u8, if i < 10 { 0x3b + i as u8 } else { 0x57 + (i as u8 - 10) }));
+        return Some((
+            0x70 + i as u8,
+            if i < 10 {
+                0x3b + i as u8
+            } else {
+                0x57 + (i as u8 - 10)
+            },
+        ));
     }
     Some(match k {
         Escape => (0x1b, 0x01),

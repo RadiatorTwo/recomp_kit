@@ -40,18 +40,30 @@ impl Recorder {
         match *i {
             Input::Move(x, y) => {
                 self.mouse = (x, y);
-                if self.moved.is_none_or(|(m, mx, my)| t >= m + 50 && (mx, my) != (x, y)) {
+                if self
+                    .moved
+                    .is_none_or(|(m, mx, my)| t >= m + 50 && (mx, my) != (x, y))
+                {
                     self.moved = Some((t, x, y));
                     out.push(format!("{t}:move@{x},{y}"));
                 }
             }
-            Input::Key { vk, scan, down, repeat: false } => {
+            Input::Key {
+                vk,
+                scan,
+                down,
+                repeat: false,
+            } => {
                 if let Some(name) = super::window::key_name(vk, scan) {
                     self.press(name, down, t, &mut out);
                 }
             }
             Input::Button(b, down) => {
-                let Some(kind) = ["click", "rclick", "mclick", "x1click", "x2click"].get(b as usize) else { return out };
+                let Some(kind) =
+                    ["click", "rclick", "mclick", "x1click", "x2click"].get(b as usize)
+                else {
+                    return out;
+                };
                 let (x, y) = self.mouse;
                 // the item's own position: a scripted click moves there 30 ms before it presses
                 let name = format!("{kind}@{x},{y}");
@@ -100,7 +112,10 @@ impl Recorder {
         if let Some(k) = self.held.iter().position(|h| h.0.starts_with(&at)) {
             let (name, since) = self.held.remove(k);
             // held from 30 ms after the item's time
-            out.push(format!("{since}:{name}*{}", t.saturating_sub(since + 30).max(1)));
+            out.push(format!(
+                "{since}:{name}*{}",
+                t.saturating_sub(since + 30).max(1)
+            ));
         }
     }
 
@@ -109,14 +124,22 @@ impl Recorder {
         let mut out = Vec::new();
         for (k, (&new, (old, since))) in v.iter().zip(self.pad.iter_mut()).enumerate() {
             // steps of 0.05, so a stick held still is one item; a resting stick's noise is 0
-            let new = if new.abs() < 0.1 { 0.0 } else { (new.clamp(-1.0, 1.0) * 20.0).round() / 20.0 };
+            let new = if new.abs() < 0.1 {
+                0.0
+            } else {
+                (new.clamp(-1.0, 1.0) * 20.0).round() / 20.0
+            };
             if new == *old {
                 continue;
             }
             if *old != 0.0 {
                 let name = super::dinput::CONTROLS[k];
                 let hold = t.saturating_sub(*since).max(1);
-                out.push(if k < 16 { format!("{since}:pad@{name}*{hold}") } else { format!("{since}:pad@{name}={old}*{hold}") });
+                out.push(if k < 16 {
+                    format!("{since}:pad@{name}*{hold}")
+                } else {
+                    format!("{since}:pad@{name}={old}*{hold}")
+                });
             }
             (*old, *since) = (new, t);
         }
@@ -132,10 +155,21 @@ struct File {
 
 static RECORD: std::sync::LazyLock<Mutex<Option<File>>> = std::sync::LazyLock::new(|| {
     Mutex::new((|| {
-        let path = recomp::config::env("RECORD").ok_or(()).ok().filter(|p| !p.is_empty())?;
-        let file = std::fs::File::create(&path).map_err(|e| log!("RECORD: cannot write {path}: {e}")).ok()?;
-        log!("RECORD: the input goes to {path} (F11: a mark with a picture; play it with INPUT=@{path})");
-        Some(File { file, path, rec: Recorder::default() })
+        let path = recomp::config::env("RECORD")
+            .ok_or(())
+            .ok()
+            .filter(|p| !p.is_empty())?;
+        let file = std::fs::File::create(&path)
+            .map_err(|e| log!("RECORD: cannot write {path}: {e}"))
+            .ok()?;
+        log!(
+            "RECORD: the input goes to {path} (F11: a mark with a picture; play it with INPUT=@{path})"
+        );
+        Some(File {
+            file,
+            path,
+            rec: Recorder::default(),
+        })
     })())
 });
 
@@ -199,13 +233,43 @@ mod tests {
     #[test]
     fn keys_and_clicks() {
         let mut r = Recorder::default();
-        let up = Input::Key { vk: 0x26, scan: 0x48, down: true, repeat: false };
+        let up = Input::Key {
+            vk: 0x26,
+            scan: 0x48,
+            down: true,
+            repeat: false,
+        };
         assert!(r.event(&up, 1000).is_empty());
-        assert!(r.event(&Input::Key { vk: 0x26, scan: 0x48, down: true, repeat: true }, 1100).is_empty());
-        assert_eq!(r.event(&Input::Key { vk: 0x26, scan: 0x48, down: false, repeat: false }, 2500), ["1000:Up*1500"]);
+        assert!(
+            r.event(
+                &Input::Key {
+                    vk: 0x26,
+                    scan: 0x48,
+                    down: true,
+                    repeat: true
+                },
+                1100
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            r.event(
+                &Input::Key {
+                    vk: 0x26,
+                    scan: 0x48,
+                    down: false,
+                    repeat: false
+                },
+                2500
+            ),
+            ["1000:Up*1500"]
+        );
         assert_eq!(r.event(&Input::Move(484, 303), 3000), ["3000:move@484,303"]);
         assert!(r.event(&Input::Button(0, true), 3100).is_empty());
-        assert_eq!(r.event(&Input::Button(0, false), 3200), ["3070:click@484,303*100"]);
+        assert_eq!(
+            r.event(&Input::Button(0, false), 3200),
+            ["3070:click@484,303*100"]
+        );
         assert_eq!(r.event(&Input::Char(b'A'), 4000), ["4000:text@A"]);
         assert_eq!(r.event(&Input::Char(b' '), 4050), ["4050:text@_"]);
     }

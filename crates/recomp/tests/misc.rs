@@ -4,9 +4,9 @@
 mod common;
 
 use common::{Guest, Rng, SCRATCH, Snippet};
-use recomp::rt::{EAX, EBX, ECX, EDI, EDX, ESP};
 use iced_x86::IcedError;
 use iced_x86::code_asm::*;
+use recomp::rt::{EAX, EBX, ECX, EDI, EDX, ESP};
 
 /// (src, dst): 32 bytes through mm0-mm3 with movq, plus a dword through movd mm4/ecx
 fn mmx(a: &mut CodeAssembler) -> Result<(), IcedError> {
@@ -125,8 +125,15 @@ fn bsfr(a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.ret()
 }
 
-const SNIPPETS: [(&str, Snippet); 7] =
-    [("mmx", mmx), ("ports", ports), ("segs", segs), ("xlat", xlat), ("segmov", segmov), ("flags16", flags16), ("bsfr", bsfr)];
+const SNIPPETS: [(&str, Snippet); 7] = [
+    ("mmx", mmx),
+    ("ports", ports),
+    ("segs", segs),
+    ("xlat", xlat),
+    ("segmov", segmov),
+    ("flags16", flags16),
+    ("bsfr", bsfr),
+];
 
 #[test]
 fn misc() {
@@ -139,7 +146,10 @@ fn misc() {
         m.slice(SCRATCH + 64, 32).fill(0);
         let cpu = g.call(0, &[SCRATCH, SCRATCH + 64]);
         assert_eq!(m.slice(SCRATCH + 64, 32), &src[..32]);
-        assert_eq!(cpu.r[ECX], u32::from_le_bytes(src[32..36].try_into().unwrap()));
+        assert_eq!(
+            cpu.r[ECX],
+            u32::from_le_bytes(src[32..36].try_into().unwrap())
+        );
     }
 
     m.slice(SCRATCH, 4).fill(0);
@@ -151,19 +161,30 @@ fn misc() {
 
     let cpu = g.call(2, &[]);
     assert_eq!(cpu.r[ECX], 0);
-    assert_eq!(cpu.r[ESP], 0x0020_0000 - 0x100, "the return popped the return address");
+    assert_eq!(
+        cpu.r[ESP],
+        0x0020_0000 - 0x100,
+        "the return popped the return address"
+    );
 
     for k in 0..256u32 {
         m.wr8(SCRATCH + k, (k as u8).wrapping_mul(7) ^ 0x5a);
     }
     for v in [0x1234_5600u32, 0xdead_beff, 0x80] {
         let cpu = g.call(3, &[SCRATCH, v]);
-        assert_eq!(cpu.r[EAX], v & !0xff | ((v as u8).wrapping_mul(7) ^ 0x5a) as u32);
+        assert_eq!(
+            cpu.r[EAX],
+            v & !0xff | ((v as u8).wrapping_mul(7) ^ 0x5a) as u32
+        );
     }
 
     m.wr32(SCRATCH, 0xaaaa_5555);
     let cpu = g.call(4, &[SCRATCH]);
-    assert_eq!((cpu.r[EAX], cpu.r[ECX], cpu.r[EDX]), (0x1b, 0x3b, 0), "cs, fs, gs");
+    assert_eq!(
+        (cpu.r[EAX], cpu.r[ECX], cpu.r[EDX]),
+        (0x1b, 0x3b, 0),
+        "cs, fs, gs"
+    );
     assert_eq!(cpu.r[EBX], 0xffff_0023, "ss into bx");
     assert_eq!(m.rd32(SCRATCH), 0xaaaa_0023, "ds as a word");
 
@@ -182,5 +203,9 @@ fn misc() {
         assert_eq!(cpu.r[EDX], 0);
     }
     let cpu = g.call(6, &[0]);
-    assert_eq!((cpu.r[EAX], cpu.r[ECX], cpu.r[EDX]), (0x77, 0x77, 1), "zero source");
+    assert_eq!(
+        (cpu.r[EAX], cpu.r[ECX], cpu.r[EDX]),
+        (0x77, 0x77, 1),
+        "zero source"
+    );
 }

@@ -48,7 +48,8 @@ impl Frame {
                 for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
                     let (x, yy) = (col * 2 + dx, row * 2 + dy);
                     let y = ((self.y[yy * self.stride + x] as i32 - 16) * 76309) >> 16;
-                    out[yy * w + x] = 0xff00_0000 | clamp(y + r) << 16 | clamp(y - g) << 8 | clamp(y + b);
+                    out[yy * w + x] =
+                        0xff00_0000 | clamp(y + r) << 16 | clamp(y - g) << 8 | clamp(y + b);
                 }
             }
         }
@@ -123,7 +124,14 @@ impl<'a> Decoder<'a> {
         let (mb_width, mb_height) = ((width + 15) >> 4, (height + 15) >> 4);
         let stride = mb_width * 16;
         let luma = stride * mb_height * 16;
-        let frame = Frame { width, height, stride, y: vec![0; luma], cb: vec![128; luma / 4], cr: vec![128; luma / 4] };
+        let frame = Frame {
+            width,
+            height,
+            stride,
+            y: vec![0; luma],
+            cb: vec![128; luma / 4],
+            cr: vec![128; luma / 4],
+        };
         Some(Decoder {
             bits,
             width,
@@ -162,7 +170,9 @@ impl<'a> Decoder<'a> {
                 self.start_code = self.find_start_code(START_PICTURE);
                 if self.start_code.is_none() {
                     // the last reference frame is still to be shown
-                    if self.has_reference_frame && matches!(self.picture_type, PICTURE_I | PICTURE_P) {
+                    if self.has_reference_frame
+                        && matches!(self.picture_type, PICTURE_I | PICTURE_P)
+                    {
                         self.has_reference_frame = false;
                         break self.backward;
                     }
@@ -255,7 +265,10 @@ impl<'a> Decoder<'a> {
         }
         loop {
             self.decode_macroblock();
-            if self.macroblock_address >= self.mb_size - 1 || !self.bits.has(23) || self.bits.peek(23) == 0 {
+            if self.macroblock_address >= self.mb_size - 1
+                || !self.bits.has(23)
+                || self.bits.peek(23) == 0
+            {
                 break;
             }
         }
@@ -434,11 +447,19 @@ impl<'a> Decoder<'a> {
         if intra {
             // DC coefficient, predicted
             let plane = block.saturating_sub(3);
-            let size = self.bits.vlc(if plane == 0 { DCT_SIZE_LUMINANCE } else { DCT_SIZE_CHROMINANCE }) as u32;
+            let size = self.bits.vlc(if plane == 0 {
+                DCT_SIZE_LUMINANCE
+            } else {
+                DCT_SIZE_CHROMINANCE
+            }) as u32;
             let predictor = self.dc_predictor[plane];
             self.block_data[0] = if size > 0 {
                 let diff = self.bits.read(size) as i32;
-                if diff & (1 << (size - 1)) != 0 { predictor + diff } else { predictor + (-(1 << size) | (diff + 1)) }
+                if diff & (1 << (size - 1)) != 0 {
+                    predictor + diff
+                } else {
+                    predictor + (-(1 << size) | (diff + 1))
+                }
             } else {
                 predictor
             };
@@ -447,7 +468,11 @@ impl<'a> Decoder<'a> {
             self.block_data[0] <<= 3 + 5;
             n = 1;
         }
-        let quant_matrix = if intra { &self.intra_quant_matrix } else { &self.non_intra_quant_matrix };
+        let quant_matrix = if intra {
+            &self.intra_quant_matrix
+        } else {
+            &self.non_intra_quant_matrix
+        };
 
         // AC coefficients (and the DC of non-intra blocks)
         loop {
@@ -508,7 +533,15 @@ impl<'a> Decoder<'a> {
         } else {
             let dw = frame.stride / 2;
             let di = self.mb_row * 8 * dw + (self.mb_col << 3);
-            (if block == 4 { &mut frame.cb } else { &mut frame.cr }, dw, di)
+            (
+                if block == 4 {
+                    &mut frame.cb
+                } else {
+                    &mut frame.cr
+                },
+                dw,
+                di,
+            )
         };
         let s = &mut self.block_data;
         let dc_only = n == 1;
@@ -538,7 +571,15 @@ impl<'a> Decoder<'a> {
 }
 
 /// Copy (or average in) a block_size square of plane `s` moved by half pixels to `d`.
-fn process_macroblock(geo: (usize, usize, usize, usize), s: &[u8], d: &mut [u8], mh: i32, mv: i32, bs: usize, interpolate: bool) {
+fn process_macroblock(
+    geo: (usize, usize, usize, usize),
+    s: &[u8],
+    d: &mut [u8],
+    mh: i32,
+    mv: i32,
+    bs: usize,
+    interpolate: bool,
+) {
     let (mb_width, mb_height, mb_row, mb_col) = geo;
     let dw = (mb_width * bs) as i64;
     let (hp, vp) = ((mh >> 1) as i64, (mv >> 1) as i64);
@@ -557,9 +598,16 @@ fn process_macroblock(geo: (usize, usize, usize, usize), s: &[u8], d: &mut [u8],
                 (false, false) => s[a] as u32,
                 (false, true) => (s[a] as u32 + s[a + dw] as u32 + 1) >> 1,
                 (true, false) => (s[a] as u32 + s[a + 1] as u32 + 1) >> 1,
-                (true, true) => (s[a] as u32 + s[a + 1] as u32 + s[a + dw] as u32 + s[a + dw + 1] as u32 + 2) >> 2,
+                (true, true) => {
+                    (s[a] as u32 + s[a + 1] as u32 + s[a + dw] as u32 + s[a + dw + 1] as u32 + 2)
+                        >> 2
+                }
             };
-            d[k] = if interpolate { (d[k] as u32 + p + 1) >> 1 } else { p } as u8;
+            d[k] = if interpolate {
+                (d[k] as u32 + p + 1) >> 1
+            } else {
+                p
+            } as u8;
         }
         si += dw;
         di += dw;
@@ -588,7 +636,16 @@ fn idct(block: &mut [i32; 64]) {
         let y5 = x1 - x2;
         let y6 = x3 - b3;
         let y7 = -x0 - ((b4 * 473 + b6 * 196 + 128) >> 8);
-        [b7 + y4, x4 + y3, y5 - x0, y6 - y7, y6 + y7, x0 + y5, y3 - x4, y4 - b7]
+        [
+            b7 + y4,
+            x4 + y3,
+            y5 - x0,
+            y6 - y7,
+            y6 + y7,
+            x0 + y5,
+            y3 - x4,
+            y4 - b7,
+        ]
     }
     for i in 0..8 {
         let col = transform(std::array::from_fn(|k| block[k * 8 + i]));

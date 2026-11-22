@@ -9,8 +9,8 @@
 pub mod advapi32;
 pub mod avi;
 pub mod cdaudio;
-pub mod cinepak;
 pub mod cheats;
+pub mod cinepak;
 pub mod ddraw;
 pub mod dialog;
 pub mod dinput;
@@ -23,22 +23,22 @@ pub mod gl;
 pub mod glide;
 pub mod hd;
 pub mod kernel32;
-pub mod menupad;
 pub mod menu;
+pub mod menupad;
 pub mod misc;
 pub mod module;
 pub mod record;
 pub mod sample;
-pub mod stats;
-pub mod text;
 pub mod savestate;
 pub mod setting;
+pub mod stats;
+pub mod text;
 pub mod tween;
 pub mod user32;
 pub mod window;
 
-pub use recomp::image::ResId;
 use recomp::image::Image;
+pub use recomp::image::ResId;
 use recomp::rt::{self, Cpu, EAX, ESP, Event, Memory};
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -68,7 +68,11 @@ pub fn reserve_memory() {
     if m.base as usize == rt::FIXED_BASE {
         recomp::lift::FIXED_BASE.store(m.base as u64, Ordering::Relaxed);
     } else {
-        eprintln!("guest memory at {:#x}, not {:#x}: its base is read at run time", m.base as usize, rt::FIXED_BASE);
+        eprintln!(
+            "guest memory at {:#x}, not {:#x}: its base is read at run time",
+            m.base as usize,
+            rt::FIXED_BASE
+        );
     }
 }
 
@@ -97,7 +101,11 @@ pub fn arg(c: &Cpu, n: u32) -> u32 {
 /// A NUL-terminated guest string (bytes as Latin-1).
 pub fn cstr(a: u32) -> String {
     let m = mem();
-    (0..).map(|k| m.rd8(a + k)).take_while(|&b| b != 0).map(|b| b as char).collect()
+    (0..)
+        .map(|k| m.rd8(a + k))
+        .take_while(|&b| b != 0)
+        .map(|b| b as char)
+        .collect()
 }
 
 /// Copy a string into a guest buffer of `n` bytes, NUL-terminated and cut to fit; returns the
@@ -106,7 +114,10 @@ pub fn put_cstr(a: u32, s: &str, n: u32) -> u32 {
     if n == 0 {
         return 0;
     }
-    let b: Vec<u8> = s.chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }).collect();
+    let b: Vec<u8> = s
+        .chars()
+        .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' })
+        .collect();
     let k = b.len().min(n as usize - 1);
     let m = mem();
     m.slice(a, k).copy_from_slice(&b[..k]);
@@ -133,8 +144,13 @@ struct Heap {
     free_size: BTreeMap<(u32, u32), ()>,
 }
 
-static HEAP: Mutex<Heap> =
-    Mutex::new(Heap { top: ARENA_LO, mapped: ARENA_LO, used: BTreeMap::new(), free_at: BTreeMap::new(), free_size: BTreeMap::new() });
+static HEAP: Mutex<Heap> = Mutex::new(Heap {
+    top: ARENA_LO,
+    mapped: ARENA_LO,
+    used: BTreeMap::new(),
+    free_at: BTreeMap::new(),
+    free_size: BTreeMap::new(),
+});
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -234,8 +250,14 @@ impl MemoryCopy {
         let m = mem();
         let mut ranges = FIXED.get().cloned().unwrap_or_default();
         ranges.push((ARENA_LO, h.top));
-        let parts = ranges.into_iter().map(|(lo, hi)| (lo, m.slice(lo, (hi - lo) as usize).to_vec())).collect();
-        MemoryCopy { heap: h.clone(), parts }
+        let parts = ranges
+            .into_iter()
+            .map(|(lo, hi)| (lo, m.slice(lo, (hi - lo) as usize).to_vec()))
+            .collect();
+        MemoryCopy {
+            heap: h.clone(),
+            parts,
+        }
     }
 
     /// Put the copy back (the arena stays mapped as far as it is now).
@@ -258,7 +280,9 @@ impl MemoryCopy {
         self.parts
             .iter()
             .find(|(lo, b)| a >= *lo && (a - lo) as usize + 4 <= b.len())
-            .map_or(0, |(lo, b)| u32::from_le_bytes(b[(a - lo) as usize..][..4].try_into().unwrap()))
+            .map_or(0, |(lo, b)| {
+                u32::from_le_bytes(b[(a - lo) as usize..][..4].try_into().unwrap())
+            })
     }
 
     pub fn bytes(&self) -> usize {
@@ -315,7 +339,16 @@ impl MemoryCopy {
             r.read_exact(&mut b)?;
             parts.push((lo, b));
         }
-        Ok(MemoryCopy { heap: Heap { top, mapped, used, free_at, free_size }, parts })
+        Ok(MemoryCopy {
+            heap: Heap {
+                top,
+                mapped,
+                used,
+                free_at,
+                free_size,
+            },
+            parts,
+        })
     }
 }
 
@@ -355,7 +388,9 @@ pub fn realloc(p: u32, size: u32) -> u32 {
     }
     let q = alloc(size);
     if q != 0 {
-        mem().slice(q, old as usize).copy_from_slice(&mem().slice(p, old as usize).to_vec());
+        mem()
+            .slice(q, old as usize)
+            .copy_from_slice(&mem().slice(p, old as usize).to_vec());
         free(p);
     }
     q
@@ -378,14 +413,30 @@ static THUNKS: Mutex<Vec<Thunk>> = Mutex::new(Vec::new());
 fn thunk_add(name: String, nargs: i32, f: Option<ImpFn>) -> u32 {
     let mut t = lock(&THUNKS);
     assert!((t.len() as u32) < THUNK_N, "out of thunks");
-    let quick = name.strip_prefix("glide2x!").is_some_and(|n| !SLOW_GLIDE.contains(&n));
-    t.push(Thunk { name, nargs, stub: false, quick, f });
+    let quick = name
+        .strip_prefix("glide2x!")
+        .is_some_and(|n| !SLOW_GLIDE.contains(&n));
+    t.push(Thunk {
+        name,
+        nargs,
+        stub: false,
+        quick,
+        f,
+    });
     THUNK_LO + 4 * (t.len() as u32 - 1)
 }
 
 /// Glide functions that may wait (the swap's pace, the window) or make the window: the turn is
 /// given up during them.
-const SLOW_GLIDE: &[&str] = &["grBufferSwap", "grSstWinOpen", "grSstWinClose", "grGlideInit", "grGlideShutdown", "grSstQueryHardware", "grSstQueryBoards"];
+const SLOW_GLIDE: &[&str] = &[
+    "grBufferSwap",
+    "grSstWinOpen",
+    "grSstWinClose",
+    "grGlideInit",
+    "grGlideShutdown",
+    "grSstQueryHardware",
+    "grSstQueryBoards",
+];
 
 fn ret0(_: &mut Cpu) -> u32 {
     0
@@ -459,16 +510,30 @@ struct Waiter {
 impl TurnState {
     /// The ticket of the waiter that gets the turn next.
     fn first(&self) -> Option<u64> {
-        self.waiting.iter().max_by_key(|w| (!w.polite, w.prio, std::cmp::Reverse(w.ticket))).map(|w| w.ticket)
+        self.waiting
+            .iter()
+            .max_by_key(|w| (!w.polite, w.prio, std::cmp::Reverse(w.ticket)))
+            .map(|w| w.ticket)
     }
 
     /// The highest priority among the waiters, polite ones included (`BEST`).
     fn best(&self) -> i32 {
-        self.waiting.iter().map(|w| w.prio).max().unwrap_or(i32::MIN)
+        self.waiting
+            .iter()
+            .map(|w| w.prio)
+            .max()
+            .unwrap_or(i32::MIN)
     }
 }
 
-static TURN: Turn = Turn { state: Mutex::new(TurnState { held: false, next: 0, waiting: Vec::new() }), cv: Condvar::new() };
+static TURN: Turn = Turn {
+    state: Mutex::new(TurnState {
+        held: false,
+        next: 0,
+        waiting: Vec::new(),
+    }),
+    cv: Condvar::new(),
+};
 
 /// The highest priority of a thread waiting for the turn (i32::MIN: none), read at loop heads.
 static BEST: AtomicI32 = AtomicI32::new(i32::MIN);
@@ -489,13 +554,21 @@ fn turn_take_as(polite: bool) {
     let mut t = lock(&TURN.state);
     let me = t.next;
     t.next += 1;
-    t.waiting.push(Waiter { prio: ctl.prio.load(Ordering::Relaxed), polite, ticket: me });
+    t.waiting.push(Waiter {
+        prio: ctl.prio.load(Ordering::Relaxed),
+        polite,
+        ticket: me,
+    });
     BEST.store(t.best(), Ordering::SeqCst);
     while t.held || t.first() != Some(me) {
         // the running thread hands over at its next loop head; it stops looking while its
         // slice lasts (`turn_yield`), so the waiters ask again now and then
         rt::POLL.store(1, Ordering::SeqCst);
-        t = TURN.cv.wait_timeout(t, SLICE / 2).unwrap_or_else(|e| e.into_inner()).0;
+        t = TURN
+            .cv
+            .wait_timeout(t, SLICE / 2)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
     }
     t.waiting.retain(|w| w.ticket != me);
     t.held = true;
@@ -574,13 +647,21 @@ impl GuestThread {
     }
 }
 
-static GUEST_THREADS: Mutex<BTreeMap<u32, std::sync::Arc<GuestThread>>> = Mutex::new(BTreeMap::new());
+static GUEST_THREADS: Mutex<BTreeMap<u32, std::sync::Arc<GuestThread>>> =
+    Mutex::new(BTreeMap::new());
 
 /// The guest thread with this id (kernel32's thread_id); made at its first use.
 pub fn guest_thread(id: u32) -> std::sync::Arc<GuestThread> {
     lock(&GUEST_THREADS)
         .entry(id)
-        .or_insert_with(|| std::sync::Arc::new(GuestThread { suspend: Mutex::new(0), suspends: std::sync::atomic::AtomicU32::new(0), cv: Condvar::new(), prio: AtomicI32::new(0) }))
+        .or_insert_with(|| {
+            std::sync::Arc::new(GuestThread {
+                suspend: Mutex::new(0),
+                suspends: std::sync::atomic::AtomicU32::new(0),
+                cv: Condvar::new(),
+                prio: AtomicI32::new(0),
+            })
+        })
         .clone()
 }
 
@@ -628,7 +709,9 @@ fn tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
     return unsafe { std::arch::x86_64::_rdtsc() };
     #[cfg(not(target_arch = "x86_64"))]
-    return std::time::Instant::now().duration_since(*START.get_or_init(std::time::Instant::now)).as_nanos() as u64;
+    return std::time::Instant::now()
+        .duration_since(*START.get_or_init(std::time::Instant::now))
+        .as_nanos() as u64;
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -746,7 +829,8 @@ fn prof() -> bool {
 
 fn prof_add(k: usize, call: std::time::Duration, wait: std::time::Duration) {
     use std::time::{Duration, Instant};
-    static P: Mutex<Option<(Instant, BTreeMap<usize, (u32, Duration, Duration)>)>> = Mutex::new(None);
+    static P: Mutex<Option<(Instant, BTreeMap<usize, (u32, Duration, Duration)>)>> =
+        Mutex::new(None);
     let mut p = lock(&P);
     let (t0, per) = p.get_or_insert_with(|| (Instant::now(), BTreeMap::new()));
     let e = per.entry(k).or_default();
@@ -761,10 +845,23 @@ fn prof_add(k: usize, call: std::time::Duration, wait: std::time::Duration) {
     v.sort_by_key(|e| std::cmp::Reverse(e.1.1 + e.1.2));
     let names = lock(&THUNKS);
     let pct = |d: Duration| 100.0 * d.as_secs_f32() / wall.as_secs_f32();
-    let (call, wait) = v.iter().fold((Duration::ZERO, Duration::ZERO), |a, e| (a.0 + e.1.1, a.1 + e.1.2));
-    log!("prof: imports {:.1}% (+{:.1}% waiting for the turn) of {:.1} s", pct(call), pct(wait), wall.as_secs_f32());
+    let (call, wait) = v.iter().fold((Duration::ZERO, Duration::ZERO), |a, e| {
+        (a.0 + e.1.1, a.1 + e.1.2)
+    });
+    log!(
+        "prof: imports {:.1}% (+{:.1}% waiting for the turn) of {:.1} s",
+        pct(call),
+        pct(wait),
+        wall.as_secs_f32()
+    );
     for (k, (n, call, wait)) in v.iter().take(8) {
-        log!("prof:   {:<28} {:>8} calls {:>5.1}% +{:.1}%", names[**k].name, n, pct(*call), pct(*wait));
+        log!(
+            "prof:   {:<28} {:>8} calls {:>5.1}% +{:.1}%",
+            names[**k].name,
+            n,
+            pct(*call),
+            pct(*wait)
+        );
     }
     *p = None;
 }
@@ -779,9 +876,13 @@ fn on_event(c: &mut Cpu, e: Event) {
                 static KNOWN: std::cell::RefCell<Vec<Option<(ImpFn, i32, bool)>>> = const { std::cell::RefCell::new(Vec::new()) };
             }
             let known = KNOWN.with_borrow(|v| v.get(k).copied().flatten());
-            let (f, nargs, quick) = if let Some(e) = known { e } else {
+            let (f, nargs, quick) = if let Some(e) = known {
+                e
+            } else {
                 let t = lock(&THUNKS);
-                let Some(th) = t.get(k) else { fatal(c, &format!("call to unused thunk {a:#x}")) };
+                let Some(th) = t.get(k) else {
+                    fatal(c, &format!("call to unused thunk {a:#x}"))
+                };
                 if trace_api() {
                     log!("api {} from {:#x}", th.name, mem().rd32(c.r[ESP]));
                 }
@@ -848,7 +949,13 @@ fn report_fault(kind: &str, a: usize, pc: usize) {
     let base = mem().base as usize;
     if a >= base && a - base < rt::GUEST_SPAN {
         // the recompiled function the host code belongs to: the nearest start below it
-        let func = rt::DISPATCH.get().and_then(|d| d.table.iter().filter(|e| e.1 <= pc).max_by_key(|e| e.1).map(|e| e.0));
+        let func = rt::DISPATCH.get().and_then(|d| {
+            d.table
+                .iter()
+                .filter(|e| e.1 <= pc)
+                .max_by_key(|e| e.1)
+                .map(|e| e.0)
+        });
         log!(
             "fatal: guest memory {kind} at {:#x} in the function at {} (last import call returned to {:#x})",
             a - base,
@@ -863,12 +970,20 @@ fn report_fault(kind: &str, a: usize, pc: usize) {
 #[cfg(windows)]
 fn catch_faults() {
     use windows_sys::Win32::Foundation::{EXCEPTION_ACCESS_VIOLATION, NTSTATUS};
-    use windows_sys::Win32::System::Diagnostics::Debug::{AddVectoredExceptionHandler, EXCEPTION_POINTERS};
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_POINTERS,
+    };
     unsafe extern "system" fn on_fault(info: *mut EXCEPTION_POINTERS) -> i32 {
         let rec = unsafe { &*(*info).ExceptionRecord };
         if rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION as NTSTATUS {
-            let kind = ["read", "write", "execute"].get(rec.ExceptionInformation[0]).unwrap_or(&"access");
-            report_fault(kind, rec.ExceptionInformation[1], rec.ExceptionAddress as usize);
+            let kind = ["read", "write", "execute"]
+                .get(rec.ExceptionInformation[0])
+                .unwrap_or(&"access");
+            report_fault(
+                kind,
+                rec.ExceptionInformation[1],
+                rec.ExceptionAddress as usize,
+            );
         }
         0 // EXCEPTION_CONTINUE_SEARCH
     }
@@ -883,8 +998,18 @@ fn catch_faults() {
             let g = &(*(ctx as *const libc::ucontext_t)).uc_mcontext.gregs;
             // page fault error code: bit 1 a write, bit 4 an instruction fetch
             let err = g[libc::REG_ERR as usize];
-            let kind = if err & 0x10 != 0 { "execute" } else if err & 2 != 0 { "write" } else { "read" };
-            report_fault(kind, (*info).si_addr() as usize, g[libc::REG_RIP as usize] as usize);
+            let kind = if err & 0x10 != 0 {
+                "execute"
+            } else if err & 2 != 0 {
+                "write"
+            } else {
+                "read"
+            };
+            report_fault(
+                kind,
+                (*info).si_addr() as usize,
+                g[libc::REG_RIP as usize] as usize,
+            );
             // the default action at the next try: the process ends as it would have
             libc::signal(sig, libc::SIG_DFL);
         }
@@ -905,10 +1030,24 @@ fn catch_faults() {}
 fn fatal(c: &Cpu, msg: &str) -> ! {
     let m = mem();
     let sp = c.r[ESP];
-    let stack: Vec<String> = (0..8).map(|k| format!("{:08x}", m.rd32(sp + 4 * k))).collect();
+    let stack: Vec<String> = (0..8)
+        .map(|k| format!("{:08x}", m.rd32(sp + 4 * k)))
+        .collect();
     log!("fatal: {msg}");
-    log!("  eax {:08x} ecx {:08x} edx {:08x} ebx {:08x}", c.r[0], c.r[1], c.r[2], c.r[3]);
-    log!("  esp {:08x} ebp {:08x} esi {:08x} edi {:08x}", c.r[4], c.r[5], c.r[6], c.r[7]);
+    log!(
+        "  eax {:08x} ecx {:08x} edx {:08x} ebx {:08x}",
+        c.r[0],
+        c.r[1],
+        c.r[2],
+        c.r[3]
+    );
+    log!(
+        "  esp {:08x} ebp {:08x} esi {:08x} edi {:08x}",
+        c.r[4],
+        c.r[5],
+        c.r[6],
+        c.r[7]
+    );
     log!("  stack: {}", stack.join(" "));
     std::process::exit(101)
 }
@@ -951,12 +1090,18 @@ fn host_path_in(root: &Path, parts: &[&str]) -> PathBuf {
     let mut p = root.to_path_buf();
     for (k, part) in parts.iter().enumerate() {
         // the CD keeps the game in a folder ("D:\FCopLAPD\Missions\..."): the game folder
-        if k == 0 && crate::game::id().cd_folder.is_some_and(|f| part.eq_ignore_ascii_case(f)) {
+        if k == 0
+            && crate::game::id()
+                .cd_folder
+                .is_some_and(|f| part.eq_ignore_ascii_case(f))
+        {
             continue;
         }
-        let found = std::fs::read_dir(&p)
-            .ok()
-            .and_then(|d| d.flatten().map(|e| e.file_name()).find(|n| n.to_string_lossy().eq_ignore_ascii_case(part)));
+        let found = std::fs::read_dir(&p).ok().and_then(|d| {
+            d.flatten()
+                .map(|e| e.file_name())
+                .find(|n| n.to_string_lossy().eq_ignore_ascii_case(part))
+        });
         match found {
             Some(n) => p.push(n),
             None => p.push(part),
@@ -969,8 +1114,15 @@ fn host_path_in(root: &Path, parts: &[&str]) -> PathBuf {
 /// folder. Files the installer would have copied from the CD (the Video folder) may only exist
 /// in the CD's top folder, the game folder's parent: that is tried second.
 pub fn host_path(guest: &str) -> PathBuf {
-    let g = if guest.len() >= 2 && guest.as_bytes()[1] == b':' { &guest[2..] } else { guest };
-    let parts: Vec<&str> = g.split(['\\', '/']).filter(|s| !s.is_empty() && *s != ".").collect();
+    let g = if guest.len() >= 2 && guest.as_bytes()[1] == b':' {
+        &guest[2..]
+    } else {
+        guest
+    };
+    let parts: Vec<&str> = g
+        .split(['\\', '/'])
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
     let p = host_path_in(game_dir(), &parts);
     if p.exists() {
         return p;
@@ -1099,7 +1251,11 @@ pub fn run_game(img: &Image, dlls: &[Image], game_dir: PathBuf) -> u32 {
     missing.sort();
     missing.dedup();
     if !missing.is_empty() {
-        log!("{} imports not implemented yet: {}", missing.len(), missing.join(" "));
+        log!(
+            "{} imports not implemented yet: {}",
+            missing.len(),
+            missing.join(" ")
+        );
     }
 
     rt::set_handler(on_event);
@@ -1108,13 +1264,19 @@ pub fn run_game(img: &Image, dlls: &[Image], game_dir: PathBuf) -> u32 {
     catch_faults();
     if recomp::config::env("WATCH").is_some() {
         // where the game is, every 2 s (for hangs)
-        std::thread::spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            let (held, waiting) = {
-                let t = lock(&TURN.state);
-                (t.held, t.waiting.len())
-            };
-            log!("watch: last import call returned to {:#x}, turn held {held}, {waiting} waiting, poll {}", LAST_CALL.load(Ordering::Relaxed), rt::POLL.load(Ordering::Relaxed));
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let (held, waiting) = {
+                    let t = lock(&TURN.state);
+                    (t.held, t.waiting.len())
+                };
+                log!(
+                    "watch: last import call returned to {:#x}, turn held {held}, {waiting} waiting, poll {}",
+                    LAST_CALL.load(Ordering::Relaxed),
+                    rt::POLL.load(Ordering::Relaxed)
+                );
+            }
         });
     }
     if let Some(path) = rt::count_file() {
@@ -1167,7 +1329,8 @@ pub fn printf(fmt: &str, mut arg: impl FnMut(u32) -> u32) -> String {
             continue;
         }
         i += 1;
-        let (mut left, mut zero, mut plus, mut space, mut alt) = (false, false, false, false, false);
+        let (mut left, mut zero, mut plus, mut space, mut alt) =
+            (false, false, false, false, false);
         while i < f.len() && "-0+ #".contains(f[i]) {
             match f[i] {
                 '-' => left = true,
@@ -1222,7 +1385,11 @@ pub fn printf(fmt: &str, mut arg: impl FnMut(u32) -> u32) -> String {
             'c' => (take() as u8 as char).to_string(),
             's' => {
                 let p = take();
-                let s = if p == 0 { "(null)".to_string() } else { cstr(p) };
+                let s = if p == 0 {
+                    "(null)".to_string()
+                } else {
+                    cstr(p)
+                };
                 match prec {
                     Some(n) => s.chars().take(n).collect(),
                     None => s,

@@ -31,7 +31,19 @@ fn get_text_metrics(c: &mut Cpu) -> u32 {
     let m = mem();
     m.slice(p, 56).fill(0);
     // height, ascent, descent, internal and external leading, average and maximum width, weight
-    for (k, v) in [t.height, t.ascent, t.descent, t.internal_leading, 0, t.avg_width, t.max_width, 400].into_iter().enumerate() {
+    for (k, v) in [
+        t.height,
+        t.ascent,
+        t.descent,
+        t.internal_leading,
+        0,
+        t.avg_width,
+        t.max_width,
+        400,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         m.wr32(p + 4 * k as u32, v as u32);
     }
     // digitized aspect, first, last, default and break character, pitch and family (TrueType,
@@ -77,7 +89,11 @@ pub struct Dc {
 
 impl Dc {
     fn new() -> Dc {
-        Dc { bk: 0xffffff, bk_mode: 2, ..Dc::default() }
+        Dc {
+            bk: 0xffffff,
+            bk_mode: 2,
+            ..Dc::default()
+        }
     }
 }
 
@@ -113,7 +129,10 @@ static NEXT: AtomicU32 = AtomicU32::new(0x6700);
 /// A new GDI object's handle.
 pub fn new_obj(o: Obj) -> u32 {
     let h = NEXT.fetch_add(4, Ordering::Relaxed);
-    OBJECTS.lock().unwrap_or_else(|e| e.into_inner()).insert(h, o);
+    OBJECTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(h, o);
     h
 }
 
@@ -121,7 +140,11 @@ pub fn obj(h: u32) -> Option<Obj> {
     if h == SCREEN_DC {
         return Some(Obj::Dc(Dc::new()));
     }
-    OBJECTS.lock().unwrap_or_else(|e| e.into_inner()).get(&h).copied()
+    OBJECTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&h)
+        .copied()
 }
 
 fn create_solid_brush(c: &mut Cpu) -> u32 {
@@ -138,7 +161,11 @@ fn face(p: u32) -> String {
         return String::new();
     }
     let m = mem();
-    (0..32).map(|k| m.rd8(p + k)).take_while(|&b| b != 0).map(|b| b as char).collect()
+    (0..32)
+        .map(|k| m.rd8(p + k))
+        .take_while(|&b| b != 0)
+        .map(|b| b as char)
+        .collect()
 }
 
 /// CreateFontIndirectA(LOGFONTA*): height, width, escapement, orientation, weight, italic, ...,
@@ -146,13 +173,23 @@ fn face(p: u32) -> String {
 fn create_font_indirect(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
     let m = mem();
-    let spec = text::Spec { face: face(p + 28), height: m.rd32(p) as i32, weight: m.rd32(p + 16), italic: m.rd8(p + 20) != 0 };
+    let spec = text::Spec {
+        face: face(p + 28),
+        height: m.rd32(p) as i32,
+        weight: m.rd32(p + 16),
+        italic: m.rd8(p + 20) != 0,
+    };
     new_obj(Obj::Font(text::add(spec)))
 }
 
 /// CreateFontA(height, width, escapement, orientation, weight, italic, ..., face): 14 arguments.
 fn create_font(c: &mut Cpu) -> u32 {
-    let spec = text::Spec { face: face(arg(c, 13)), height: arg(c, 0) as i32, weight: arg(c, 4), italic: arg(c, 5) != 0 };
+    let spec = text::Spec {
+        face: face(arg(c, 13)),
+        height: arg(c, 0) as i32,
+        weight: arg(c, 4),
+        italic: arg(c, 5) != 0,
+    };
     new_obj(Obj::Font(text::add(spec)))
 }
 
@@ -162,7 +199,11 @@ fn create_compatible_dc(_: &mut Cpu) -> u32 {
 
 /// A DC's state, changed by `f`; what `f` returns (0 for no DC).
 fn with_dc(dc: u32, f: impl FnOnce(&mut Dc) -> u32) -> u32 {
-    match OBJECTS.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&dc) {
+    match OBJECTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&dc)
+    {
         Some(Obj::Dc(d)) => f(d),
         _ => 0,
     }
@@ -182,7 +223,15 @@ fn dc_font(dc: u32) -> u32 {
         Some(Obj::Font(k)) => k,
         _ => {
             if DEFAULT.load(Ordering::Relaxed) == u32::MAX {
-                DEFAULT.store(text::add(text::Spec { face: "Arial".into(), height: 16, weight: 400, italic: false }), Ordering::Relaxed);
+                DEFAULT.store(
+                    text::add(text::Spec {
+                        face: "Arial".into(),
+                        height: 16,
+                        weight: 400,
+                        italic: false,
+                    }),
+                    Ordering::Relaxed,
+                );
             }
             DEFAULT.load(Ordering::Relaxed)
         }
@@ -229,7 +278,10 @@ fn get_text_align(c: &mut Cpu) -> u32 {
 fn text_arg(p: u32, n: u32) -> Vec<u8> {
     let m = mem();
     if n == u32::MAX {
-        (0..).map(|k| m.rd8(p + k)).take_while(|&b| b != 0).collect()
+        (0..)
+            .map(|k| m.rd8(p + k))
+            .take_while(|&b| b != 0)
+            .collect()
     } else {
         (0..n.min(4096)).map(|k| m.rd8(p + k)).collect()
     }
@@ -256,12 +308,21 @@ fn get_char_width(c: &mut Cpu) -> u32 {
 
 /// Text into the DIB selected into `dc` (none: nothing drawn): the background cell when
 /// OPAQUE, the glyphs' coverage blended in the text colour. `dx`: ExtTextOutA's advances.
-fn draw_text(dc: u32, (x, y): (i32, i32), s: &[u8], dx: Option<Vec<i32>>, opaque: Option<[i32; 4]>, clip: Option<[i32; 4]>) {
+fn draw_text(
+    dc: u32,
+    (x, y): (i32, i32),
+    s: &[u8],
+    dx: Option<Vec<i32>>,
+    opaque: Option<[i32; 4]>,
+    clip: Option<[i32; 4]>,
+) {
     let Some(d) = dib_of(dc) else { return };
     let st = dc_state(dc);
     let k = dc_font(dc);
     let mt = text::metrics(k);
-    let w: i32 = dx.as_ref().map_or_else(|| text::extent(k, s).0, |v| v.iter().sum());
+    let w: i32 = dx
+        .as_ref()
+        .map_or_else(|| text::extent(k, s).0, |v| v.iter().sum());
     // TA_RIGHT 2, TA_CENTER 6; TA_BOTTOM 8, TA_BASELINE 24
     let x = match st.align & 6 {
         6 => x - w / 2,
@@ -283,7 +344,11 @@ fn draw_text(dc: u32, (x, y): (i32, i32), s: &[u8], dx: Option<Vec<i32>>, opaque
     let [cx0, cy0, cx1, cy1] = clip.unwrap_or([0, 0, d.w as i32, d.h as i32]);
     let color = rgb_of(st.text);
     text::draw(k, s, (x, y), dx.as_deref(), |px, py, cov| {
-        if px < cx0.max(0) || py < cy0.max(0) || px >= cx1.min(d.w as i32) || py >= cy1.min(d.h as i32) {
+        if px < cx0.max(0)
+            || py < cy0.max(0)
+            || px >= cx1.min(d.w as i32)
+            || py >= cy1.min(d.h as i32)
+        {
             return;
         }
         let old = dib_get(&d, px as u32, py as u32);
@@ -309,7 +374,11 @@ fn dib_get(d: &Dib, x: u32, y: u32) -> u32 {
     match d.bpp {
         16 => {
             let v = m.rd16(a + 2 * x) as u32;
-            if d.g6 { e5(v >> 11) << 16 | e6(v >> 5 & 63) << 8 | e5(v & 31) } else { e5(v >> 10 & 31) << 16 | e5(v >> 5 & 31) << 8 | e5(v & 31) }
+            if d.g6 {
+                e5(v >> 11) << 16 | e6(v >> 5 & 63) << 8 | e5(v & 31)
+            } else {
+                e5(v >> 10 & 31) << 16 | e5(v >> 5 & 31) << 8 | e5(v & 31)
+            }
         }
         32 => m.rd32(a + 4 * x) & 0xff_ffff,
         _ => 0,
@@ -329,7 +398,13 @@ fn dib_put(d: &Dib, x: u32, y: u32, c: u32) {
 
 /// TextOutA(dc, x, y, text, n)
 fn text_out(c: &mut Cpu) -> u32 {
-    let (dc, x, y, s, n) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3), arg(c, 4));
+    let (dc, x, y, s, n) = (
+        arg(c, 0),
+        arg(c, 1) as i32,
+        arg(c, 2) as i32,
+        arg(c, 3),
+        arg(c, 4),
+    );
     draw_text(dc, (x, y), &text_arg(s, n), None, None, None);
     1
 }
@@ -350,9 +425,15 @@ fn text_lines(k: u32, s: &[u8], flags: u32, width: i32) -> Vec<Vec<u8>> {
         }
     }
     let raw: Vec<Vec<u8>> = if flags & 0x20 != 0 {
-        vec![t.into_iter().filter(|&b| b != b'\r' && b != b'\n').collect()]
+        vec![
+            t.into_iter()
+                .filter(|&b| b != b'\r' && b != b'\n')
+                .collect(),
+        ]
     } else {
-        t.split(|&b| b == b'\n').map(|l| l.iter().copied().filter(|&b| b != b'\r').collect()).collect()
+        t.split(|&b| b == b'\n')
+            .map(|l| l.iter().copied().filter(|&b| b != b'\r').collect())
+            .collect()
     };
     if flags & 0x10 == 0 {
         return raw;
@@ -391,7 +472,11 @@ pub fn draw_text_a(c: &mut Cpu) -> u32 {
     let lines = text_lines(k, &text_arg(s, n), flags, r - l);
     let h = lh * lines.len() as i32;
     if flags & 0x400 != 0 {
-        let w = lines.iter().map(|x| text::extent(k, x).0).max().unwrap_or(0);
+        let w = lines
+            .iter()
+            .map(|x| text::extent(k, x).0)
+            .max()
+            .unwrap_or(0);
         m.wr32(rect + 8, (l + w) as u32);
         m.wr32(rect + 12, (t + h) as u32);
         return h as u32;
@@ -417,12 +502,32 @@ pub fn draw_text_a(c: &mut Cpu) -> u32 {
 /// ExtTextOutA(dc, x, y, options, rect, text, n, dx): ETO_OPAQUE (2) fills the rectangle with
 /// the background colour, ETO_CLIPPED (4) cuts the text to it.
 fn ext_text_out(c: &mut Cpu) -> u32 {
-    let (dc, x, y, opts, rect, s, n, dx) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3), arg(c, 4), arg(c, 5), arg(c, 6), arg(c, 7));
+    let (dc, x, y, opts, rect, s, n, dx) = (
+        arg(c, 0),
+        arg(c, 1) as i32,
+        arg(c, 2) as i32,
+        arg(c, 3),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 6),
+        arg(c, 7),
+    );
     let m = mem();
     let r = (rect != 0).then(|| [0, 4, 8, 12].map(|o| m.rd32(rect + o) as i32));
     let s = text_arg(s, n);
-    let dx = (dx != 0).then(|| (0..s.len() as u32).map(|k| m.rd32(dx + 4 * k) as i32).collect());
-    draw_text(dc, (x, y), &s, dx, r.filter(|_| opts & 2 != 0), r.filter(|_| opts & 4 != 0));
+    let dx = (dx != 0).then(|| {
+        (0..s.len() as u32)
+            .map(|k| m.rd32(dx + 4 * k) as i32)
+            .collect()
+    });
+    draw_text(
+        dc,
+        (x, y),
+        &s,
+        dx,
+        r.filter(|_| opts & 2 != 0),
+        r.filter(|_| opts & 4 != 0),
+    );
     1
 }
 
@@ -432,7 +537,9 @@ fn select_object(c: &mut Cpu) -> u32 {
     let (dc, h) = (arg(c, 0), arg(c, 1));
     let mut objs = OBJECTS.lock().unwrap_or_else(|e| e.into_inner());
     let kind = objs.get(&h).copied();
-    let Some(Obj::Dc(d)) = objs.get_mut(&dc) else { return 0x6600 };
+    let Some(Obj::Dc(d)) = objs.get_mut(&dc) else {
+        return 0x6600;
+    };
     let (slot, default) = match kind {
         Some(Obj::Bitmap(_) | Obj::Dib(_)) => (&mut d.bitmap, 0x6680),
         Some(Obj::Brush(_)) => (&mut d.brush, STOCK),
@@ -452,7 +559,12 @@ fn select_object(c: &mut Cpu) -> u32 {
 fn create_dib_section(c: &mut Cpu) -> u32 {
     let (bmi, out) = (arg(c, 1), arg(c, 3));
     let m = mem();
-    let (w, h, bpp, compression) = (m.rd32(bmi + 4), m.rd32(bmi + 8) as i32, m.rd16(bmi + 14) as u32, m.rd32(bmi + 16));
+    let (w, h, bpp, compression) = (
+        m.rd32(bmi + 4),
+        m.rd32(bmi + 8) as i32,
+        m.rd16(bmi + 14) as u32,
+        m.rd32(bmi + 16),
+    );
     // BI_BITFIELDS: the green mask tells 565 from 555
     let g6 = bpp == 16 && compression == 3 && m.rd32(bmi + 44) == 0x07e0;
     let stride = (w * bpp).div_ceil(32) * 4;
@@ -460,7 +572,14 @@ fn create_dib_section(c: &mut Cpu) -> u32 {
     if out != 0 {
         m.wr32(out, bits);
     }
-    new_obj(Obj::Dib(Dib { bits, w, h: h.unsigned_abs(), stride, bpp, g6 }))
+    new_obj(Obj::Dib(Dib {
+        bits,
+        w,
+        h: h.unsigned_abs(),
+        stride,
+        bpp,
+        g6,
+    }))
 }
 
 /// The DIB selected into a DC.
@@ -504,7 +623,14 @@ fn dib_fill(d: &Dib, [x0, y0, x1, y1]: [i32; 4], f: impl Fn(u32) -> u32) {
 /// PatBlt(dc, x, y, w, h, rop): BLACKNESS, WHITENESS, PATCOPY (the brush), PATINVERT,
 /// DSTINVERT on a DIB.
 fn pat_blt(c: &mut Cpu) -> u32 {
-    let (dc, x, y, w, h, rop) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3) as i32, arg(c, 4) as i32, arg(c, 5));
+    let (dc, x, y, w, h, rop) = (
+        arg(c, 0),
+        arg(c, 1) as i32,
+        arg(c, 2) as i32,
+        arg(c, 3) as i32,
+        arg(c, 4) as i32,
+        arg(c, 5),
+    );
     let Some(d) = dib_of(dc) else { return 1 };
     let brush = match obj(dc) {
         Some(Obj::Dc(d)) => match obj(d.brush) {
@@ -514,7 +640,11 @@ fn pat_blt(c: &mut Cpu) -> u32 {
         _ => 0xffffff,
     };
     let r = [x, y, x + w, y + h];
-    let (black, white, pat) = (dib_pixel(&d, 0), dib_pixel(&d, 0xffffff), dib_pixel(&d, brush));
+    let (black, white, pat) = (
+        dib_pixel(&d, 0),
+        dib_pixel(&d, 0xffffff),
+        dib_pixel(&d, brush),
+    );
     let mask = if d.bpp == 16 { 0xffff } else { 0xff_ffff };
     match rop {
         0x42 => dib_fill(&d, r, |_| black),
@@ -528,7 +658,11 @@ fn pat_blt(c: &mut Cpu) -> u32 {
 }
 
 fn delete_object(c: &mut Cpu) -> u32 {
-    OBJECTS.lock().unwrap_or_else(|e| e.into_inner()).remove(&arg(c, 0)).is_some() as u32
+    OBJECTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&arg(c, 0))
+        .is_some() as u32
 }
 
 fn get_object_type(c: &mut Cpu) -> u32 {
@@ -544,18 +678,28 @@ fn get_stock_object(c: &mut Cpu) -> u32 {
         0..=5 => Obj::Brush([0xffffff, 0xc0c0c0, 0x808080, 0x404040, 0, 0][k as usize]),
         6..=8 => Obj::Pen([0xffffff, 0, 0][k as usize - 6]),
         15 => Obj::Palette,
-        _ => Obj::Font(text::add(text::Spec { face: "Arial".into(), height: if k == 13 { -11 } else { 16 }, weight: 400, italic: false })),
+        _ => Obj::Font(text::add(text::Spec {
+            face: "Arial".into(),
+            height: if k == 13 { -11 } else { 16 },
+            weight: 400,
+            italic: false,
+        })),
     };
     let h = STOCK + 4 * k;
-    OBJECTS.lock().unwrap_or_else(|e| e.into_inner()).entry(h).or_insert(o);
+    OBJECTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(h)
+        .or_insert(o);
     h
 }
 
 /// GetSysColor's colours (Windows 98's standard scheme), by COLOR_ index.
 pub const SYS_COLORS: [u32; 31] = [
-    0xc0c0c0, 0x808000, 0x800000, 0x808080, 0xc0c0c0, 0xffffff, 0x000000, 0x000000, 0x000000, 0xffffff, 0xc0c0c0,
-    0xc0c0c0, 0x808080, 0x800000, 0xffffff, 0xc0c0c0, 0x808080, 0x808080, 0x000000, 0xc0c0c0, 0xffffff, 0x000000,
-    0xdfdfdf, 0x000000, 0xe1ffff, 0x000000, 0x800000, 0xd08410, 0x808080, 0x800000, 0xc0c0c0,
+    0xc0c0c0, 0x808000, 0x800000, 0x808080, 0xc0c0c0, 0xffffff, 0x000000, 0x000000, 0x000000,
+    0xffffff, 0xc0c0c0, 0xc0c0c0, 0x808080, 0x800000, 0xffffff, 0xc0c0c0, 0x808080, 0x808080,
+    0x000000, 0xc0c0c0, 0xffffff, 0x000000, 0xdfdfdf, 0x000000, 0xe1ffff, 0x000000, 0x800000,
+    0xd08410, 0x808080, 0x800000, 0xc0c0c0,
 ];
 
 pub fn get_sys_color(c: &mut Cpu) -> u32 {
@@ -567,7 +711,11 @@ pub fn get_sys_color_brush(c: &mut Cpu) -> u32 {
     static MADE: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
     let k = arg(c, 0);
     let color = SYS_COLORS.get(k as usize).copied().unwrap_or(0);
-    *MADE.lock().unwrap_or_else(|e| e.into_inner()).entry(k).or_insert_with(|| new_obj(Obj::Brush(color)))
+    *MADE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(k)
+        .or_insert_with(|| new_obj(Obj::Brush(color)))
 }
 
 /// GetObjectA for a pen or brush: LOGPEN / LOGBRUSH; others answer 0.
@@ -588,7 +736,11 @@ fn get_object(c: &mut Cpu) -> u32 {
         }
         Some(Obj::Bitmap(info)) if n >= 24 && info != 0 => {
             // BITMAP: type, width, height, bytes a row (even), planes, bits a pixel, bits
-            let (w, h, bpp) = (m.rd32(info + 4), m.rd32(info + 8) as i32, m.rd16(info + 14) as u32);
+            let (w, h, bpp) = (
+                m.rd32(info + 4),
+                m.rd32(info + 8) as i32,
+                m.rd16(info + 14) as u32,
+            );
             let colors = match m.rd32(info + 32) {
                 0 if bpp <= 8 => 1 << bpp,
                 k => k,
@@ -622,7 +774,11 @@ fn get_object(c: &mut Cpu) -> u32 {
             m.wr16(p + 36, 1);
             m.wr16(p + 38, d.bpp as u16);
             if d.bpp == 16 {
-                let masks = if d.g6 { [0xf800, 0x07e0, 0x001f] } else { [0x7c00, 0x03e0, 0x001f] };
+                let masks = if d.g6 {
+                    [0xf800, 0x07e0, 0x001f]
+                } else {
+                    [0x7c00, 0x03e0, 0x001f]
+                };
                 m.wr32(p + 40, 3); // BI_BITFIELDS
                 for (k, v) in masks.into_iter().enumerate() {
                     m.wr32(p + 64 + 4 * k as u32, v);
@@ -638,7 +794,11 @@ fn get_object(c: &mut Cpu) -> u32 {
 /// LoadBitmapA(module, name): a bitmap of the module's resources.
 pub fn load_bitmap(c: &mut Cpu) -> u32 {
     let (h, name) = (arg(c, 0), arg(c, 1));
-    match super::resource_in(h, super::ResId::Id(2), super::ResId::from_guest(name, super::cstr)) {
+    match super::resource_in(
+        h,
+        super::ResId::Id(2),
+        super::ResId::from_guest(name, super::cstr),
+    ) {
         Some((at, _)) => new_obj(Obj::Bitmap(at)),
         None => 0,
     }

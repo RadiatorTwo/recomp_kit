@@ -60,7 +60,13 @@ pub fn load(dir: &Path) -> std::io::Result<Vec<Image>> {
             exports: img.exports(),
             ordinals: img.export_ordinals(),
             attached: AtomicBool::new(false),
-            imports: img.imports().into_iter().map(|i| i.dll).collect::<std::collections::BTreeSet<_>>().into_iter().collect(),
+            imports: img
+                .imports()
+                .into_iter()
+                .map(|i| i.dll)
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
         });
         images.push(img);
     }
@@ -85,7 +91,13 @@ pub fn module(name: &str) -> Option<&'static Module> {
     let file = name.rsplit(['\\', '/']).next().unwrap_or(name);
     let has_ext = file.rsplit_once('.').is_some_and(|(_, e)| !e.is_empty());
     MODULES.get()?.iter().find(|m| {
-        if has_ext { m.file.eq_ignore_ascii_case(file) } else { m.file.rsplit_once('.').is_some_and(|(s, _)| s.eq_ignore_ascii_case(file)) }
+        if has_ext {
+            m.file.eq_ignore_ascii_case(file)
+        } else {
+            m.file
+                .rsplit_once('.')
+                .is_some_and(|(s, _)| s.eq_ignore_ascii_case(file))
+        }
     })
 }
 
@@ -140,9 +152,20 @@ const SYSTEM_MODULE: u32 = 0x7e00_0000;
 
 /// A system DLL's module handle.
 pub fn system_module(name: &str) -> Option<u32> {
-    let file = name.rsplit(['\\', '/']).next().unwrap_or(name).to_ascii_uppercase();
-    let file = if file.contains('.') { file } else { file + ".DLL" };
-    SYSTEM_DLLS.iter().position(|&d| d == file).map(|k| SYSTEM_MODULE + 0x1_0000 * k as u32)
+    let file = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_uppercase();
+    let file = if file.contains('.') {
+        file
+    } else {
+        file + ".DLL"
+    };
+    SYSTEM_DLLS
+        .iter()
+        .position(|&d| d == file)
+        .map(|k| SYSTEM_MODULE + 0x1_0000 * k as u32)
 }
 
 /// GetProcAddress in a system DLL: a thunk for one of our functions (0 if we have none).
@@ -150,14 +173,20 @@ pub fn system_proc(module: u32, name: &str) -> u32 {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     static MADE: Mutex<BTreeMap<(u32, String), u32>> = Mutex::new(BTreeMap::new());
-    let Some(dll) = module.checked_sub(SYSTEM_MODULE).map(|k| k / 0x1_0000).and_then(|k| SYSTEM_DLLS.get(k as usize)) else {
+    let Some(dll) = module
+        .checked_sub(SYSTEM_MODULE)
+        .map(|k| k / 0x1_0000)
+        .and_then(|k| SYSTEM_DLLS.get(k as usize))
+    else {
         return 0;
     };
     let mut made = super::lock(&MADE);
     if let Some(&a) = made.get(&(module, name.to_string())) {
         return a;
     }
-    let Some(&(n, nargs, f)) = super::find_import(dll, name) else { return 0 };
+    let Some(&(n, nargs, f)) = super::find_import(dll, name) else {
+        return 0;
+    };
     let a = super::thunk(n, nargs, f);
     made.insert((module, name.to_string()), a);
     a
@@ -165,7 +194,8 @@ pub fn system_proc(module: u32, name: &str) -> u32 {
 
 /// Attach the game DLLs that `img` imports.
 pub fn attach_imports(c: &mut Cpu, img: &Image) {
-    let wanted: std::collections::BTreeSet<String> = img.imports().into_iter().map(|i| i.dll).collect();
+    let wanted: std::collections::BTreeSet<String> =
+        img.imports().into_iter().map(|i| i.dll).collect();
     for m in wanted.iter().filter_map(|d| module(d)) {
         attach(c, m);
     }

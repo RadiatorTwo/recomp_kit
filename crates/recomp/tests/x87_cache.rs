@@ -165,14 +165,19 @@ fn run(rng: &mut Rng, ops: &[Op], cached: bool) -> Vec<u8> {
     let g = Guest::new(&SNIPPETS);
     let m = &g.mem;
     for k in 0..16 {
-        m.slice(SCRATCH + 8 * k, 8).copy_from_slice(&rng.f64().to_le_bytes());
-        m.wr32(SCRATCH + 128 + 4 * k, rng.next() as u32 >> (rng.next() % 32));
+        m.slice(SCRATCH + 8 * k, 8)
+            .copy_from_slice(&rng.f64().to_le_bytes());
+        m.wr32(
+            SCRATCH + 128 + 4 * k,
+            rng.next() as u32 >> (rng.next() % 32),
+        );
     }
     for k in 192..640 {
         m.wr8(SCRATCH + k, 0);
     }
     for (j, cw) in [0x37fu16, 0xc7f, 0x07f, 0xe7f].iter().enumerate() {
-        m.slice(SCRATCH + 600 + 2 * j as u32, 2).copy_from_slice(&cw.to_le_bytes());
+        m.slice(SCRATCH + 600 + 2 * j as u32, 2)
+            .copy_from_slice(&cw.to_le_bytes());
     }
     g.call(0, &[SCRATCH]);
     m.slice(SCRATCH, 640).to_vec()

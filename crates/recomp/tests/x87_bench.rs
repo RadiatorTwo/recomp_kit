@@ -73,14 +73,20 @@ const SNIPPETS: [(&str, Snippet); 1] = [("project", project)];
 #[ignore]
 fn x87_bench() {
     let g = Guest::new(&SNIPPETS);
-    let m = [0.8f32, -0.6, 0.1, 100.0, 0.6, 0.8, 0.05, -40.0, -0.1, 0.02, 0.99, 2000.0];
+    let m = [
+        0.8f32, -0.6, 0.1, 100.0, 0.6, 0.8, 0.05, -40.0, -0.1, 0.02, 0.99, 2000.0,
+    ];
     for (k, v) in m.iter().enumerate() {
         g.mem.wr32(SCRATCH + MATRIX + 4 * k as u32, v.to_bits());
     }
     for k in 0..POINTS * 3 {
-        g.mem.wr16(SCRATCH + PTS + 2 * k, ((k * 7919) % 2001) as u16 - 1000);
+        g.mem
+            .wr16(SCRATCH + PTS + 2 * k, ((k * 7919) % 2001) as u16 - 1000);
     }
-    for (name, cw) in [("24 bits truncating (0xc7f)", 0xc7fu16), ("53 bits to nearest (0x27f)", 0x27f)] {
+    for (name, cw) in [
+        ("24 bits truncating (0xc7f)", 0xc7fu16),
+        ("53 bits to nearest (0x27f)", 0x27f),
+    ] {
         g.mem.wr16(SCRATCH + CW, cw);
         // the fastest of a few rounds: the others had other work of the machine in them
         let calls = 10_000;

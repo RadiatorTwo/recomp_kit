@@ -1,6 +1,9 @@
 //! KERNEL32: process and C runtime start-up, memory, files, threads and synchronisation.
 
-use super::{Import, alloc, module, alloc_aligned, arg, block_size, cstr, free, guest_call, host_path, log, mem, new_cstr, put_cstr, realloc, set_last_error};
+use super::{
+    Import, alloc, alloc_aligned, arg, block_size, cstr, free, guest_call, host_path, log, mem,
+    module, new_cstr, put_cstr, realloc, set_last_error,
+};
 use recomp::rt::Cpu;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -21,12 +24,25 @@ pub enum Obj {
     File(Arc<Mutex<std::fs::File>>),
     /// standard input/output/error (-10, -11, -12)
     Std(u32),
-    Event { manual: bool, set: bool },
-    Mutex { owner: u32, count: u32 },
-    Thread { id: u32, done: bool, code: u32 },
+    Event {
+        manual: bool,
+        set: bool,
+    },
+    Mutex {
+        owner: u32,
+        count: u32,
+    },
+    Thread {
+        id: u32,
+        done: bool,
+        code: u32,
+    },
     Heap,
     /// FindFirstFileA's results and the next one
-    Find { entries: Vec<FindEntry>, next: usize },
+    Find {
+        entries: Vec<FindEntry>,
+        next: usize,
+    },
 }
 
 pub struct Objects {
@@ -36,7 +52,11 @@ pub struct Objects {
     cs: BTreeMap<u32, (u32, u32)>,
 }
 
-static OBJS: Mutex<Objects> = Mutex::new(Objects { map: BTreeMap::new(), next: 0x100, cs: BTreeMap::new() });
+static OBJS: Mutex<Objects> = Mutex::new(Objects {
+    map: BTreeMap::new(),
+    next: 0x100,
+    cs: BTreeMap::new(),
+});
 /// notified whenever an object becomes signalled
 static SIGNAL: Condvar = Condvar::new();
 
@@ -46,7 +66,24 @@ pub fn objects() -> MutexGuard<'static, Objects> {
 
 /// For a savestate's fingerprint (`savestate.rs`): each handle and its kind.
 pub fn object_kinds() -> Vec<(u32, u32)> {
-    objects().map.iter().map(|(&h, o)| (h, match o { Obj::File(_) => 1, Obj::Std(_) => 2, Obj::Event { .. } => 3, Obj::Mutex { .. } => 4, Obj::Thread { .. } => 5, Obj::Heap => 6, Obj::Find { .. } => 7 })).collect()
+    objects()
+        .map
+        .iter()
+        .map(|(&h, o)| {
+            (
+                h,
+                match o {
+                    Obj::File(_) => 1,
+                    Obj::Std(_) => 2,
+                    Obj::Event { .. } => 3,
+                    Obj::Mutex { .. } => 4,
+                    Obj::Thread { .. } => 5,
+                    Obj::Heap => 6,
+                    Obj::Find { .. } => 7,
+                },
+            )
+        })
+        .collect()
 }
 
 /// What a savestate keeps of the objects: events' state, files' positions.
@@ -89,7 +126,10 @@ impl Objects {
     }
 }
 
-fn wait_signal(g: MutexGuard<'static, Objects>, until: Option<Instant>) -> (MutexGuard<'static, Objects>, bool) {
+fn wait_signal(
+    g: MutexGuard<'static, Objects>,
+    until: Option<Instant>,
+) -> (MutexGuard<'static, Objects>, bool) {
     match until {
         None => (SIGNAL.wait(g).unwrap_or_else(|e| e.into_inner()), false),
         Some(t) => {
@@ -97,7 +137,9 @@ fn wait_signal(g: MutexGuard<'static, Objects>, until: Option<Instant>) -> (Mute
             if now >= t {
                 return (g, true);
             }
-            let (g, r) = SIGNAL.wait_timeout(g, t - now).unwrap_or_else(|e| e.into_inner());
+            let (g, r) = SIGNAL
+                .wait_timeout(g, t - now)
+                .unwrap_or_else(|e| e.into_inner());
             (g, r.timed_out() && Instant::now() >= t)
         }
     }
@@ -175,7 +217,9 @@ fn local_free(c: &mut Cpu) -> u32 {
 
 /// 100 ns steps since 1601-01-01 (FILETIME) now, UTC.
 fn file_time_now() -> u64 {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     d.as_nanos() as u64 / 100 + 116_444_736_000_000_000
 }
 
@@ -197,7 +241,17 @@ fn system_time(t: u64) -> [u16; 8] {
     let year = yoe + era * 400 + (month <= 2) as i64;
     let weekday = (days + 4).rem_euclid(7);
     let s = secs % 86400;
-    [year, month, weekday, day, (s / 3600) as i64, (s / 60 % 60) as i64, (s % 60) as i64, ms as i64].map(|v| v as u16)
+    [
+        year,
+        month,
+        weekday,
+        day,
+        (s / 3600) as i64,
+        (s / 60 % 60) as i64,
+        (s % 60) as i64,
+        ms as i64,
+    ]
+    .map(|v| v as u16)
 }
 
 fn put_system_time(p: u32, st: [u16; 8]) {
@@ -225,7 +279,10 @@ fn file_time_to_local_file_time(c: &mut Cpu) -> u32 {
 fn file_time_to_system_time(c: &mut Cpu) -> u32 {
     let m = mem();
     let (ft, st) = (arg(c, 0), arg(c, 1));
-    put_system_time(st, system_time(m.rd32(ft) as u64 | (m.rd32(ft + 4) as u64) << 32));
+    put_system_time(
+        st,
+        system_time(m.rd32(ft) as u64 | (m.rd32(ft + 4) as u64) << 32),
+    );
     1
 }
 
@@ -233,8 +290,17 @@ fn file_time_to_system_time(c: &mut Cpu) -> u32 {
 fn system_time_to_file_time(c: &mut Cpu) -> u32 {
     let m = mem();
     let (st, ft) = (arg(c, 0), arg(c, 1));
-    let (y, mo, d) = (m.rd16(st) as i64, m.rd16(st + 2) as i64, m.rd16(st + 6) as i64);
-    let (h, mi, s, ms) = (m.rd16(st + 8) as i64, m.rd16(st + 10) as i64, m.rd16(st + 12) as i64, m.rd16(st + 14) as i64);
+    let (y, mo, d) = (
+        m.rd16(st) as i64,
+        m.rd16(st + 2) as i64,
+        m.rd16(st + 6) as i64,
+    );
+    let (h, mi, s, ms) = (
+        m.rd16(st + 8) as i64,
+        m.rd16(st + 10) as i64,
+        m.rd16(st + 12) as i64,
+        m.rd16(st + 14) as i64,
+    );
     // days since 1970-01-01 (Howard Hinnant's algorithm), then since 1601
     let y2 = if mo <= 2 { y - 1 } else { y };
     let era = y2.div_euclid(400);
@@ -255,13 +321,21 @@ fn get_user_default_lcid(_: &mut Cpu) -> u32 {
 
 /// MulDiv(a, b, c): a * b / c rounded, -1 when c is 0.
 fn mul_div(c: &mut Cpu) -> u32 {
-    let (a, b, d) = (arg(c, 0) as i32 as i64, arg(c, 1) as i32 as i64, arg(c, 2) as i32 as i64);
+    let (a, b, d) = (
+        arg(c, 0) as i32 as i64,
+        arg(c, 1) as i32 as i64,
+        arg(c, 2) as i32 as i64,
+    );
     if d == 0 {
         return u32::MAX;
     }
     let p = a * b;
     let half = d.abs() / 2;
-    let r = if (p < 0) != (d < 0) { (p - half * p.signum()) / d } else { (p + half * p.signum()) / d };
+    let r = if (p < 0) != (d < 0) {
+        (p - half * p.signum()) / d
+    } else {
+        (p + half * p.signum()) / d
+    };
     r as i32 as u32
 }
 
@@ -275,7 +349,10 @@ fn lstrcpyn(c: &mut Cpu) -> u32 {
 /// FindResourceA(module, name, type): a block with the data's address and size (HRSRC).
 fn find_resource(c: &mut Cpu) -> u32 {
     let (h, name, ty) = (arg(c, 0), arg(c, 1), arg(c, 2));
-    let (name, ty) = (super::ResId::from_guest(name, cstr), super::ResId::from_guest(ty, cstr));
+    let (name, ty) = (
+        super::ResId::from_guest(name, cstr),
+        super::ResId::from_guest(ty, cstr),
+    );
     match super::resource_in(h, ty, name) {
         Some((at, size)) => {
             let p = alloc(8);
@@ -328,10 +405,17 @@ fn message_text(base: u32, id: u32) -> Option<String> {
         let (len, wide) = (m.rd16(e) as u32, m.rd16(e + 2) & 1 != 0);
         let body = e + 4;
         let s = if wide {
-            let units: Vec<u16> = (0..(len - 4) / 2).map(|k| m.rd16(body + 2 * k)).take_while(|&u| u != 0).collect();
+            let units: Vec<u16> = (0..(len - 4) / 2)
+                .map(|k| m.rd16(body + 2 * k))
+                .take_while(|&u| u != 0)
+                .collect();
             String::from_utf16_lossy(&units)
         } else {
-            (0..len - 4).map(|k| m.rd8(body + k)).take_while(|&b| b != 0).map(|b| b as char).collect()
+            (0..len - 4)
+                .map(|k| m.rd8(body + k))
+                .take_while(|&b| b != 0)
+                .map(|b| b as char)
+                .collect()
         };
         return Some(s);
     }
@@ -344,7 +428,14 @@ fn message_text(base: u32, id: u32) -> Option<String> {
 /// messages (FROM_SYSTEM 0x1000) are "Error n". ALLOCATE_BUFFER (0x100) writes a new buffer's
 /// address to `buf`.
 fn format_message(c: &mut Cpu) -> u32 {
-    let (flags, src, id, buf, n, args) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 4), arg(c, 5), arg(c, 6));
+    let (flags, src, id, buf, n, args) = (
+        arg(c, 0),
+        arg(c, 1),
+        arg(c, 2),
+        arg(c, 4),
+        arg(c, 5),
+        arg(c, 6),
+    );
     let text = if flags & 0x400 != 0 {
         Some(cstr(src))
     } else if flags & 0x800 != 0 {
@@ -412,7 +503,11 @@ fn format_message(c: &mut Cpu) -> u32 {
     } else {
         put_cstr(buf, &out, n);
     }
-    len.min(if flags & 0x100 != 0 { len } else { n.saturating_sub(1) })
+    len.min(if flags & 0x100 != 0 {
+        len
+    } else {
+        n.saturating_sub(1)
+    })
 }
 
 fn lstrcmp(c: &mut Cpu) -> u32 {
@@ -429,7 +524,10 @@ fn lstrcat(c: &mut Cpu) -> u32 {
 
 /// lstrcmpiA: compared without case (as the C locale).
 fn lstrcmpi(c: &mut Cpu) -> u32 {
-    let (a, b) = (cstr(arg(c, 0)).to_ascii_lowercase(), cstr(arg(c, 1)).to_ascii_lowercase());
+    let (a, b) = (
+        cstr(arg(c, 0)).to_ascii_lowercase(),
+        cstr(arg(c, 1)).to_ascii_lowercase(),
+    );
     a.cmp(&b) as i32 as u32
 }
 
@@ -437,7 +535,19 @@ fn lstrcmpi(c: &mut Cpu) -> u32 {
 fn global_memory_status(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
     let m = mem();
-    for (k, v) in [32u32, 25, 1 << 30, 768 << 20, 2 << 30, 2 << 30, 0x7ffe_0000, 0x6000_0000].into_iter().enumerate() {
+    for (k, v) in [
+        32u32,
+        25,
+        1 << 30,
+        768 << 20,
+        2 << 30,
+        2 << 30,
+        0x7ffe_0000,
+        0x6000_0000,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         m.wr32(p + 4 * k as u32, v);
     }
     0
@@ -484,7 +594,11 @@ fn get_module_handle(c: &mut Cpu) -> u32 {
     }
     let file = name.rsplit(['\\', '/']).next().unwrap_or(&name);
     let exe = crate::game::id().exe;
-    if file.eq_ignore_ascii_case(exe) || exe.rsplit_once('.').is_some_and(|(s, _)| file.eq_ignore_ascii_case(s)) {
+    if file.eq_ignore_ascii_case(exe)
+        || exe
+            .rsplit_once('.')
+            .is_some_and(|(s, _)| file.eq_ignore_ascii_case(s))
+    {
         return super::IMAGE_BASE;
     }
     if file.eq_ignore_ascii_case("glide2x.dll") || file.eq_ignore_ascii_case("glide2x") {
@@ -501,7 +615,11 @@ fn get_module_handle(c: &mut Cpu) -> u32 {
 
 /// Where the EXE is, as the game sees it.
 fn exe_path() -> String {
-    format!("{}\\{}", crate::game::id().install_dir, crate::game::id().exe)
+    format!(
+        "{}\\{}",
+        crate::game::id().install_dir,
+        crate::game::id().exe
+    )
 }
 
 fn get_module_file_name(c: &mut Cpu) -> u32 {
@@ -537,7 +655,10 @@ pub fn terminate(code: u32) -> ! {
         use windows_sys::Win32::Foundation::GetLastError;
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
         if TerminateProcess(GetCurrentProcess(), code) == 0 {
-            log!("TerminateProcess failed (error {}), exiting normally", GetLastError());
+            log!(
+                "TerminateProcess failed (error {}), exiting normally",
+                GetLastError()
+            );
         }
     }
     #[cfg(unix)]
@@ -605,7 +726,11 @@ fn get_logical_drive_strings(c: &mut Cpu) -> u32 {
 
 fn get_drive_type(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
-    match if p == 0 { b'C' } else { mem().rd8(p).to_ascii_uppercase() } {
+    match if p == 0 {
+        b'C'
+    } else {
+        mem().rd8(p).to_ascii_uppercase()
+    } {
         b'C' => 3, // fixed
         b'D' => 5, // CD-ROM
         _ => 1,    // no root directory
@@ -616,7 +741,10 @@ fn get_volume_information(c: &mut Cpu) -> u32 {
     let root = arg(c, 0);
     let cd = root != 0 && mem().rd8(root).eq_ignore_ascii_case(&b'D');
     let m = mem();
-    let (label, serial) = crate::game::id().cd.filter(|_| cd).unwrap_or(("SYSTEM", 0x1234_5678));
+    let (label, serial) = crate::game::id()
+        .cd
+        .filter(|_| cd)
+        .unwrap_or(("SYSTEM", 0x1234_5678));
     put_cstr(arg(c, 1), label, arg(c, 2));
     for (k, v) in [(3, serial), (4, 255), (5, 0)] {
         if arg(c, k) != 0 {
@@ -653,7 +781,11 @@ fn str_len(p: u32, n: u32, wide: bool) -> u32 {
     }
     let m = mem();
     let mut k = 0;
-    while if wide { m.rd16(p + 2 * k) != 0 } else { m.rd8(p + k) != 0 } {
+    while if wide {
+        m.rd16(p + 2 * k) != 0
+    } else {
+        m.rd8(p + k) != 0
+    } {
         k += 1;
     }
     k + 1
@@ -689,7 +821,9 @@ fn wide_char_to_multi_byte(c: &mut Cpu) -> u32 {
 }
 
 fn ctype(ch: u16) -> u16 {
-    let Ok(b) = u8::try_from(ch) else { return 0x100 };
+    let Ok(b) = u8::try_from(ch) else {
+        return 0x100;
+    };
     let c = b as char;
     let mut t = 0;
     if c.is_ascii_uppercase() || (0xc0..=0xde).contains(&b) && b != 0xd7 {
@@ -746,13 +880,21 @@ fn lc_map(c: &mut Cpu, wide: bool) -> u32 {
     let m = mem();
     let k = n.min(dn);
     for i in 0..k {
-        let v = if wide { m.rd16(src + 2 * i) as u8 } else { m.rd8(src + i) };
+        let v = if wide {
+            m.rd16(src + 2 * i) as u8
+        } else {
+            m.rd8(src + i)
+        };
         let v = match flags & 0x300 {
             0x100 => v.to_ascii_lowercase(),
             0x200 => v.to_ascii_uppercase(),
             _ => v,
         };
-        if wide { m.wr16(dst + 2 * i, v as u16) } else { m.wr8(dst + i, v) }
+        if wide {
+            m.wr16(dst + 2 * i, v as u16)
+        } else {
+            m.wr8(dst + i, v)
+        }
     }
     k
 }
@@ -767,7 +909,15 @@ fn compare(c: &mut Cpu, wide: bool) -> u32 {
     let (flags, a, an, b, bn) = (arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5));
     let get = |p: u32, n: u32| -> Vec<u8> {
         let n = str_len(p, n, wide);
-        let mut v: Vec<u8> = (0..n).map(|i| if wide { mem().rd16(p + 2 * i) as u8 } else { mem().rd8(p + i) }).collect();
+        let mut v: Vec<u8> = (0..n)
+            .map(|i| {
+                if wide {
+                    mem().rd16(p + 2 * i) as u8
+                } else {
+                    mem().rd8(p + i)
+                }
+            })
+            .collect();
         while v.last() == Some(&0) {
             v.pop();
         }
@@ -805,7 +955,11 @@ fn locale_info(kind: u32) -> &'static str {
 fn get_locale_info_a(c: &mut Cpu) -> u32 {
     let (kind, buf, n) = (arg(c, 1), arg(c, 2), arg(c, 3));
     let s = locale_info(kind);
-    if n == 0 { s.len() as u32 + 1 } else { put_cstr(buf, s, n) + 1 }
+    if n == 0 {
+        s.len() as u32 + 1
+    } else {
+        put_cstr(buf, s, n) + 1
+    }
 }
 
 fn get_locale_info_w(c: &mut Cpu) -> u32 {
@@ -824,7 +978,11 @@ fn get_locale_info_w(c: &mut Cpu) -> u32 {
 
 fn lstrlen(c: &mut Cpu) -> u32 {
     let p = arg(c, 0);
-    if p == 0 { 0 } else { str_len(p, 0xffff_ffff, false) - 1 }
+    if p == 0 {
+        0
+    } else {
+        str_len(p, 0xffff_ffff, false) - 1
+    }
 }
 
 fn lstrcpy(c: &mut Cpu) -> u32 {
@@ -991,7 +1149,10 @@ fn interlocked_decrement(c: &mut Cpu) -> u32 {
 // ---- events, mutexes, waiting -------------------------------------------------------------------
 
 fn create_event(c: &mut Cpu) -> u32 {
-    objects().add(Obj::Event { manual: arg(c, 1) != 0, set: arg(c, 2) != 0 })
+    objects().add(Obj::Event {
+        manual: arg(c, 1) != 0,
+        set: arg(c, 2) != 0,
+    })
 }
 
 /// Set or reset event `h` (also from host threads: `dplay.rs`); 0 if it is no event.
@@ -1022,7 +1183,10 @@ fn pulse_event(c: &mut Cpu) -> u32 {
 
 fn create_mutex(c: &mut Cpu) -> u32 {
     let owner = if arg(c, 1) != 0 { thread_id() } else { 0 };
-    objects().add(Obj::Mutex { owner, count: (owner != 0) as u32 })
+    objects().add(Obj::Mutex {
+        owner,
+        count: (owner != 0) as u32,
+    })
 }
 
 /// Whether `h` is signalled for this thread; with `take`, also what a successful wait does to it.
@@ -1099,7 +1263,11 @@ fn close_handle(c: &mut Cpu) -> u32 {
 
 fn duplicate_handle(c: &mut Cpu) -> u32 {
     let (src, out) = (arg(c, 1), arg(c, 3));
-    let h = if src == 0xffff_fffe { thread_handle_of(thread_id()) } else { src };
+    let h = if src == 0xffff_fffe {
+        thread_handle_of(thread_id())
+    } else {
+        src
+    };
     if out != 0 {
         mem().wr32(out, h);
     }
@@ -1110,7 +1278,11 @@ fn duplicate_handle(c: &mut Cpu) -> u32 {
 
 fn thread_handle_of(id: u32) -> u32 {
     let g = objects();
-    g.map.iter().find(|(_, o)| matches!(o, Obj::Thread { id: i, .. } if *i == id)).map(|(&h, _)| h).unwrap_or(0xffff_fffe)
+    g.map
+        .iter()
+        .find(|(_, o)| matches!(o, Obj::Thread { id: i, .. } if *i == id))
+        .map(|(&h, _)| h)
+        .unwrap_or(0xffff_fffe)
 }
 
 fn create_thread(c: &mut Cpu) -> u32 {
@@ -1130,7 +1302,13 @@ fn create_thread(c: &mut Cpu) -> u32 {
             let code = if tc.stop != 0 { EXIT_CODE.get() } else { r };
             let mut g = objects();
             for o in g.map.values_mut() {
-                if let Obj::Thread { id: i, done, code: c, .. } = o {
+                if let Obj::Thread {
+                    id: i,
+                    done,
+                    code: c,
+                    ..
+                } = o
+                {
                     if *i == id {
                         *done = true;
                         *c = code;
@@ -1144,7 +1322,11 @@ fn create_thread(c: &mut Cpu) -> u32 {
     if id_out != 0 {
         mem().wr32(id_out, id);
     }
-    objects().add(Obj::Thread { id, done: false, code: 0 })
+    objects().add(Obj::Thread {
+        id,
+        done: false,
+        code: 0,
+    })
 }
 
 /// The guest thread a handle names (GetCurrentThread's pseudo handle: the caller).
@@ -1164,7 +1346,9 @@ fn resume_thread(c: &mut Cpu) -> u32 {
 
 /// SuspendThread: the thread stops at its next loop head (see `GuestThread`).
 fn suspend_thread(c: &mut Cpu) -> u32 {
-    let Some(t) = thread_of(arg(c, 0)) else { return 0xffff_ffff };
+    let Some(t) = thread_of(arg(c, 0)) else {
+        return 0xffff_ffff;
+    };
     let was = t.suspend();
     t.wait_if_self();
     was
@@ -1174,7 +1358,9 @@ fn suspend_thread(c: &mut Cpu) -> u32 {
 /// set their message loop's thread low, timers and audio high, and TIME_CRITICAL while they
 /// measure the processor's speed.
 fn set_thread_priority(c: &mut Cpu) -> u32 {
-    let Some(t) = thread_of(arg(c, 0)) else { return 0 };
+    let Some(t) = thread_of(arg(c, 0)) else {
+        return 0;
+    };
     t.prio.store(arg(c, 1) as i32, Ordering::Relaxed);
     1
 }
@@ -1214,7 +1400,10 @@ pub fn guest_us() -> u64 {
 
 /// The guest's clock reads `us` now.
 pub fn set_guest_us(us: u64) {
-    CLOCK_SHIFT.store(us as i64 - start_time().elapsed().as_micros() as i64, Ordering::Relaxed);
+    CLOCK_SHIFT.store(
+        us as i64 - start_time().elapsed().as_micros() as i64,
+        Ordering::Relaxed,
+    );
 }
 
 pub fn guest_ms() -> u32 {
@@ -1268,7 +1457,9 @@ pub static LAST_MISSION: Mutex<String> = Mutex::new(String::new());
 /// Whether a host path lies inside the game folder (its folder exists and is below it). The
 /// CD's top folder (the game folder's parent, read as a fallback) is never written.
 fn inside_game(p: &std::path::Path) -> bool {
-    let Some(dir) = p.parent().and_then(|d| std::fs::canonicalize(d).ok()) else { return false };
+    let Some(dir) = p.parent().and_then(|d| std::fs::canonicalize(d).ok()) else {
+        return false;
+    };
     std::fs::canonicalize(super::game_dir()).is_ok_and(|g| dir.starts_with(g))
 }
 
@@ -1277,7 +1468,10 @@ fn create_file(c: &mut Cpu) -> u32 {
     let path = host_path(&name);
     let write = access & 0x4000_0000 != 0;
     if (write || matches!(disp, 2 | 5)) && !inside_game(&path) {
-        log!("CreateFileA {name}: writing outside the game folder refused ({})", path.display());
+        log!(
+            "CreateFileA {name}: writing outside the game folder refused ({})",
+            path.display()
+        );
         set_last_error(5); // ERROR_ACCESS_DENIED
         return INVALID_HANDLE;
     }
@@ -1305,7 +1499,11 @@ fn create_file(c: &mut Cpu) -> u32 {
             if super::trace_api() {
                 log!("CreateFileA {name}: {e}");
             }
-            set_last_error(if e.kind() == std::io::ErrorKind::AlreadyExists { 80 } else { ERROR_FILE_NOT_FOUND });
+            set_last_error(if e.kind() == std::io::ErrorKind::AlreadyExists {
+                80
+            } else {
+                ERROR_FILE_NOT_FOUND
+            });
             INVALID_HANDLE
         }
     }
@@ -1370,7 +1568,12 @@ fn find_first_file(c: &mut Cpu) -> u32 {
         Some(k) => (&pattern[..k + 1], &pattern[k + 1..]),
         None => ("", pattern.as_str()),
     };
-    let entry = |name: String, md: &std::fs::Metadata| FindEntry { name, attributes: attributes(md), size: md.len(), time: md.modified().map_or(0, file_time) };
+    let entry = |name: String, md: &std::fs::Metadata| FindEntry {
+        name,
+        attributes: attributes(md),
+        size: md.len(),
+        time: md.modified().map_or(0, file_time),
+    };
     let mut entries = Vec::new();
     if !mask.contains(['*', '?']) {
         // a path without wildcards: that file or folder itself
@@ -1475,7 +1678,11 @@ fn get_full_path_name(c: &mut Cpu) -> u32 {
     } else if let Some(rest) = name.strip_prefix(['\\', '/']) {
         format!("C:\\{rest}")
     } else {
-        format!("{}\\{}", crate::game::id().install_dir, name.trim_start_matches(".\\"))
+        format!(
+            "{}\\{}",
+            crate::game::id().install_dir,
+            name.trim_start_matches(".\\")
+        )
     };
     if full.len() as u32 >= n {
         return full.len() as u32 + 1;
@@ -1503,7 +1710,10 @@ fn delete_file(c: &mut Cpu) -> u32 {
     let name = cstr(arg(c, 0));
     let path = host_path(&name);
     if !inside_game(&path) {
-        log!("DeleteFileA {name}: outside the game folder, kept ({})", path.display());
+        log!(
+            "DeleteFileA {name}: outside the game folder, kept ({})",
+            path.display()
+        );
         set_last_error(5); // ERROR_ACCESS_DENIED
         return 0;
     }
@@ -1578,7 +1788,11 @@ fn set_file_pointer(c: &mut Cpu) -> u32 {
         set_last_error(ERROR_INVALID_HANDLE);
         return 0xffff_ffff;
     };
-    let d = if hi_p != 0 { ((mem().rd32(hi_p) as u64) << 32 | lo as u64) as i64 } else { lo as i32 as i64 };
+    let d = if hi_p != 0 {
+        ((mem().rd32(hi_p) as u64) << 32 | lo as u64) as i64
+    } else {
+        lo as i32 as i64
+    };
     let pos = match how {
         0 => SeekFrom::Start(d as u64),
         1 => SeekFrom::Current(d),
@@ -1599,7 +1813,9 @@ fn set_file_pointer(c: &mut Cpu) -> u32 {
 }
 
 fn set_end_of_file(c: &mut Cpu) -> u32 {
-    let Some(f) = file_of(arg(c, 0)) else { return 0 };
+    let Some(f) = file_of(arg(c, 0)) else {
+        return 0;
+    };
     let mut f = f.lock().unwrap();
     let Ok(p) = f.stream_position() else { return 0 };
     f.set_len(p).is_ok() as u32
@@ -1612,7 +1828,11 @@ fn flush_file_buffers(c: &mut Cpu) -> u32 {
 fn get_std_handle(c: &mut Cpu) -> u32 {
     let n = arg(c, 0);
     let mut g = objects();
-    if let Some((&h, _)) = g.map.iter().find(|(_, o)| matches!(o, Obj::Std(k) if *k == n)) {
+    if let Some((&h, _)) = g
+        .map
+        .iter()
+        .find(|(_, o)| matches!(o, Obj::Std(k) if *k == n))
+    {
         return h;
     }
     g.add(Obj::Std(n))
@@ -1670,7 +1890,11 @@ fn load_library(c: &mut Cpu) -> u32 {
 }
 fn get_proc_address(c: &mut Cpu) -> u32 {
     let (h, name) = (arg(c, 0), arg(c, 1));
-    let name = if name > 0xffff { cstr(name) } else { format!("#{name}") };
+    let name = if name > 0xffff {
+        cstr(name)
+    } else {
+        format!("#{name}")
+    };
     if h == super::glide::MODULE {
         return super::glide::proc_address(&name);
     }

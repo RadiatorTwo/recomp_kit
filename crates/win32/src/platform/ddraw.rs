@@ -70,8 +70,13 @@ struct DirectDraw {
     primary: u32,
 }
 
-static DD: Mutex<DirectDraw> =
-    Mutex::new(DirectDraw { surfaces: BTreeMap::new(), palettes: BTreeMap::new(), clippers: BTreeMap::new(), mode: None, primary: 0 });
+static DD: Mutex<DirectDraw> = Mutex::new(DirectDraw {
+    surfaces: BTreeMap::new(),
+    palettes: BTreeMap::new(),
+    clippers: BTreeMap::new(),
+    mode: None,
+    primary: 0,
+});
 
 fn dd() -> MutexGuard<'static, DirectDraw> {
     DD.lock().unwrap_or_else(|e| e.into_inner())
@@ -89,7 +94,12 @@ const BMASK: u32 = 0x001f;
 fn rect(p: u32) -> Option<[i32; 4]> {
     (p != 0).then(|| {
         let m = mem();
-        [m.rd32(p) as i32, m.rd32(p + 4) as i32, m.rd32(p + 8) as i32, m.rd32(p + 12) as i32]
+        [
+            m.rd32(p) as i32,
+            m.rd32(p + 4) as i32,
+            m.rd32(p + 8) as i32,
+            m.rd32(p + 12) as i32,
+        ]
     })
 }
 
@@ -133,7 +143,9 @@ pub fn show_pending() {
 
 /// Show what the window sees of the primary surface.
 fn present(d: &DirectDraw) {
-    let Some(s) = d.surfaces.get(&d.primary) else { return };
+    let Some(s) = d.surfaces.get(&d.primary) else {
+        return;
+    };
     let (x0, y0, w, h) = match d.mode {
         Some(_) => (0, 0, s.w as i32, s.h as i32),
         None => {
@@ -183,7 +195,8 @@ fn direct_draw_create(c: &mut Cpu) -> u32 {
 fn direct_draw_enumerate(c: &mut Cpu) -> u32 {
     let (cb, ctx) = (arg(c, 0), arg(c, 1));
     static NAMES: OnceLock<(u32, u32)> = OnceLock::new();
-    let &(desc, name) = NAMES.get_or_init(|| (new_cstr("Primary Display Driver"), new_cstr("display")));
+    let &(desc, name) =
+        NAMES.get_or_init(|| (new_cstr("Primary Display Driver"), new_cstr("display")));
     guest_call(c, cb, &[0, desc, name, ctx]);
     OK
 }
@@ -227,7 +240,15 @@ fn dd_create_palette(c: &mut Cpu) -> u32 {
     let (entries, out) = (arg(c, 2), arg(c, 3));
     let obj = com_new(PALETTE, 0);
     let m = mem();
-    let pal = (0..256).map(|k| if entries == 0 { 0 } else { entry_rgb(m.rd32(entries + 4 * k)) }).collect();
+    let pal = (0..256)
+        .map(|k| {
+            if entries == 0 {
+                0
+            } else {
+                entry_rgb(m.rd32(entries + 4 * k))
+            }
+        })
+        .collect();
     dd().palettes.insert(obj, pal);
     m.wr32(out, obj);
     OK
@@ -242,7 +263,22 @@ fn new_surface(d: &mut DirectDraw, w: u32, h: u32, bpp: u32, caps: u32) -> u32 {
     let pitch = (w * bpp / 8 + 7) & !7;
     let pixels = alloc(pitch * h);
     let obj = com_new(SURFACE, 0);
-    d.surfaces.insert(obj, Surface { w, h, pitch, bpp, pixels, caps, back: 0, ckey: None, palette: 0, clipper: 0, refs: 1 });
+    d.surfaces.insert(
+        obj,
+        Surface {
+            w,
+            h,
+            pitch,
+            bpp,
+            pixels,
+            caps,
+            back: 0,
+            ckey: None,
+            palette: 0,
+            clipper: 0,
+            refs: 1,
+        },
+    );
     obj
 }
 
@@ -250,15 +286,37 @@ fn dd_create_surface(c: &mut Cpu) -> u32 {
     let (desc, out) = (arg(c, 1), arg(c, 2));
     let m = mem();
     let flags = m.rd32(desc + 4);
-    let caps = if flags & DDSD_CAPS != 0 { m.rd32(desc + 0x68) } else { 0 };
+    let caps = if flags & DDSD_CAPS != 0 {
+        m.rd32(desc + 0x68)
+    } else {
+        0
+    };
     let mut d = dd();
     let obj = if caps & DDSCAPS_PRIMARYSURFACE != 0 {
         let (w, h, bpp) = d.mode.unwrap_or((DESKTOP_W, DESKTOP_H, 16));
-        let prim = new_surface(&mut d, w, h, bpp, caps | DDSCAPS_VISIBLE | DDSCAPS_FRONTBUFFER | DDSCAPS_VIDEOMEMORY);
-        let backs = if flags & DDSD_BACKBUFFERCOUNT != 0 { m.rd32(desc + 0x14) } else { 0 };
+        let prim = new_surface(
+            &mut d,
+            w,
+            h,
+            bpp,
+            caps | DDSCAPS_VISIBLE | DDSCAPS_FRONTBUFFER | DDSCAPS_VIDEOMEMORY,
+        );
+        let backs = if flags & DDSD_BACKBUFFERCOUNT != 0 {
+            m.rd32(desc + 0x14)
+        } else {
+            0
+        };
         let mut prev = prim;
         for _ in 0..backs {
-            let b = new_surface(&mut d, w, h, bpp, (caps & !(DDSCAPS_PRIMARYSURFACE | DDSCAPS_VISIBLE)) | DDSCAPS_BACKBUFFER | DDSCAPS_VIDEOMEMORY);
+            let b = new_surface(
+                &mut d,
+                w,
+                h,
+                bpp,
+                (caps & !(DDSCAPS_PRIMARYSURFACE | DDSCAPS_VISIBLE))
+                    | DDSCAPS_BACKBUFFER
+                    | DDSCAPS_VIDEOMEMORY,
+            );
             d.surfaces.get_mut(&prev).unwrap().back = b;
             prev = b;
         }
@@ -269,14 +327,32 @@ fn dd_create_surface(c: &mut Cpu) -> u32 {
         d.primary = prim;
         prim
     } else {
-        let w = if flags & DDSD_WIDTH != 0 { m.rd32(desc + 0xc) } else { 0 };
-        let h = if flags & DDSD_HEIGHT != 0 { m.rd32(desc + 8) } else { 0 };
-        let bpp = if flags & DDSD_PIXELFORMAT != 0 { m.rd32(desc + 0x48 + 0xc) } else { 16 };
+        let w = if flags & DDSD_WIDTH != 0 {
+            m.rd32(desc + 0xc)
+        } else {
+            0
+        };
+        let h = if flags & DDSD_HEIGHT != 0 {
+            m.rd32(desc + 8)
+        } else {
+            0
+        };
+        let bpp = if flags & DDSD_PIXELFORMAT != 0 {
+            m.rd32(desc + 0x48 + 0xc)
+        } else {
+            16
+        };
         if w == 0 || h == 0 {
             log!("warn: CreateSurface without a size (flags {flags:#x}, caps {caps:#x})");
             return DDERR_INVALIDPARAMS;
         }
-        let s = new_surface(&mut d, w, h, if bpp == 8 { 8 } else { 16 }, caps | DDSCAPS_VIDEOMEMORY);
+        let s = new_surface(
+            &mut d,
+            w,
+            h,
+            if bpp == 8 { 8 } else { 16 },
+            caps | DDSCAPS_VIDEOMEMORY,
+        );
         if flags & DDSD_CKSRCBLT != 0 {
             d.surfaces.get_mut(&s).unwrap().ckey = Some((m.rd32(desc + 0x40), m.rd32(desc + 0x44)));
         }
@@ -284,7 +360,13 @@ fn dd_create_surface(c: &mut Cpu) -> u32 {
     };
     if trace() {
         let s = &d.surfaces[&obj];
-        log!("CreateSurface {obj:#x}: {}x{}x{} caps {:#x}", s.w, s.h, s.bpp, s.caps);
+        log!(
+            "CreateSurface {obj:#x}: {}x{}x{} caps {:#x}",
+            s.w,
+            s.h,
+            s.bpp,
+            s.caps
+        );
     }
     m.wr32(out, obj);
     OK
@@ -294,7 +376,10 @@ fn mode_desc(p: u32, w: u32, h: u32, bpp: u32) {
     let m = mem();
     m.slice(p, 108).fill(0);
     m.wr32(p, 108);
-    m.wr32(p + 4, DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_REFRESHRATE);
+    m.wr32(
+        p + 4,
+        DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_REFRESHRATE,
+    );
     m.wr32(p + 8, h);
     m.wr32(p + 0xc, w);
     m.wr32(p + 0x10, w * bpp / 8);
@@ -318,8 +403,19 @@ fn pixel_format(p: u32, bpp: u32) {
 }
 
 /// The display modes offered: the game's resolution list (index 0-9) at 16 bits.
-const MODES: [(u32, u32); 11] =
-    [(320, 240), (400, 300), (512, 384), (640, 400), (640, 480), (800, 600), (960, 720), (1024, 768), (1120, 840), (1152, 864), (1280, 960)];
+const MODES: [(u32, u32); 11] = [
+    (320, 240),
+    (400, 300),
+    (512, 384),
+    (640, 400),
+    (640, 480),
+    (800, 600),
+    (960, 720),
+    (1024, 768),
+    (1120, 840),
+    (1152, 864),
+    (1280, 960),
+];
 
 fn dd_enum_display_modes(c: &mut Cpu) -> u32 {
     let (ctx, cb) = (arg(c, 3), arg(c, 4));
@@ -429,15 +525,35 @@ macro_rules! ddraw_methods {
             ("IDirectDraw::GetDisplayMode", 2, dd_get_display_mode),
             ("IDirectDraw::GetFourCCCodes", 3, unsupported),
             ("IDirectDraw::GetGDISurface", 2, unsupported),
-            ("IDirectDraw::GetMonitorFrequency", 2, dd_get_monitor_frequency),
+            (
+                "IDirectDraw::GetMonitorFrequency",
+                2,
+                dd_get_monitor_frequency,
+            ),
             ("IDirectDraw::GetScanLine", 2, unsupported),
             ("IDirectDraw::GetVerticalBlankStatus", 2, dd_vblank_status),
             ("IDirectDraw::Initialize", 2, ok),
-            ("IDirectDraw::RestoreDisplayMode", 1, dd_restore_display_mode),
-            ("IDirectDraw::SetCooperativeLevel", 3, dd_set_cooperative_level),
-            ("IDirectDraw::SetDisplayMode", $set_mode_args, dd_set_display_mode),
+            (
+                "IDirectDraw::RestoreDisplayMode",
+                1,
+                dd_restore_display_mode,
+            ),
+            (
+                "IDirectDraw::SetCooperativeLevel",
+                3,
+                dd_set_cooperative_level,
+            ),
+            (
+                "IDirectDraw::SetDisplayMode",
+                $set_mode_args,
+                dd_set_display_mode,
+            ),
             ("IDirectDraw::WaitForVerticalBlank", 3, ok),
-            ("IDirectDraw2::GetAvailableVidMem", 4, dd_get_available_vid_mem),
+            (
+                "IDirectDraw2::GetAvailableVidMem",
+                4,
+                dd_get_available_vid_mem,
+            ),
         ]
     };
 }
@@ -477,14 +593,18 @@ fn s_add_ref(c: &mut Cpu) -> u32 {
 fn s_release(c: &mut Cpu) -> u32 {
     let this = arg(c, 0);
     let mut d = dd();
-    let Some(s) = d.surfaces.get_mut(&this) else { return 0 };
+    let Some(s) = d.surfaces.get_mut(&this) else {
+        return 0;
+    };
     s.refs = s.refs.saturating_sub(1);
     let r = s.refs;
     if r == 0 {
         // a primary takes its flip chain with it
         let mut k = this;
         loop {
-            let Some(s) = d.surfaces.remove(&k) else { break };
+            let Some(s) = d.surfaces.remove(&k) else {
+                break;
+            };
             free(s.pixels);
             k = s.back;
             if k == 0 || k == this {
@@ -527,7 +647,11 @@ fn fill(s: &Surface, r: [i32; 4], color: u32) {
     for y in y0..y1 {
         let row = s.pixels + y * s.pitch;
         for x in x0..x1 {
-            if s.bpp == 8 { m.wr8(row + x, color as u8) } else { m.wr16(row + 2 * x, color as u16) }
+            if s.bpp == 8 {
+                m.wr8(row + x, color as u8)
+            } else {
+                m.wr16(row + 2 * x, color as u16)
+            }
         }
     }
 }
@@ -543,7 +667,11 @@ fn copy(dst: &Surface, src: &Surface, dr: [i32; 4], sr: [i32; 4], key: Option<(u
     let bytes = (src.bpp / 8) as i32;
     // a plain copy row by row (source and destination may be the same surface)
     if dw == sw && dh == sh && key.is_none() && src.bpp == dst.bpp {
-        let order: Vec<i32> = if dst.pixels == src.pixels && dr[1] > sr[1] { (0..dh).rev().collect() } else { (0..dh).collect() };
+        let order: Vec<i32> = if dst.pixels == src.pixels && dr[1] > sr[1] {
+            (0..dh).rev().collect()
+        } else {
+            (0..dh).collect()
+        };
         for y in order {
             let s = src.pixels + (sr[1] + y) as u32 * src.pitch + (sr[0] * bytes) as u32;
             let d = dst.pixels + (dr[1] + y) as u32 * dst.pitch + (dr[0] * bytes) as u32;
@@ -564,7 +692,11 @@ fn copy(dst: &Surface, src: &Surface, dr: [i32; 4], sr: [i32; 4], key: Option<(u
                 continue;
             }
             let sa = src.pixels + sy as u32 * src.pitch + (sx * bytes) as u32;
-            let v = if src.bpp == 8 { m.rd8(sa) as u32 } else { m.rd16(sa) as u32 };
+            let v = if src.bpp == 8 {
+                m.rd8(sa) as u32
+            } else {
+                m.rd16(sa) as u32
+            };
             if key.is_some_and(|(lo, hi)| v >= lo && v <= hi) {
                 continue;
             }
@@ -579,9 +711,18 @@ fn copy(dst: &Surface, src: &Surface, dr: [i32; 4], sr: [i32; 4], key: Option<(u
 }
 
 fn s_blt(c: &mut Cpu) -> u32 {
-    let (this, dr, src, sr, flags, fx) = (arg(c, 0), rect(arg(c, 1)), arg(c, 2), rect(arg(c, 3)), arg(c, 4), arg(c, 5));
+    let (this, dr, src, sr, flags, fx) = (
+        arg(c, 0),
+        rect(arg(c, 1)),
+        arg(c, 2),
+        rect(arg(c, 3)),
+        arg(c, 4),
+        arg(c, 5),
+    );
     let d = dd();
-    let Some(dst) = d.surfaces.get(&this) else { return DDERR_INVALIDPARAMS };
+    let Some(dst) = d.surfaces.get(&this) else {
+        return DDERR_INVALIDPARAMS;
+    };
     if trace() {
         log!("Blt {this:#x} {dr:?} <- {src:#x} {sr:?} flags {flags:#x}");
     }
@@ -589,11 +730,17 @@ fn s_blt(c: &mut Cpu) -> u32 {
     if flags & DDBLT_COLORFILL != 0 {
         let color = if fx != 0 { mem().rd32(fx + 0x50) } else { 0 };
         if trace() && fx != 0 {
-            log!("  fill {color:#x} (DDBLTFX size {}, at 0x48: {:#x})", mem().rd32(fx), mem().rd32(fx + 0x48));
+            log!(
+                "  fill {color:#x} (DDBLTFX size {}, at 0x48: {:#x})",
+                mem().rd32(fx),
+                mem().rd32(fx + 0x48)
+            );
         }
         fill(dst, dr.unwrap_or(full(dst)), color);
     } else {
-        let Some(s) = d.surfaces.get(&src) else { return DDERR_INVALIDPARAMS };
+        let Some(s) = d.surfaces.get(&src) else {
+            return DDERR_INVALIDPARAMS;
+        };
         let key = if flags & DDBLT_KEYSRCOVERRIDE != 0 && fx != 0 {
             Some((mem().rd32(fx + 0x5c), mem().rd32(fx + 0x60)))
         } else if flags & DDBLT_KEYSRC != 0 {
@@ -614,16 +761,35 @@ fn s_blt(c: &mut Cpu) -> u32 {
 }
 
 fn s_blt_fast(c: &mut Cpu) -> u32 {
-    let (this, x, y, src, sr, flags) = (arg(c, 0), arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3), rect(arg(c, 4)), arg(c, 5));
+    let (this, x, y, src, sr, flags) = (
+        arg(c, 0),
+        arg(c, 1) as i32,
+        arg(c, 2) as i32,
+        arg(c, 3),
+        rect(arg(c, 4)),
+        arg(c, 5),
+    );
     let d = dd();
-    let (Some(dst), Some(s)) = (d.surfaces.get(&this), d.surfaces.get(&src)) else { return DDERR_INVALIDPARAMS };
+    let (Some(dst), Some(s)) = (d.surfaces.get(&this), d.surfaces.get(&src)) else {
+        return DDERR_INVALIDPARAMS;
+    };
     if trace() {
         log!("BltFast {this:#x} ({x},{y}) <- {src:#x} {sr:?} flags {flags:#x}");
     }
     let mut b = sr.unwrap_or([0, 0, s.w as i32, s.h as i32]);
     let mut a = [x, y, x + b[2] - b[0], y + b[3] - b[1]];
     clip(dst, Some(s), &mut a, &mut b);
-    copy(dst, s, a, b, if flags & DDBLTFAST_SRCCOLORKEY != 0 { s.ckey } else { None });
+    copy(
+        dst,
+        s,
+        a,
+        b,
+        if flags & DDBLTFAST_SRCCOLORKEY != 0 {
+            s.ckey
+        } else {
+            None
+        },
+    );
     if this == d.primary {
         changed(&d);
     }
@@ -633,7 +799,9 @@ fn s_blt_fast(c: &mut Cpu) -> u32 {
 fn s_flip(c: &mut Cpu) -> u32 {
     let this = arg(c, 0);
     let mut d = dd();
-    let Some(back) = d.surfaces.get(&this).map(|s| s.back).filter(|&b| b != 0) else { return DDERR_INVALIDPARAMS };
+    let Some(back) = d.surfaces.get(&this).map(|s| s.back).filter(|&b| b != 0) else {
+        return DDERR_INVALIDPARAMS;
+    };
     // the front surface shows what the back buffer held, and the back buffer gets the old front
     let a = d.surfaces[&this].pixels;
     let b = d.surfaces[&back].pixels;
@@ -672,7 +840,8 @@ fn surface_desc(s: &Surface, p: u32, pixels: u32) {
     let m = mem();
     m.slice(p, 108).fill(0);
     m.wr32(p, 108);
-    let mut flags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_LPSURFACE;
+    let mut flags =
+        DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_LPSURFACE;
     if s.back != 0 && s.caps & DDSCAPS_PRIMARYSURFACE != 0 {
         flags |= DDSD_BACKBUFFERCOUNT;
         m.wr32(p + 0x14, 1);
@@ -693,7 +862,9 @@ fn surface_desc(s: &Surface, p: u32, pixels: u32) {
 
 fn s_get_surface_desc(c: &mut Cpu) -> u32 {
     let d = dd();
-    let Some(s) = d.surfaces.get(&arg(c, 0)) else { return DDERR_INVALIDPARAMS };
+    let Some(s) = d.surfaces.get(&arg(c, 0)) else {
+        return DDERR_INVALIDPARAMS;
+    };
     surface_desc(s, arg(c, 1), s.pixels);
     OK
 }
@@ -707,8 +878,12 @@ fn s_get_pixel_format(c: &mut Cpu) -> u32 {
 fn s_lock(c: &mut Cpu) -> u32 {
     let (this, r, desc) = (arg(c, 0), rect(arg(c, 1)), arg(c, 2));
     let d = dd();
-    let Some(s) = d.surfaces.get(&this) else { return DDERR_INVALIDPARAMS };
-    let at = r.map_or(s.pixels, |r| s.pixels + r[1] as u32 * s.pitch + r[0] as u32 * s.bpp / 8);
+    let Some(s) = d.surfaces.get(&this) else {
+        return DDERR_INVALIDPARAMS;
+    };
+    let at = r.map_or(s.pixels, |r| {
+        s.pixels + r[1] as u32 * s.pitch + r[0] as u32 * s.bpp / 8
+    });
     surface_desc(s, desc, at);
     OK
 }
@@ -724,7 +899,9 @@ fn s_unlock(c: &mut Cpu) -> u32 {
 fn s_set_color_key(c: &mut Cpu) -> u32 {
     let (this, flags, key) = (arg(c, 0), arg(c, 1), arg(c, 2));
     let mut d = dd();
-    let Some(s) = d.surfaces.get_mut(&this) else { return DDERR_INVALIDPARAMS };
+    let Some(s) = d.surfaces.get_mut(&this) else {
+        return DDERR_INVALIDPARAMS;
+    };
     if flags & DDCKEY_SRCBLT != 0 {
         s.ckey = (key != 0).then(|| (mem().rd32(key), mem().rd32(key + 4)));
     }
@@ -794,7 +971,11 @@ static SURFACE: &[Import] = &[
     ("IDirectDrawSurface::EnumAttachedSurfaces", 3, unsupported),
     ("IDirectDrawSurface::EnumOverlayZOrders", 4, unsupported),
     ("IDirectDrawSurface::Flip", 3, s_flip),
-    ("IDirectDrawSurface::GetAttachedSurface", 3, s_get_attached_surface),
+    (
+        "IDirectDrawSurface::GetAttachedSurface",
+        3,
+        s_get_attached_surface,
+    ),
     ("IDirectDrawSurface::GetBltStatus", 2, ok),
     ("IDirectDrawSurface::GetCaps", 2, s_get_caps),
     ("IDirectDrawSurface::GetClipper", 2, s_get_clipper),
@@ -829,7 +1010,9 @@ static SURFACE: &[Import] = &[
 fn pal_get_entries(c: &mut Cpu) -> u32 {
     let (this, first, n, out) = (arg(c, 0), arg(c, 2), arg(c, 3), arg(c, 4));
     let d = dd();
-    let Some(p) = d.palettes.get(&this) else { return DDERR_INVALIDPARAMS };
+    let Some(p) = d.palettes.get(&this) else {
+        return DDERR_INVALIDPARAMS;
+    };
     for k in 0..n.min(256u32.saturating_sub(first)) {
         mem().wr32(out + 4 * k, entry_rgb(p[(first + k) as usize]));
     }
@@ -839,11 +1022,16 @@ fn pal_get_entries(c: &mut Cpu) -> u32 {
 fn pal_set_entries(c: &mut Cpu) -> u32 {
     let (this, first, n, src) = (arg(c, 0), arg(c, 2), arg(c, 3), arg(c, 4));
     let mut d = dd();
-    let Some(p) = d.palettes.get_mut(&this) else { return DDERR_INVALIDPARAMS };
+    let Some(p) = d.palettes.get_mut(&this) else {
+        return DDERR_INVALIDPARAMS;
+    };
     for k in 0..n.min(256u32.saturating_sub(first)) {
         p[(first + k) as usize] = entry_rgb(mem().rd32(src + 4 * k));
     }
-    let prim = d.surfaces.get(&d.primary).is_some_and(|s| s.palette == this);
+    let prim = d
+        .surfaces
+        .get(&d.primary)
+        .is_some_and(|s| s.palette == this);
     if prim {
         changed(&d);
     }
@@ -888,9 +1076,16 @@ static CLIPPER: &[Import] = &[
     ("IDirectDrawClipper::GetClipList", 4, unsupported),
     ("IDirectDrawClipper::GetHWnd", 2, clip_get_hwnd),
     ("IDirectDrawClipper::Initialize", 3, ok),
-    ("IDirectDrawClipper::IsClipListChanged", 2, clip_list_changed),
+    (
+        "IDirectDrawClipper::IsClipListChanged",
+        2,
+        clip_list_changed,
+    ),
     ("IDirectDrawClipper::SetClipList", 3, unsupported),
     ("IDirectDrawClipper::SetHWnd", 3, clip_set_hwnd),
 ];
 
-pub const IMPORTS: &[Import] = &[("DirectDrawCreate", 3, direct_draw_create), ("DirectDrawEnumerateA", 2, direct_draw_enumerate)];
+pub const IMPORTS: &[Import] = &[
+    ("DirectDrawCreate", 3, direct_draw_create),
+    ("DirectDrawEnumerateA", 2, direct_draw_enumerate),
+];

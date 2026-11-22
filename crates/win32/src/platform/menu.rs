@@ -20,7 +20,10 @@ struct Menus {
     next: u32,
 }
 
-static MENUS: Mutex<Menus> = Mutex::new(Menus { items: BTreeMap::new(), next: 0x7700 });
+static MENUS: Mutex<Menus> = Mutex::new(Menus {
+    items: BTreeMap::new(),
+    next: 0x7700,
+});
 
 fn menus() -> MutexGuard<'static, Menus> {
     MENUS.lock().unwrap_or_else(|e| e.into_inner())
@@ -63,7 +66,11 @@ fn parse(mut at: u32) -> (Vec<Item>, u32) {
             }
             text.push(u);
         }
-        let mut item = Item { flags: flags & !MF_END, id, text: String::from_utf16_lossy(&text) };
+        let mut item = Item {
+            flags: flags & !MF_END,
+            id,
+            text: String::from_utf16_lossy(&text),
+        };
         if flags & MF_POPUP != 0 {
             let (sub, end) = parse(at);
             at = end;
@@ -92,7 +99,14 @@ fn load_menu(c: &mut Cpu) -> u32 {
 
 fn log_items(items: &[Item], depth: usize) {
     for it in items {
-        super::log!("menu {:indent$}{:?} id {:#x} flags {:#x}", "", it.text, it.id, it.flags, indent = 2 * depth);
+        super::log!(
+            "menu {:indent$}{:?} id {:#x} flags {:#x}",
+            "",
+            it.text,
+            it.id,
+            it.flags,
+            indent = 2 * depth
+        );
         if it.flags & MF_POPUP != 0 {
             let sub = menus().items.get(&it.id).cloned().unwrap_or_default();
             log_items(&sub, depth + 1);
@@ -120,16 +134,27 @@ fn find(m: &Menus, h: u32, which: u32, flags: u32) -> Option<(u32, usize)> {
             return Some((h, k));
         }
     }
-    items.iter().filter(|it| it.flags & MF_POPUP != 0).find_map(|it| find(m, it.id, which, flags))
+    items
+        .iter()
+        .filter(|it| it.flags & MF_POPUP != 0)
+        .find_map(|it| find(m, it.id, which, flags))
 }
 
 fn get_sub_menu(c: &mut Cpu) -> u32 {
     let (h, k) = (arg(c, 0), arg(c, 1) as usize);
-    menus().items.get(&h).and_then(|v| v.get(k)).filter(|it| it.flags & MF_POPUP != 0).map_or(0, |it| it.id)
+    menus()
+        .items
+        .get(&h)
+        .and_then(|v| v.get(k))
+        .filter(|it| it.flags & MF_POPUP != 0)
+        .map_or(0, |it| it.id)
 }
 
 fn get_menu_item_count(c: &mut Cpu) -> u32 {
-    menus().items.get(&arg(c, 0)).map_or(u32::MAX, |v| v.len() as u32)
+    menus()
+        .items
+        .get(&arg(c, 0))
+        .map_or(u32::MAX, |v| v.len() as u32)
 }
 
 fn get_menu_item_id(c: &mut Cpu) -> u32 {
@@ -146,7 +171,9 @@ fn get_menu_item_id(c: &mut Cpu) -> u32 {
 fn get_menu_state(c: &mut Cpu) -> u32 {
     let (h, which, flags) = (arg(c, 0), arg(c, 1), arg(c, 2));
     let m = menus();
-    let Some((h, k)) = find(&m, h, which, flags) else { return u32::MAX };
+    let Some((h, k)) = find(&m, h, which, flags) else {
+        return u32::MAX;
+    };
     let it = &m.items[&h][k];
     if it.flags & MF_POPUP != 0 {
         let n = m.items.get(&it.id).map_or(0, |v| v.len() as u32);
@@ -158,7 +185,9 @@ fn get_menu_state(c: &mut Cpu) -> u32 {
 /// Sets `mask` of an item's flags to `value`; returns the old ones of `mask`, -1 if none.
 fn set_flags(h: u32, which: u32, flags: u32, mask: u32, value: u32) -> u32 {
     let mut m = menus();
-    let Some((h, k)) = find(&m, h, which, flags) else { return u32::MAX };
+    let Some((h, k)) = find(&m, h, which, flags) else {
+        return u32::MAX;
+    };
     let it = &mut m.items.get_mut(&h).unwrap()[k];
     let old = it.flags & mask;
     it.flags = it.flags & !mask | value & mask;
@@ -181,7 +210,9 @@ fn check_menu_item(c: &mut Cpu) -> u32 {
 fn remove(c: &mut Cpu, delete: bool) -> u32 {
     let (h, which, flags) = (arg(c, 0), arg(c, 1), arg(c, 2));
     let mut m = menus();
-    let Some((h, k)) = find(&m, h, which, flags) else { return 0 };
+    let Some((h, k)) = find(&m, h, which, flags) else {
+        return 0;
+    };
     let it = m.items.get_mut(&h).unwrap().remove(k);
     if delete && it.flags & MF_POPUP != 0 {
         m.items.remove(&it.id);
@@ -200,13 +231,25 @@ fn delete_menu(c: &mut Cpu) -> u32 {
 /// An item as AppendMenuA / InsertMenuA / ModifyMenuA give it: flags, id (or submenu), and a
 /// string pointer when the content is a string.
 fn item(flags: u32, id: u32, p: u32) -> Item {
-    let text = if flags & (CONTENT | MF_SEPARATOR) == 0 && p != 0 { cstr(p) } else { String::new() };
-    Item { flags: flags & !MF_BYPOSITION, id, text }
+    let text = if flags & (CONTENT | MF_SEPARATOR) == 0 && p != 0 {
+        cstr(p)
+    } else {
+        String::new()
+    };
+    Item {
+        flags: flags & !MF_BYPOSITION,
+        id,
+        text,
+    }
 }
 
 fn append_menu(c: &mut Cpu) -> u32 {
     let (h, flags, id, p) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3));
-    menus().items.get_mut(&h).map(|v| v.push(item(flags, id, p))).is_some() as u32
+    menus()
+        .items
+        .get_mut(&h)
+        .map(|v| v.push(item(flags, id, p)))
+        .is_some() as u32
 }
 
 /// InsertMenuA(menu, before, flags, id, text): at the end when `before` is not found.
@@ -214,7 +257,9 @@ fn insert_menu(c: &mut Cpu) -> u32 {
     let (h, before, flags, id, p) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
     let mut m = menus();
     let at = find(&m, h, before, flags).filter(|f| f.0 == h).map(|f| f.1);
-    let Some(v) = m.items.get_mut(&h) else { return 0 };
+    let Some(v) = m.items.get_mut(&h) else {
+        return 0;
+    };
     let k = at.unwrap_or(v.len());
     v.insert(k, item(flags, id, p));
     1
@@ -223,7 +268,9 @@ fn insert_menu(c: &mut Cpu) -> u32 {
 fn modify_menu(c: &mut Cpu) -> u32 {
     let (h, which, flags, id, p) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
     let mut m = menus();
-    let Some((h, k)) = find(&m, h, which, flags) else { return 0 };
+    let Some((h, k)) = find(&m, h, which, flags) else {
+        return 0;
+    };
     m.items.get_mut(&h).unwrap()[k] = item(flags, id, p);
     1
 }
@@ -232,10 +279,16 @@ fn modify_menu(c: &mut Cpu) -> u32 {
 fn get_menu_string(c: &mut Cpu) -> u32 {
     let (h, which, buf, n, flags) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
     let m = menus();
-    let Some((h, k)) = find(&m, h, which, flags) else { return 0 };
+    let Some((h, k)) = find(&m, h, which, flags) else {
+        return 0;
+    };
     let text = m.items[&h][k].text.clone();
     drop(m);
-    if buf == 0 { text.len() as u32 } else { put_cstr(buf, &text, n) }
+    if buf == 0 {
+        text.len() as u32
+    } else {
+        put_cstr(buf, &text, n)
+    }
 }
 
 fn ret0(_: &mut Cpu) -> u32 {

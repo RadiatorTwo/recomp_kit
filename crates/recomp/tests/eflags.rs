@@ -32,7 +32,11 @@ fn id_and_ac_toggle() {
     for bit in [21, 18] {
         let cpu = g.call(0, &[1 << bit]);
         let (before, after) = (cpu.r[1], cpu.r[0]);
-        assert_ne!(before & 1 << bit, after & 1 << bit, "bit {bit} did not toggle: {before:#x} -> {after:#x}");
+        assert_ne!(
+            before & 1 << bit,
+            after & 1 << bit,
+            "bit {bit} did not toggle: {before:#x} -> {after:#x}"
+        );
         // and back again
         let cpu = g.call(0, &[0]);
         assert_eq!(cpu.r[1] & 1 << bit, cpu.r[0] & 1 << bit);

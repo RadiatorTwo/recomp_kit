@@ -106,7 +106,9 @@ pub fn pixels() -> Option<Vec<u32>> {
         return None;
     }
     s.drawn = Some(now);
-    if s.text_at.is_none_or(|d| now - d >= Duration::from_millis(500)) {
+    if s.text_at
+        .is_none_or(|d| now - d >= Duration::from_millis(500))
+    {
         s.text_at = Some(now);
         text_of(s);
     }
@@ -131,7 +133,11 @@ fn text_of(s: &mut Stats) {
     second.sort_unstable_by(f32::total_cmp);
     let max = second[second.len() - 1];
     let p99 = second[((second.len() - 1) as f32 * 0.99).round() as usize];
-    s.text[0] = format!("{:.0} fps  {:.2} ms", n as f32 * 1000.0 / sum, sum / n as f32);
+    s.text[0] = format!(
+        "{:.0} fps  {:.2} ms",
+        n as f32 * 1000.0 / sum,
+        sum / n as f32
+    );
     s.text[1] = format!("max {max:.2}  99% {p99:.2} ms");
 }
 
@@ -144,8 +150,14 @@ fn render(s: &Stats) -> Vec<u32> {
     for (x, c) in cols.iter().enumerate() {
         // the mean of the frames ending in this column and the two before, or the hitch it
         // lies within
-        let (sum, n) = cols[x.saturating_sub(2)..=x].iter().fold((0.0, 0), |(s, n), c| (s + c.sum, n + c.n));
-        let t = if n == 0 { c.long } else { (sum / n as f32).max(c.long) };
+        let (sum, n) = cols[x.saturating_sub(2)..=x]
+            .iter()
+            .fold((0.0, 0), |(s, n), c| (s + c.sum, n + c.n));
+        let t = if n == 0 {
+            c.long
+        } else {
+            (sum / n as f32).max(c.long)
+        };
         if t == 0.0 {
             continue;
         }

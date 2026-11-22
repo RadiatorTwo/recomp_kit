@@ -27,7 +27,6 @@ pub struct SmcSpec {
     pub imm_fields: Vec<u32>,
 }
 
-
 /// A code field written at run time: its guest address and size in bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Field {
@@ -47,7 +46,11 @@ pub struct Smc {
 
 impl Smc {
     pub fn find(prog: &Program, code: &mut Code, spec: &SmcSpec) -> Smc {
-        let mut starts: Vec<u32> = prog.fns.values().flat_map(|f| f.ins.iter().copied()).collect();
+        let mut starts: Vec<u32> = prog
+            .fns
+            .values()
+            .flat_map(|f| f.ins.iter().copied())
+            .collect();
         starts.sort_unstable();
         starts.dedup();
 
@@ -61,10 +64,17 @@ impl Smc {
                 && i.memory_index() == Register::None
                 && code.img.is_code(i.memory_displacement32())
             {
-                fields.insert(i.memory_displacement32(), (i.memory_size().size() as u32, None));
+                fields.insert(
+                    i.memory_displacement32(),
+                    (i.memory_size().size() as u32, None),
+                );
             }
         }
-        let table: Vec<(u32, u32, Vec<u32>)> = spec.patch_tables.iter().flat_map(|t| patch_table(code, t)).collect();
+        let table: Vec<(u32, u32, Vec<u32>)> = spec
+            .patch_tables
+            .iter()
+            .flat_map(|t| patch_table(code, t))
+            .collect();
         for (f, n, v) in &table {
             fields.insert(*f, (*n, Some(v.clone())));
         }
@@ -73,7 +83,9 @@ impl Smc {
         let mut rewritten = Vec::new();
         for (&f, &(n, ref vals)) in &fields {
             let k = starts.partition_point(|&a| a <= f);
-            let Some(&a) = k.checked_sub(1).map(|k| &starts[k]) else { continue };
+            let Some(&a) = k.checked_sub(1).map(|k| &starts[k]) else {
+                continue;
+            };
             let i = code.at(a).unwrap();
             if f >= a + i.len() as u32 {
                 eprintln!("warning: code field {f:#x} is not inside a decoded instruction");
@@ -82,9 +94,15 @@ impl Smc {
             let co = offsets(code, a);
             let off = (f - a) as usize;
             let field = Field { at: f, size: n };
-            if co.has_immediate() && off == co.immediate_offset() && n as usize == co.immediate_size() {
+            if co.has_immediate()
+                && off == co.immediate_offset()
+                && n as usize == co.immediate_size()
+            {
                 smc.imm.insert(a, field);
-            } else if co.has_displacement() && off == co.displacement_offset() && n as usize == co.displacement_size() {
+            } else if co.has_displacement()
+                && off == co.displacement_offset()
+                && n as usize == co.displacement_size()
+            {
                 smc.disp.insert(a, field);
             } else if vals.is_some() {
                 // every instruction the field overlaps
@@ -101,11 +119,22 @@ impl Smc {
             }
             let co = offsets(code, a);
             assert!(co.immediate_size() == 4, "no 32-bit immediate at {a:#x}");
-            smc.imm.insert(a, Field { at: a + co.immediate_offset() as u32, size: 4 });
+            smc.imm.insert(
+                a,
+                Field {
+                    at: a + co.immediate_offset() as u32,
+                    size: 4,
+                },
+            );
         }
 
         // the code as each variant's table values leave it
-        let variants = spec.patch_tables.iter().map(|t| t.variants).max().unwrap_or(0);
+        let variants = spec
+            .patch_tables
+            .iter()
+            .map(|t| t.variants)
+            .max()
+            .unwrap_or(0);
         let images: Vec<HashMap<u32, u8>> = (0..variants)
             .map(|k| {
                 let mut img = HashMap::new();
@@ -126,12 +155,19 @@ impl Smc {
             let orig = code.img.read(a, i.len()).unwrap();
             let mut vs: Vec<(Vec<u8>, Instruction)> = Vec::new();
             for img in &images {
-                let b: Vec<u8> = orig.iter().enumerate().map(|(j, &x)| *img.get(&(a + j as u32)).unwrap_or(&x)).collect();
+                let b: Vec<u8> = orig
+                    .iter()
+                    .enumerate()
+                    .map(|(j, &x)| *img.get(&(a + j as u32)).unwrap_or(&x))
+                    .collect();
                 if b == orig || vs.iter().any(|v| v.0 == b) {
                     continue;
                 }
                 let v = Decoder::with_ip(32, &b, a as u64, DecoderOptions::NONE).decode();
-                assert!(!v.is_invalid() && v.len() == i.len(), "rewritten instruction at {a:#x} changes its length");
+                assert!(
+                    !v.is_invalid() && v.len() == i.len(),
+                    "rewritten instruction at {a:#x} changes its length"
+                );
                 vs.push((b, v));
             }
             smc.variants.insert(a, vs);
@@ -142,7 +178,8 @@ impl Smc {
     /// Targets of rewritten branches (discovery must decode them as code too).
     pub fn variant_targets(&self) -> impl Iterator<Item = u32> + '_ {
         self.variants.values().flatten().filter_map(|(_, v)| {
-            (v.flow_control() != FlowControl::Next && v.op0_kind() == OpKind::NearBranch32).then(|| v.near_branch32())
+            (v.flow_control() != FlowControl::Next && v.op0_kind() == OpKind::NearBranch32)
+                .then(|| v.near_branch32())
         })
     }
 }
@@ -156,8 +193,17 @@ fn patch_table(code: &Code, t: &PatchTable) -> Vec<(u32, u32, Vec<u32>)> {
             break;
         }
         let f = code.img.u32(at + 1);
-        assert!(code.img.is_code(f), "patch table entry {at:#x} points outside the code");
-        out.push((f, bits as u32 / 8, (0..t.variants as u32).map(|k| code.img.u32(at + 5 + 4 * k)).collect()));
+        assert!(
+            code.img.is_code(f),
+            "patch table entry {at:#x} points outside the code"
+        );
+        out.push((
+            f,
+            bits as u32 / 8,
+            (0..t.variants as u32)
+                .map(|k| code.img.u32(at + 5 + 4 * k))
+                .collect(),
+        ));
         at += 5 + 4 * t.variants as u32;
     }
     out

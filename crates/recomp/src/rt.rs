@@ -137,7 +137,12 @@ impl Memory {
             const MEM_WRITE_WATCH: u32 = 0x20_0000;
             // write watch: what guest code wrote can be asked for (`written`; pictures between
             // logic frames put back only the pages they wrote)
-            VirtualAlloc(at as *const _, GUEST_SPAN, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS) as *mut u8
+            VirtualAlloc(
+                at as *const _,
+                GUEST_SPAN,
+                MEM_RESERVE | MEM_WRITE_WATCH,
+                PAGE_NOACCESS,
+            ) as *mut u8
         };
         #[cfg(unix)]
         let base = unsafe {
@@ -149,7 +154,11 @@ impl Memory {
                 -1,
                 0,
             );
-            if p == libc::MAP_FAILED { std::ptr::null_mut() } else { p as *mut u8 }
+            if p == libc::MAP_FAILED {
+                std::ptr::null_mut()
+            } else {
+                p as *mut u8
+            }
         };
         base
     }
@@ -164,11 +173,23 @@ impl Memory {
             let n = ((hi - lo) as usize).div_ceil(0x1000);
             let mut pages = vec![std::ptr::null_mut(); n];
             let (mut count, mut gran) = (n, 0u32);
-            let r = GetWriteWatch(WRITE_WATCH_FLAG_RESET, self.base.add(lo as usize) as _, (hi - lo) as usize, pages.as_mut_ptr(), &mut count, &mut gran);
+            let r = GetWriteWatch(
+                WRITE_WATCH_FLAG_RESET,
+                self.base.add(lo as usize) as _,
+                (hi - lo) as usize,
+                pages.as_mut_ptr(),
+                &mut count,
+                &mut gran,
+            );
             if r != 0 || gran != 0x1000 {
                 return None;
             }
-            Some(pages[..count].iter().map(|&p| (p as usize - self.base as usize) as u32).collect())
+            Some(
+                pages[..count]
+                    .iter()
+                    .map(|&p| (p as usize - self.base as usize) as u32)
+                    .collect(),
+            )
         }
         #[cfg(not(windows))]
         {
@@ -244,7 +265,9 @@ impl Dispatch {
     /// `DENSE_MAX` addresses (functions beyond, a DLL's say, are found by binary search).
     pub fn dense(table: &[(u32, usize)]) -> (Vec<usize>, u32) {
         const DENSE_MAX: u32 = 4 << 20;
-        let Some(&(base, _)) = table.first() else { return (Vec::new(), 0) };
+        let Some(&(base, _)) = table.first() else {
+            return (Vec::new(), 0);
+        };
         let last = table.last().map_or(base, |e| e.0);
         let n = (last - base + 1).min(DENSE_MAX);
         let mut d = vec![0; n as usize];
@@ -268,7 +291,11 @@ pub extern "C" fn rt_lookup(cpu: *mut Cpu, addr: u32) -> *const u8 {
     }
     // the imports' thunks (Glide's 1.2 million calls a second come through pointers) lie
     // above every function
-    let found = if d.table.last().is_some_and(|l| addr > l.0) { Err(0) } else { d.table.binary_search_by_key(&addr, |e| e.0) };
+    let found = if d.table.last().is_some_and(|l| addr > l.0) {
+        Err(0)
+    } else {
+        d.table.binary_search_by_key(&addr, |e| e.0)
+    };
     match found {
         Ok(k) => d.table[k].1 as *const u8,
         Err(_) => {
@@ -284,23 +311,34 @@ pub static POLL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 
 /// `<PREFIX>_COUNT=<file>`: every function entry counts its calls (`counter`); the platform
 /// layer writes them to the file every second.
-static COUNTS: std::sync::Mutex<std::collections::BTreeMap<u32, &'static std::sync::atomic::AtomicU32>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
+static COUNTS: std::sync::Mutex<
+    std::collections::BTreeMap<u32, &'static std::sync::atomic::AtomicU32>,
+> = std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// The call counter of the function at `entry` (made at its first use, never freed).
 pub fn counter(entry: u32) -> &'static std::sync::atomic::AtomicU32 {
-    COUNTS.lock().unwrap().entry(entry).or_insert_with(|| Box::leak(Box::new(std::sync::atomic::AtomicU32::new(0))))
+    COUNTS
+        .lock()
+        .unwrap()
+        .entry(entry)
+        .or_insert_with(|| Box::leak(Box::new(std::sync::atomic::AtomicU32::new(0))))
 }
 
 /// Every counter: (entry, calls so far).
 pub fn counts() -> Vec<(u32, u32)> {
-    COUNTS.lock().unwrap().iter().map(|(&a, c)| (a, c.load(std::sync::atomic::Ordering::Relaxed))).collect()
+    COUNTS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(&a, c)| (a, c.load(std::sync::atomic::Ordering::Relaxed)))
+        .collect()
 }
 
 /// Where `<PREFIX>_COUNT` writes the counts (None: functions do not count).
 pub fn count_file() -> Option<&'static str> {
     static F: OnceLock<Option<String>> = OnceLock::new();
-    F.get_or_init(|| crate::config::env("COUNT").filter(|v| !v.is_empty())).as_deref()
+    F.get_or_init(|| crate::config::env("COUNT").filter(|v| !v.is_empty()))
+        .as_deref()
 }
 
 static YIELD: OnceLock<fn()> = OnceLock::new();
@@ -365,7 +403,10 @@ fn event(cpu: &mut Cpu, e: Event) {
     match HANDLER.get() {
         Some(h) => h(cpu, e),
         None => match e {
-            Event::Foreign(a) => die(format!("call to unknown address {a:#x} (esp {:#x})", cpu.r[ESP])),
+            Event::Foreign(a) => die(format!(
+                "call to unknown address {a:#x} (esp {:#x})",
+                cpu.r[ESP]
+            )),
             Event::Trap(a, 0) => die(format!("division by zero at {a:#x}")),
             Event::Trap(a, _) => die(format!("int3/hlt/ud2 at {a:#x}")),
             Event::Unimpl(a) => die(format!("instruction at {a:#x} is not supported yet")),
@@ -392,7 +433,11 @@ pub extern "C" fn rt_cpuid(cpu: *mut Cpu) {
     let c = unsafe { &mut *cpu };
     // a plain Pentium with FPU, TSC, CX8 and CMOV; MMX (bit 23) only if the game wants it
     // (`config::set_cpuid_mmx`): only movd/movq are lifted
-    let mmx = if crate::config::cpuid_mmx() { 0x0080_0000 } else { 0 };
+    let mmx = if crate::config::cpuid_mmx() {
+        0x0080_0000
+    } else {
+        0
+    };
     // `r` is eax ecx edx ebx: "GenuineIntel" is ebx edx ecx, the features are edx
     match c.r[EAX] {
         0 => c.r[..4].copy_from_slice(&[1, 0x6c65746e, 0x49656e69, 0x756e6547]),
@@ -402,7 +447,10 @@ pub extern "C" fn rt_cpuid(cpu: *mut Cpu) {
 
 pub extern "C" fn rt_rdtsc(cpu: *mut Cpu) {
     static START: OnceLock<std::time::Instant> = OnceLock::new();
-    let t = START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64;
+    let t = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_nanos() as u64;
     let c = unsafe { &mut *cpu };
     c.r[EAX] = t as u32;
     c.r[EDX] = (t >> 32) as u32;
@@ -432,8 +480,16 @@ pub extern "C" fn rt_string(cpu: *mut Cpu, op: u32) {
             _ => (p as *mut u32).write_unaligned(v),
         }
     };
-    let step = if c.df != 0 { (size as u32).wrapping_neg() } else { size };
-    let mask = if size == 4 { u32::MAX } else { (1u32 << (8 * size)) - 1 };
+    let step = if c.df != 0 {
+        (size as u32).wrapping_neg()
+    } else {
+        size
+    };
+    let mask = if size == 4 {
+        u32::MAX
+    } else {
+        (1u32 << (8 * size)) - 1
+    };
     loop {
         if rep != 0 && c.r[ECX] == 0 {
             break;
@@ -581,7 +637,11 @@ pub fn f80_to_f64(b: &[u8; 10]) -> f64 {
     let sign = if se & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exp = (se & 0x7fff) as i32;
     if exp == 0x7fff {
-        return if mant << 1 == 0 { sign * f64::INFINITY } else { f64::NAN };
+        return if mant << 1 == 0 {
+            sign * f64::INFINITY
+        } else {
+            f64::NAN
+        };
     }
     // value = mant * 2^(exp - 16383 - 63); u64 -> f64 rounds to nearest, which is all the
     // rounding needed outside the double's denormal range
@@ -614,16 +674,21 @@ pub fn f64_to_f80(v: f64) -> [u8; 10] {
 /// x87 operations that are rare or need libm; `op` is an `X87`.
 pub extern "C" fn rt_x87(cpu: *mut Cpu, op: u32, addr: u32) {
     let c = unsafe { &mut *cpu };
-    let Some(&op) = X87_OPS.get(op as usize) else { die(format!("rt_x87: unknown operation {op}")) };
+    let Some(&op) = X87_OPS.get(op as usize) else {
+        die(format!("rt_x87: unknown operation {op}"))
+    };
     let x = c.st(0);
     match op {
         X87::LoadF80 => {
-            let b: [u8; 10] = unsafe { std::slice::from_raw_parts(c.mem.add(addr as usize), 10) }.try_into().unwrap();
+            let b: [u8; 10] = unsafe { std::slice::from_raw_parts(c.mem.add(addr as usize), 10) }
+                .try_into()
+                .unwrap();
             c.fpush(f80_to_f64(&b));
         }
         X87::StoreF80 => {
             let b = f64_to_f80(x);
-            unsafe { std::slice::from_raw_parts_mut(c.mem.add(addr as usize), 10) }.copy_from_slice(&b);
+            unsafe { std::slice::from_raw_parts_mut(c.mem.add(addr as usize), 10) }
+                .copy_from_slice(&b);
             c.fpop();
         }
         X87::Fxam => {
@@ -686,7 +751,11 @@ pub extern "C" fn rt_x87(cpu: *mut Cpu, op: u32, addr: u32) {
             };
             c.set_st(0, r);
             // the low three quotient bits go to C0 C3 C1; C2 = 0: the reduction is complete
-            let qb = if q.is_finite() { (q.abs() % 8.0) as u16 } else { 0 };
+            let qb = if q.is_finite() {
+                (q.abs() % 8.0) as u16
+            } else {
+                0
+            };
             let bit = |k: u16, cc: u16| if qb & k != 0 { cc } else { 0 };
             c.set_cc(bit(4, C0) | bit(2, C3) | bit(1, C1));
         }
@@ -713,7 +782,10 @@ pub extern "C" fn rt_x87(cpu: *mut Cpu, op: u32, addr: u32) {
             if matches!(op, X87::Fnsave) {
                 for k in 0..8 {
                     let b = f64_to_f80(c.st(k));
-                    unsafe { std::slice::from_raw_parts_mut(c.mem.add((addr + 28 + 10 * k) as usize), 10) }.copy_from_slice(&b);
+                    unsafe {
+                        std::slice::from_raw_parts_mut(c.mem.add((addr + 28 + 10 * k) as usize), 10)
+                    }
+                    .copy_from_slice(&b);
                 }
                 c.fcw = 0x37f;
                 c.fsw = 0;
@@ -730,7 +802,11 @@ pub extern "C" fn rt_x87(cpu: *mut Cpu, op: u32, addr: u32) {
             c.top = ((sw >> 11) & 7) as u32;
             if matches!(op, X87::Frstor) {
                 for k in 0..8 {
-                    let b: [u8; 10] = unsafe { std::slice::from_raw_parts(c.mem.add((addr + 28 + 10 * k) as usize), 10) }.try_into().unwrap();
+                    let b: [u8; 10] = unsafe {
+                        std::slice::from_raw_parts(c.mem.add((addr + 28 + 10 * k) as usize), 10)
+                    }
+                    .try_into()
+                    .unwrap();
                     c.set_st(k, f80_to_f64(&b));
                 }
             }
@@ -792,7 +868,15 @@ pub extern "C" fn rt_mxcsr_set(v: u32) {
 }
 
 fn fpu_round(op: u32, x: f64, y: f64, cw: u32) -> f64 {
-    let sign = |e: f64| if e > 0.0 { 1 } else if e < 0.0 { -1 } else { 0 };
+    let sign = |e: f64| {
+        if e > 0.0 {
+            1
+        } else if e < 0.0 {
+            -1
+        } else {
+            0
+        }
+    };
     let (s, err) = match op {
         o if o == FpuOp::Add as u32 || o == FpuOp::Sub as u32 => {
             let y = if o == FpuOp::Sub as u32 { -y } else { y };
@@ -841,7 +925,11 @@ fn fpu_round(op: u32, x: f64, y: f64, cw: u32) -> f64 {
             2 => r > 0.0,
             _ => false,
         };
-        return if toward_inf { r.signum() * f64::INFINITY } else { r.signum() * f32::MAX as f64 };
+        return if toward_inf {
+            r.signum() * f64::INFINITY
+        } else {
+            r.signum() * f32::MAX as f64
+        };
     }
     r
 }
@@ -886,9 +974,17 @@ fn floor24(s: f64, err: i32) -> f64 {
         let exp = ((v.to_bits() >> 52) & 0x7ff) as i64 - 1023;
         // 2^(exp - 23); below 2^-1022 a subnormal
         let e = (exp - 23).max(-1074);
-        let unit = if e >= -1022 { f64::from_bits(((e + 1023) as u64) << 52) } else { f64::from_bits(1 << (e + 1074)) };
+        let unit = if e >= -1022 {
+            f64::from_bits(((e + 1023) as u64) << 52)
+        } else {
+            f64::from_bits(1 << (e + 1074))
+        };
         (v / unit).floor() * unit
     };
     // s itself representable but the exact value just below it: the 24-bit float below s
-    if floor(s) == s && err < 0 { floor(s.next_down()) } else { floor(s) }
+    if floor(s) == s && err < 0 {
+        floor(s.next_down())
+    } else {
+        floor(s)
+    }
 }

@@ -30,11 +30,19 @@ const EC_COMPLETE: u32 = 1;
 /// A GUID as its 16 bytes in memory.
 const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
     let (a, b, c) = (d1.to_le_bytes(), d2.to_le_bytes(), d3.to_le_bytes());
-    [a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]]
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5],
+        d4[6], d4[7],
+    ]
 }
 
 const QUARTZ: [u8; 8] = [0xb0, 0x3a, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70];
-const CLSID_FILTER_GRAPH: [u8; 16] = guid(0xe436ebb3, 0x524f, 0x11ce, [0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70]);
+const CLSID_FILTER_GRAPH: [u8; 16] = guid(
+    0xe436ebb3,
+    0x524f,
+    0x11ce,
+    [0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70],
+);
 const IID_IUNKNOWN: [u8; 16] = guid(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
 const IID_IGRAPH_BUILDER: [u8; 16] = guid(0x56a868a9, 0x0ad4, 0x11ce, QUARTZ);
 const IID_IFILTER_GRAPH: [u8; 16] = guid(0x56a8689f, 0x0ad4, 0x11ce, QUARTZ);
@@ -84,7 +92,11 @@ fn trace() -> bool {
 /// `<PREFIX>_NO_VIDEO=1`: videos end at once, as if played to their end (for debugging).
 fn no_video() -> bool {
     static N: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *N.get_or_init(|| recomp::config::env("NO_VIDEO").ok_or(()).is_ok_and(|v| v != "0"))
+    *N.get_or_init(|| {
+        recomp::config::env("NO_VIDEO")
+            .ok_or(())
+            .is_ok_and(|v| v != "0")
+    })
 }
 
 /// The end of a video: EC_COMPLETE queued, the notify message posted.
@@ -102,7 +114,11 @@ fn read_guid(p: u32) -> [u8; 16] {
 
 fn wide_str(p: u32) -> String {
     let m = mem();
-    (0..).map(|i| m.rd16(p + 2 * i)).take_while(|&c| c != 0).map(|c| char::from_u32(c as u32).unwrap_or('?')).collect()
+    (0..)
+        .map(|i| m.rd16(p + 2 * i))
+        .take_while(|&c| c != 0)
+        .map(|c| char::from_u32(c as u32).unwrap_or('?'))
+        .collect()
 }
 
 // ---- creation and IUnknown ----------------------------------------------------------------------
@@ -120,7 +136,13 @@ fn co_create_instance(c: &mut Cpu) -> u32 {
         return REGDB_E_CLASSNOTREG;
     }
     stop_player();
-    let objects = [com_new(GRAPH_BUILDER, 0), com_new(MEDIA_CONTROL, 0), com_new(MEDIA_EVENT, 0), com_new(VIDEO_WINDOW, 0), com_new(BASIC_AUDIO, 0)];
+    let objects = [
+        com_new(GRAPH_BUILDER, 0),
+        com_new(MEDIA_CONTROL, 0),
+        com_new(MEDIA_EVENT, 0),
+        com_new(VIDEO_WINDOW, 0),
+        com_new(BASIC_AUDIO, 0),
+    ];
     *graph() = Some(Graph {
         refs: 0,
         objects,
@@ -217,7 +239,13 @@ fn render_file(c: &mut Cpu) -> u32 {
     };
     let size = (v.width as i32, v.height as i32);
     if trace() {
-        log!("video {name}: {}x{} at {} fps, {} bytes of sound", size.0, size.1, v.fps, streams.audio.len());
+        log!(
+            "video {name}: {}x{} at {} fps, {} bytes of sound",
+            size.0,
+            size.1,
+            v.fps,
+            streams.audio.len()
+        );
     }
     stop_player();
     let mut g = graph();
@@ -258,7 +286,9 @@ fn run(_: &mut Cpu) -> u32 {
         p.paused.store(false, Ordering::Relaxed);
         return OK;
     }
-    let Some(movie) = g.movie.clone() else { return E_FAIL };
+    let Some(movie) = g.movie.clone() else {
+        return E_FAIL;
+    };
     if no_video() {
         complete(g);
         return OK;
@@ -266,8 +296,15 @@ fn run(_: &mut Cpu) -> u32 {
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
     let (s, p, volume) = (stop.clone(), paused.clone(), g.volume);
-    let thread = std::thread::Builder::new().name("video".into()).spawn(move || play(&movie, &s, &p, volume)).expect("cannot start the video thread");
-    g.player = Some(Player { stop, paused, thread });
+    let thread = std::thread::Builder::new()
+        .name("video".into())
+        .spawn(move || play(&movie, &s, &p, volume))
+        .expect("cannot start the video thread");
+    g.player = Some(Player {
+        stop,
+        paused,
+        thread,
+    });
     OK
 }
 
@@ -295,7 +332,13 @@ fn stop_player() {
 /// GetState(timeout, state): 0 stopped, 1 paused, 2 running.
 fn get_state(c: &mut Cpu) -> u32 {
     let g = graph();
-    let s = g.as_ref().and_then(|g| g.player.as_ref()).map_or(0, |p| if p.paused.load(Ordering::Relaxed) { 1 } else { 2 });
+    let s = g.as_ref().and_then(|g| g.player.as_ref()).map_or(0, |p| {
+        if p.paused.load(Ordering::Relaxed) {
+            1
+        } else {
+            2
+        }
+    });
     mem().wr32(arg(c, 2), s);
     OK
 }
@@ -324,7 +367,9 @@ static MEDIA_CONTROL: &[Import] = &[
 /// GetEvent(code, param1, param2, timeout): the next event, E_ABORT when there is none.
 fn get_event(c: &mut Cpu) -> u32 {
     let e = graph().as_mut().and_then(|g| g.events.pop_front());
-    let Some((code, p1, p2)) = e else { return E_ABORT };
+    let Some((code, p1, p2)) = e else {
+        return E_ABORT;
+    };
     let m = mem();
     m.wr32(arg(c, 1), code);
     m.wr32(arg(c, 2), p1);
@@ -381,7 +426,12 @@ fn get_visible(c: &mut Cpu) -> u32 {
 
 /// SetWindowPosition(left, top, width, height) in the owner's client area.
 fn set_window_position(c: &mut Cpu) -> u32 {
-    let r = [arg(c, 1) as i32, arg(c, 2) as i32, arg(c, 3) as i32, arg(c, 4) as i32];
+    let r = [
+        arg(c, 1) as i32,
+        arg(c, 2) as i32,
+        arg(c, 3) as i32,
+        arg(c, 4) as i32,
+    ];
     if trace() {
         log!("video window at {r:?}");
     }
@@ -500,14 +550,18 @@ static BASIC_AUDIO: &[Import] = &[
 /// Whether the video window is shown (placed and visible). Where the game placed it does not
 /// matter: the picture fills the window (`gl::Gl::draw`).
 fn on_screen() -> bool {
-    graph().as_ref().is_some_and(|g| g.visible && g.rect[2] > 0 && g.rect[3] > 0)
+    graph()
+        .as_ref()
+        .is_some_and(|g| g.visible && g.rect[2] > 0 && g.rect[3] > 0)
 }
 
 /// Play a movie until its end or `stop`; at its end, queue EC_COMPLETE and post the notify
 /// message.
 fn play(movie: &mpeg::Streams, stop: &AtomicBool, paused: &AtomicBool, volume: i32) {
     use super::dsound;
-    let Some(mut video) = mpeg::video::Decoder::new(&movie.video) else { return };
+    let Some(mut video) = mpeg::video::Decoder::new(&movie.video) else {
+        return;
+    };
     let mut audio = mpeg::mp2::Decoder::new(&movie.audio);
     let rate = audio.as_ref().map_or(44100, |a| a.sample_rate);
     // the sound may start a little after the picture: silence before it
@@ -549,7 +603,11 @@ fn play(movie: &mpeg::Streams, stop: &AtomicBool, paused: &AtomicBool, volume: i
         }
         // the sound's position is the clock, unless it does not move (no device)
         let wall = clock_start.elapsed().as_secs_f64();
-        let clock = if audio.is_some() { (dsound::stream_state().1 as f64 / rate as f64).max(wall - 0.25) } else { wall };
+        let clock = if audio.is_some() {
+            (dsound::stream_state().1 as f64 / rate as f64).max(wall - 0.25)
+        } else {
+            wall
+        };
         if video_done {
             // let the sound play out (at most 2 s more)
             let end = *ended_at.get_or_insert(wall);
@@ -569,7 +627,10 @@ fn play(movie: &mpeg::Streams, stop: &AtomicBool, paused: &AtomicBool, volume: i
                 // a frame more than one behind is skipped
                 if clock - due < 1.0 / fps {
                     f.to_rgb(&mut rgb);
-                    window::set_video(on_screen().then(|| (rgb.clone(), (f.width & !1) as u32, (f.height & !1) as u32)));
+                    window::set_video(
+                        on_screen()
+                            .then(|| (rgb.clone(), (f.width & !1) as u32, (f.height & !1) as u32)),
+                    );
                 }
                 shown += 1;
             }
@@ -581,7 +642,14 @@ fn play(movie: &mpeg::Streams, stop: &AtomicBool, paused: &AtomicBool, volume: i
         dsound::stream_stop();
     }
     if trace() {
-        log!("video: {shown} frames, {}", if stop.load(Ordering::Relaxed) { "stopped" } else { "complete" });
+        log!(
+            "video: {shown} frames, {}",
+            if stop.load(Ordering::Relaxed) {
+                "stopped"
+            } else {
+                "complete"
+            }
+        );
     }
     if !stop.load(Ordering::Relaxed) {
         let mut g = graph();

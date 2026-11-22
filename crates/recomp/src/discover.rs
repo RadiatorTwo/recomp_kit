@@ -14,7 +14,10 @@ pub struct Code<'a> {
 
 impl<'a> Code<'a> {
     pub fn new(img: &'a Image) -> Self {
-        Code { img, cache: HashMap::new() }
+        Code {
+            img,
+            cache: HashMap::new(),
+        }
     }
 
     pub fn at(&mut self, pc: u32) -> Option<Instruction> {
@@ -29,7 +32,8 @@ impl<'a> Code<'a> {
 
 /// A direct branch or call target (jmp/jcc/loop/jecxz/call rel).
 pub fn direct_target(i: &Instruction) -> Option<u32> {
-    matches!(i.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16).then(|| i.near_branch_target() as u32)
+    matches!(i.op0_kind(), OpKind::NearBranch32 | OpKind::NearBranch16)
+        .then(|| i.near_branch_target() as u32)
 }
 
 pub struct Func {
@@ -90,7 +94,9 @@ impl Func {
                 self.ins.insert(pc);
                 let fc = i.flow_control();
                 match fc {
-                    FlowControl::ConditionalBranch | FlowControl::UnconditionalBranch if direct_target(&i).is_some() => {
+                    FlowControl::ConditionalBranch | FlowControl::UnconditionalBranch
+                        if direct_target(&i).is_some() =>
+                    {
                         let t = direct_target(&i).unwrap();
                         self.targets.insert(t);
                         if self.inside(t) {
@@ -102,7 +108,9 @@ impl Func {
                     }
                     FlowControl::IndirectBranch | FlowControl::UnconditionalBranch => {
                         // jmp [index*4 + table], or Watcom's jmp cs:[reg + table] (reg = index*4)
-                        let scaled = i.memory_index() != Register::None && i.memory_index_scale() == 4 && i.memory_base() == Register::None;
+                        let scaled = i.memory_index() != Register::None
+                            && i.memory_index_scale() == 4
+                            && i.memory_base() == Register::None;
                         let based = i.memory_index() == Register::None
                             && i.memory_base() != Register::None
                             && i.memory_base().size() == 4
@@ -116,7 +124,11 @@ impl Func {
                                         && p.op0_kind() == OpKind::Register
                                         && p.op0_register() == i.memory_index()
                                 });
-                            let (tbl, span) = self.table(code, i.memory_displacement32(), if neg { 8 } else { 4 });
+                            let (tbl, span) = self.table(
+                                code,
+                                i.memory_displacement32(),
+                                if neg { 8 } else { 4 },
+                            );
                             self.table_bytes.push(span);
                             for &t in &tbl {
                                 self.targets.insert(t);
@@ -129,7 +141,11 @@ impl Func {
                         break;
                     }
                     _ => match i.mnemonic() {
-                        Mnemonic::Ret | Mnemonic::Retf | Mnemonic::Iretd | Mnemonic::Int3 | Mnemonic::Hlt => break,
+                        Mnemonic::Ret
+                        | Mnemonic::Retf
+                        | Mnemonic::Iretd
+                        | Mnemonic::Int3
+                        | Mnemonic::Hlt => break,
                         Mnemonic::Call => {
                             if let Some(t) = direct_target(&i) {
                                 self.calls.insert(t);
@@ -208,7 +224,9 @@ impl Program {
             for k in (0..blob.len().saturating_sub(3)).step_by(4) {
                 let t = u32::from_le_bytes([blob[k], blob[k + 1], blob[k + 2], blob[k + 3]]);
                 let plausible = insn_at.contains(&t)
-                    || (code.img.is_code(t) && !inside.contains(&t) && !matches!(code.img.byte(t), 0x00 | 0x90 | 0xCC));
+                    || (code.img.is_code(t)
+                        && !inside.contains(&t)
+                        && !matches!(code.img.byte(t), 0x00 | 0x90 | 0xCC));
                 if plausible && !fns.contains_key(&t) {
                     data_ptrs.insert(t);
                 }
@@ -216,8 +234,17 @@ impl Program {
         }
         // add entries until nothing new turns up
         let los: Vec<u32> = ranges.iter().map(|r| r.0).collect();
-        let mut todo: Vec<Vec<u32>> =
-            fns.values().map(|f| f.targets.iter().chain(&f.calls).copied().filter(|&t| !(f.inside(t) && f.ins.contains(&t))).collect()).collect();
+        let mut todo: Vec<Vec<u32>> = fns
+            .values()
+            .map(|f| {
+                f.targets
+                    .iter()
+                    .chain(&f.calls)
+                    .copied()
+                    .filter(|&t| !(f.inside(t) && f.ins.contains(&t)))
+                    .collect()
+            })
+            .collect();
         todo.push(data_ptrs.into_iter().collect());
         while !todo.is_empty() {
             let mut next = Vec::new();
@@ -238,11 +265,21 @@ impl Program {
                 } else {
                     // a function functions.json does not know (one only another version has):
                     // up to the next one
-                    let end = code.img.code_section(t).map_or(t + 1, |s| s.va + s.vsize.max(s.rsize));
+                    let end = code
+                        .img
+                        .code_section(t)
+                        .map_or(t + 1, |s| s.va + s.vsize.max(s.rsize));
                     let next = los.get(k).copied().unwrap_or(end).min(end);
                     Func::new(code, t, t, next, format!("FUN_{t:08x}"))
                 };
-                next.push(e.targets.iter().chain(&e.calls).copied().filter(|&x| !(e.inside(x) && e.ins.contains(&x))).collect());
+                next.push(
+                    e.targets
+                        .iter()
+                        .chain(&e.calls)
+                        .copied()
+                        .filter(|&x| !(e.inside(x) && e.ins.contains(&x)))
+                        .collect(),
+                );
                 fns.insert(t, e);
             }
             todo = next;
@@ -254,7 +291,9 @@ impl Program {
 /// The dwords of a section's raw data, aligned.
 fn words(img: &Image, s: &crate::image::Section) -> Vec<u32> {
     let blob = img.read(s.va, s.rsize as usize).unwrap_or_default();
-    blob.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])).collect()
+    blob.chunks_exact(4)
+        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .collect()
 }
 
 /// Function boundaries without a disassembler's export: every function entry reachable from
@@ -263,13 +302,21 @@ fn words(img: &Image, s: &crate::image::Section) -> Vec<u32> {
 /// next entry; sorted (start, end, name).
 pub fn find_functions(code: &mut Code, seeds: &[(u32, String)]) -> Vec<(u32, u32, String)> {
     let img = code.img;
-    let section_end = |a: u32| img.code_section(a).map(|s| s.va + s.vsize.max(s.rsize)).unwrap();
-    let mut names: HashMap<u32, String> = seeds.iter().filter(|s| img.is_code(s.0)).cloned().collect();
+    let section_end = |a: u32| {
+        img.code_section(a)
+            .map(|s| s.va + s.vsize.max(s.rsize))
+            .unwrap()
+    };
+    let mut names: HashMap<u32, String> =
+        seeds.iter().filter(|s| img.is_code(s.0)).cloned().collect();
     let mut entries: BTreeSet<u32> = names.keys().copied().collect();
     // decoded instruction starts, and bytes strictly inside a decoded instruction
     let mut seen: (HashSet<u32>, HashSet<u32>) = Default::default();
     // returns the instructions it decoded first
-    let decode = |code: &mut Code, entries: &mut BTreeSet<u32>, seen: &mut (HashSet<u32>, HashSet<u32>), mut todo: Vec<u32>| {
+    let decode = |code: &mut Code,
+                  entries: &mut BTreeSet<u32>,
+                  seen: &mut (HashSet<u32>, HashSet<u32>),
+                  mut todo: Vec<u32>| {
         let mut new = Vec::new();
         while let Some(e) = todo.pop() {
             let s = img.code_section(e).unwrap();
@@ -292,13 +339,23 @@ pub fn find_functions(code: &mut Code, seeds: &[(u32, String)]) -> Vec<(u32, u32
         }
         new
     };
-    decode(code, &mut entries, &mut seen, names.keys().copied().collect());
+    decode(
+        code,
+        &mut entries,
+        &mut seen,
+        names.keys().copied().collect(),
+    );
     // code addresses that nothing decoded reaches: functions only called through pointers,
     // stored in data (also in the code sections, where the linker put some tables of
     // functions: words no decoded instruction covers) or as an instruction's operand (window
     // procedures, callbacks). One at a time, so one found inside another's code does not
     // split it.
-    let data: Vec<u32> = img.sections.iter().filter(|s| !s.exec).flat_map(|s| words(img, s)).collect();
+    let data: Vec<u32> = img
+        .sections
+        .iter()
+        .filter(|s| !s.exec)
+        .flat_map(|s| words(img, s))
+        .collect();
     let mut tried = HashSet::new();
     loop {
         let covered = |a: u32| (a..a + 4).any(|b| seen.0.contains(&b) || seen.1.contains(&b));
@@ -314,7 +371,13 @@ pub fn find_functions(code: &mut Code, seeds: &[(u32, String)]) -> Vec<(u32, u32
             let i = code.at(a).unwrap();
             (i.op_kinds().any(|k| k == OpKind::Immediate32)).then(|| i.immediate32())
         });
-        let mut wanted: Vec<u32> = data.iter().copied().chain(in_code).chain(operands.collect::<Vec<_>>()).filter(|&t| img.is_code(t) && tried.insert(t)).collect();
+        let mut wanted: Vec<u32> = data
+            .iter()
+            .copied()
+            .chain(in_code)
+            .chain(operands.collect::<Vec<_>>())
+            .filter(|&t| img.is_code(t) && tried.insert(t))
+            .collect();
         if wanted.is_empty() {
             break;
         }
@@ -336,7 +399,10 @@ pub fn find_functions(code: &mut Code, seeds: &[(u32, String)]) -> Vec<(u32, u32
                     let new = decode(code, &mut entries, &mut seen, vec![t]);
                     for a in new {
                         let i = code.at(a).unwrap();
-                        if i.op_kinds().any(|k| k == OpKind::Immediate32) && img.is_code(i.immediate32()) && tried.insert(i.immediate32()) {
+                        if i.op_kinds().any(|k| k == OpKind::Immediate32)
+                            && img.is_code(i.immediate32())
+                            && tried.insert(i.immediate32())
+                        {
                             next.push(i.immediate32());
                         }
                     }
@@ -350,7 +416,11 @@ pub fn find_functions(code: &mut Code, seeds: &[(u32, String)]) -> Vec<(u32, u32
         .map(|(k, &lo)| {
             let end = section_end(lo);
             let hi = list.get(k + 1).copied().filter(|&n| n < end).unwrap_or(end);
-            (lo, hi, names.remove(&lo).unwrap_or_else(|| format!("sub_{lo:x}")))
+            (
+                lo,
+                hi,
+                names.remove(&lo).unwrap_or_else(|| format!("sub_{lo:x}")),
+            )
         })
         .collect()
 }
@@ -362,19 +432,59 @@ pub fn find_functions(code: &mut Code, seeds: &[(u32, String)]) -> Vec<(u32, u32
 fn plausible(code: &mut Code, t: u32, seen: &(HashSet<u32>, HashSet<u32>)) -> bool {
     use Mnemonic::*;
     let img = code.img;
-    let Some(s) = img.sections.iter().find(|s| s.exec && t >= s.va && t < s.va + s.vsize) else { return false };
+    let Some(s) = img
+        .sections
+        .iter()
+        .find(|s| s.exec && t >= s.va && t < s.va + s.vsize)
+    else {
+        return false;
+    };
     let f = Func::new(code, t, s.va, s.va + s.vsize, String::new());
-    f.ins.iter().filter(|&&a| !seen.0.contains(&a) && !f.in_table(a)).all(|&a| {
-        let i = code.at(a).unwrap();
-        let odd = matches!(
-            i.mnemonic(),
-            Aaa | Aad | Aam | Aas | Daa | Das | Arpl | Bound | Lds | Les | Lfs | Lgs | Lss | Into | Int1 | Iretd | Retf | Salc
-                | Insb | Insd | Insw | Outsb | Outsd | Outsw | In | Out | Hlt | Cli | Sti | Enter
-        ) || i.op_kinds().any(|k| matches!(k, OpKind::FarBranch16 | OpKind::FarBranch32))
-            || i.is_call_far_indirect()
-            || i.is_jmp_far_indirect()
-            || (i.memory_base() != Register::None && i.memory_base().size() == 2)
-            || !matches!(i.segment_prefix(), Register::None | Register::FS);
-        !odd && !(a..a + i.len() as u32).any(|b| seen.0.contains(&b) && b != a || seen.1.contains(&b))
-    }) && !f.ins.is_empty()
+    f.ins
+        .iter()
+        .filter(|&&a| !seen.0.contains(&a) && !f.in_table(a))
+        .all(|&a| {
+            let i = code.at(a).unwrap();
+            let odd = matches!(
+                i.mnemonic(),
+                Aaa | Aad
+                    | Aam
+                    | Aas
+                    | Daa
+                    | Das
+                    | Arpl
+                    | Bound
+                    | Lds
+                    | Les
+                    | Lfs
+                    | Lgs
+                    | Lss
+                    | Into
+                    | Int1
+                    | Iretd
+                    | Retf
+                    | Salc
+                    | Insb
+                    | Insd
+                    | Insw
+                    | Outsb
+                    | Outsd
+                    | Outsw
+                    | In
+                    | Out
+                    | Hlt
+                    | Cli
+                    | Sti
+                    | Enter
+            ) || i
+                .op_kinds()
+                .any(|k| matches!(k, OpKind::FarBranch16 | OpKind::FarBranch32))
+                || i.is_call_far_indirect()
+                || i.is_jmp_far_indirect()
+                || (i.memory_base() != Register::None && i.memory_base().size() == 2)
+                || !matches!(i.segment_prefix(), Register::None | Register::FS);
+            !odd && !(a..a + i.len() as u32)
+                .any(|b| seen.0.contains(&b) && b != a || seen.1.contains(&b))
+        })
+        && !f.ins.is_empty()
 }

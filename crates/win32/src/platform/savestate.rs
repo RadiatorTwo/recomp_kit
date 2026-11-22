@@ -43,18 +43,23 @@ pub fn frame() {
 }
 
 fn hash(words: impl Iterator<Item = u32>) -> u64 {
-    words.fold(0xcbf2_9ce4_8422_2325, |h, w| (h ^ w as u64).wrapping_mul(0x100_0000_01b3))
+    words.fold(0xcbf2_9ce4_8422_2325, |h, w| {
+        (h ^ w as u64).wrapping_mul(0x100_0000_01b3)
+    })
 }
 
 fn fingerprint() -> [u64; 4] {
     [
         hash(super::heap_blocks().into_iter().flat_map(|(a, s)| [a, s])),
-        hash(kernel32::object_kinds().into_iter().flat_map(|(h, k)| [h, k])),
+        hash(
+            kernel32::object_kinds()
+                .into_iter()
+                .flat_map(|(h, k)| [h, k]),
+        ),
         hash(super::dsound::buffers().into_iter()),
         hash(super::glide::texture_addresses().into_iter()),
     ]
 }
-
 
 fn mission() -> String {
     kernel32::LAST_MISSION.lock().unwrap().clone()
@@ -155,7 +160,12 @@ pub fn save(c: &mut Cpu) {
         std::fs::rename(&tmp, path())
     };
     match write() {
-        Ok(()) => log!("savestate: saved {} MB to {} in {} ms", memory.bytes() >> 20, path().display(), t.elapsed().as_millis()),
+        Ok(()) => log!(
+            "savestate: saved {} MB to {} in {} ms",
+            memory.bytes() >> 20,
+            path().display(),
+            t.elapsed().as_millis()
+        ),
         Err(e) => log!("savestate: cannot write {}: {e}", path().display()),
     }
 }
@@ -184,9 +194,15 @@ pub fn load(c: &mut Cpu) {
             *h = r64(&mut r)?;
         }
         let now = START.lock().unwrap().unwrap_or_default();
-        let differ: Vec<_> = (0..4).filter(|&k| start[k] != now[k]).map(|k| PARTS[k]).collect();
+        let differ: Vec<_> = (0..4)
+            .filter(|&k| start[k] != now[k])
+            .map(|k| PARTS[k])
+            .collect();
         if !differ.is_empty() {
-            return Ok(Err(format!("this mission started otherwise ({}): start it as when saved", differ.join(", "))));
+            return Ok(Err(format!(
+                "this mission started otherwise ({}): start it as when saved",
+                differ.join(", ")
+            )));
         }
         let clock = r64(&mut r)?;
         let cpu = read_cpu(&mut r)?;

@@ -49,7 +49,11 @@ impl Image {
         let sections = (0..nsec)
             .map(|i| {
                 let o = pe + 24 + opt + i * 40;
-                let name = data[o..o + 8].iter().take_while(|&&b| b != 0).map(|&b| b as char).collect();
+                let name = data[o..o + 8]
+                    .iter()
+                    .take_while(|&&b| b != 0)
+                    .map(|&b| b as char)
+                    .collect();
                 Section {
                     name,
                     vsize: le32(&data, o + 8),
@@ -60,7 +64,12 @@ impl Image {
                 }
             })
             .collect();
-        Image { data, base, entry, sections }
+        Image {
+            data,
+            base,
+            entry,
+            sections,
+        }
     }
 
     /// Is `a` in an executable section?
@@ -70,24 +79,47 @@ impl Image {
 
     /// The executable section holding `a`.
     pub fn code_section(&self, a: u32) -> Option<&Section> {
-        self.sections.iter().find(|s| s.exec && a >= s.va && a < s.va + s.vsize.max(s.rsize))
+        self.sections
+            .iter()
+            .find(|s| s.exec && a >= s.va && a < s.va + s.vsize.max(s.rsize))
     }
 
     /// Bytes at a virtual address; zeros past a section's raw data (.bss); `None` outside
     /// every section.
     pub fn read(&self, addr: u32, n: usize) -> Option<Vec<u8>> {
         // the headers, before the first section
-        let first = self.sections.iter().map(|s| s.va).min().unwrap_or(self.base);
+        let first = self
+            .sections
+            .iter()
+            .map(|s| s.va)
+            .min()
+            .unwrap_or(self.base);
         if addr >= self.base && addr < first {
-            return Some((0..n as u32).map(|k| self.data.get((addr - self.base + k) as usize).copied().unwrap_or(0)).collect());
+            return Some(
+                (0..n as u32)
+                    .map(|k| {
+                        self.data
+                            .get((addr - self.base + k) as usize)
+                            .copied()
+                            .unwrap_or(0)
+                    })
+                    .collect(),
+            );
         }
-        let s = self.sections.iter().find(|s| addr >= s.va && addr < s.va + s.vsize.max(s.rsize))?;
+        let s = self
+            .sections
+            .iter()
+            .find(|s| addr >= s.va && addr < s.va + s.vsize.max(s.rsize))?;
         let off = addr - s.va;
         Some(
             (0..n as u32)
                 .map(|k| {
                     let o = off + k;
-                    if o < s.rsize { self.data.get((s.raw + o) as usize).copied().unwrap_or(0) } else { 0 }
+                    if o < s.rsize {
+                        self.data.get((s.raw + o) as usize).copied().unwrap_or(0)
+                    } else {
+                        0
+                    }
                 })
                 .collect(),
         )
@@ -98,10 +130,16 @@ impl Image {
     pub fn rebase(&mut self, base: u32) {
         let delta = base.wrapping_sub(self.base);
         let pe = le32(&self.data, 0x3c) as usize;
-        let (rva, size) = (le32(&self.data, pe + 24 + 136), le32(&self.data, pe + 24 + 140));
+        let (rva, size) = (
+            le32(&self.data, pe + 24 + 136),
+            le32(&self.data, pe + 24 + 140),
+        );
         // file offset of a virtual address
         let file = |img: &Image, a: u32| {
-            let s = img.sections.iter().find(|s| a >= s.va && a < s.va + s.rsize)?;
+            let s = img
+                .sections
+                .iter()
+                .find(|s| a >= s.va && a < s.va + s.rsize)?;
             Some((s.raw + a - s.va) as usize)
         };
         let mut b = self.base + rva;
@@ -111,7 +149,9 @@ impl Image {
                 break;
             }
             for k in (8..len).step_by(2) {
-                let e = self.read(b + k, 2).map_or(0, |e| u16::from_le_bytes([e[0], e[1]]));
+                let e = self
+                    .read(b + k, 2)
+                    .map_or(0, |e| u16::from_le_bytes([e[0], e[1]]));
                 if e >> 12 == 3 {
                     if let Some(o) = file(self, self.base + page + (e & 0xfff) as u32) {
                         let v = le32(&self.data, o).wrapping_add(delta);
@@ -136,9 +176,18 @@ impl Image {
         for img in parts {
             let at = data.len() as u32;
             data.extend_from_slice(&img.data);
-            sections.extend(img.sections.iter().map(|s| Section { name: s.name.clone(), raw: s.raw + at, ..*s }));
+            sections.extend(img.sections.iter().map(|s| Section {
+                name: s.name.clone(),
+                raw: s.raw + at,
+                ..*s
+            }));
         }
-        Image { data, base: parts[0].base, entry: parts[0].entry, sections }
+        Image {
+            data,
+            base: parts[0].base,
+            entry: parts[0].entry,
+            sections,
+        }
     }
 
     /// Replaces the bytes at a virtual address (in a section's raw data) when they are `old`:
@@ -146,17 +195,28 @@ impl Image {
     /// there (another version of the EXE) are an error, nothing is changed.
     pub fn patch(&mut self, addr: u32, old: &[u8], new: &[u8]) -> Result<(), String> {
         if old.len() != new.len() {
-            return Err(format!("patch at {addr:#x}: {} bytes for {}", new.len(), old.len()));
+            return Err(format!(
+                "patch at {addr:#x}: {} bytes for {}",
+                new.len(),
+                old.len()
+            ));
         }
         let s = self
             .sections
             .iter()
-            .find(|s| addr >= s.va && addr as u64 + old.len() as u64 <= s.va as u64 + s.rsize as u64)
+            .find(|s| {
+                addr >= s.va && addr as u64 + old.len() as u64 <= s.va as u64 + s.rsize as u64
+            })
             .ok_or_else(|| format!("patch at {addr:#x}: not in a section's data"))?;
         let at = (s.raw + addr - s.va) as usize;
-        let bytes = self.data.get_mut(at..at + old.len()).ok_or_else(|| format!("patch at {addr:#x}: past the file's end"))?;
+        let bytes = self
+            .data
+            .get_mut(at..at + old.len())
+            .ok_or_else(|| format!("patch at {addr:#x}: past the file's end"))?;
         if bytes != old {
-            return Err(format!("patch at {addr:#x}: {bytes:02x?} instead of {old:02x?}"));
+            return Err(format!(
+                "patch at {addr:#x}: {bytes:02x?} instead of {old:02x?}"
+            ));
         }
         bytes.copy_from_slice(new);
         Ok(())
@@ -167,11 +227,16 @@ impl Image {
     }
 
     pub fn u32(&self, addr: u32) -> u32 {
-        self.read(addr, 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        self.read(addr, 4)
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     fn cstr(&self, addr: u32) -> String {
-        (0..).map(|k| self.byte(addr + k)).take_while(|&b| b != 0).map(|b| b as char).collect()
+        (0..)
+            .map(|k| self.byte(addr + k))
+            .take_while(|&b| b != 0)
+            .map(|b| b as char)
+            .collect()
     }
 
     pub fn imports(&self) -> Vec<Import> {
@@ -190,9 +255,16 @@ impl Image {
                 if thunk == 0 {
                     break;
                 }
-                let name =
-                    if thunk & 0x8000_0000 != 0 { format!("#{}", thunk & 0xffff) } else { self.cstr(self.base + thunk + 2) };
-                out.push(Import { iat: self.base + ft + 4 * k, dll: dll.clone(), name });
+                let name = if thunk & 0x8000_0000 != 0 {
+                    format!("#{}", thunk & 0xffff)
+                } else {
+                    self.cstr(self.base + thunk + 2)
+                };
+                out.push(Import {
+                    iat: self.base + ft + 4 * k,
+                    dll: dll.clone(),
+                    name,
+                });
             }
             d += 20;
         }
@@ -207,8 +279,15 @@ impl Image {
             return Vec::new();
         }
         let d = self.base + rva;
-        let (ord_base, nfuncs, funcs) = (self.u32(d + 16), self.u32(d + 20), self.base + self.u32(d + 28));
-        (0..nfuncs).filter(|&k| self.u32(funcs + 4 * k) != 0).map(|k| (self.base + self.u32(funcs + 4 * k), ord_base + k)).collect()
+        let (ord_base, nfuncs, funcs) = (
+            self.u32(d + 16),
+            self.u32(d + 20),
+            self.base + self.u32(d + 28),
+        );
+        (0..nfuncs)
+            .filter(|&k| self.u32(funcs + 4 * k) != 0)
+            .map(|k| (self.base + self.u32(funcs + 4 * k), ord_base + k))
+            .collect()
     }
 
     /// The exported functions: (address, name); ordinal-only exports are named `#n`.
@@ -220,10 +299,19 @@ impl Image {
         }
         let d = self.base + rva;
         let (ord_base, nfuncs, nnames) = (self.u32(d + 16), self.u32(d + 20), self.u32(d + 24));
-        let (funcs, names, ords) = (self.base + self.u32(d + 28), self.base + self.u32(d + 32), self.base + self.u32(d + 36));
+        let (funcs, names, ords) = (
+            self.base + self.u32(d + 28),
+            self.base + self.u32(d + 32),
+            self.base + self.u32(d + 36),
+        );
         let mut out: Vec<(u32, String)> = (0..nfuncs)
             .filter(|&k| self.u32(funcs + 4 * k) != 0)
-            .map(|k| (self.base + self.u32(funcs + 4 * k), format!("#{}", ord_base + k)))
+            .map(|k| {
+                (
+                    self.base + self.u32(funcs + 4 * k),
+                    format!("#{}", ord_base + k),
+                )
+            })
             .collect();
         for k in 0..nnames {
             let ord = (self.u32(ords + 2 * k) & 0xffff) + ord_base;
@@ -251,9 +339,12 @@ pub fn load_functions(json: &str) -> Vec<(u32, u32, String)> {
     let list: Vec<FuncInfo> = serde_json::from_str(json).expect("functions.json");
     let mut out: Vec<(u32, u32, String)> = list
         .into_iter()
-        .filter(|f| !crate::ver::gone(u32::from_str_radix(f.addr.trim_start_matches("0x"), 16).unwrap_or(0)))
+        .filter(|f| {
+            !crate::ver::gone(u32::from_str_radix(f.addr.trim_start_matches("0x"), 16).unwrap_or(0))
+        })
         .map(|f| {
-            let lo = u32::from_str_radix(f.addr.trim_start_matches("0x"), 16).expect("functions.json: bad addr");
+            let lo = u32::from_str_radix(f.addr.trim_start_matches("0x"), 16)
+                .expect("functions.json: bad addr");
             (crate::ver::at(lo), crate::ver::at(lo + f.size), f.name)
         })
         .collect();
@@ -272,7 +363,8 @@ pub fn set_symbols(txt: &'static str) {
 /// The names in the game's symbols.txt (`set_symbols`), by address (in the version that runs:
 /// `ver`).
 pub fn symbols() -> &'static std::collections::BTreeMap<u32, String> {
-    static S: std::sync::OnceLock<std::collections::BTreeMap<u32, String>> = std::sync::OnceLock::new();
+    static S: std::sync::OnceLock<std::collections::BTreeMap<u32, String>> =
+        std::sync::OnceLock::new();
     S.get_or_init(|| {
         SYMBOLS_TXT
             .get()
@@ -306,7 +398,11 @@ pub enum ResId<'a> {
 impl ResId<'_> {
     /// From a guest argument: a number up to 0xffff, else a pointer to a string (`cstr` reads it).
     pub fn from_guest(p: u32, cstr: impl Fn(u32) -> String) -> ResId<'static> {
-        if p <= 0xffff { ResId::Id(p) } else { ResId::Name(Box::leak(cstr(p).into_boxed_str())) }
+        if p <= 0xffff {
+            ResId::Id(p)
+        } else {
+            ResId::Name(Box::leak(cstr(p).into_boxed_str()))
+        }
     }
 }
 
@@ -328,7 +424,11 @@ fn res_entries(rd: &dyn Fn(u32) -> u8, root: u32, dir: u32) -> Vec<(ResName, u32
             let name = r32(e);
             let name = if name & 0x8000_0000 != 0 {
                 let p = root + (name & 0x7fff_ffff);
-                ResName::Name((0..r16(p)).map(|k| char::from_u32(r16(p + 2 + 2 * k)).unwrap_or('?')).collect())
+                ResName::Name(
+                    (0..r16(p))
+                        .map(|k| char::from_u32(r16(p + 2 + 2 * k)).unwrap_or('?'))
+                        .collect(),
+                )
             } else {
                 ResName::Id(name)
             };
@@ -353,7 +453,11 @@ pub fn list_resources(rd: &dyn Fn(u32) -> u8, base: u32, ty: ResId) -> Vec<(ResN
         _ => false,
     };
     let sub = |off: u32| (off & 0x8000_0000 != 0).then(|| root + (off & 0x7fff_ffff));
-    let Some(types) = res_entries(rd, root, root).into_iter().find(|e| matches(&e.0, ty)).and_then(|e| sub(e.1)) else {
+    let Some(types) = res_entries(rd, root, root)
+        .into_iter()
+        .find(|e| matches(&e.0, ty))
+        .and_then(|e| sub(e.1))
+    else {
         return Vec::new();
     };
     res_entries(rd, root, types)
@@ -367,7 +471,12 @@ pub fn list_resources(rd: &dyn Fn(u32) -> u8, base: u32, ty: ResId) -> Vec<(ResN
 }
 
 /// One resource: address and size of its data.
-pub fn find_resource(rd: &dyn Fn(u32) -> u8, base: u32, ty: ResId, id: ResId) -> Option<(u32, u32)> {
+pub fn find_resource(
+    rd: &dyn Fn(u32) -> u8,
+    base: u32,
+    ty: ResId,
+    id: ResId,
+) -> Option<(u32, u32)> {
     list_resources(rd, base, ty)
         .into_iter()
         .find(|(n, ..)| match (n, id) {
