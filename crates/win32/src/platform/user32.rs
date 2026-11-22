@@ -16,6 +16,7 @@ pub const DESKTOP_H: u32 = 1200;
 
 pub const WM_CREATE: u32 = 0x01;
 pub const WM_DESTROY: u32 = 0x02;
+pub const WM_NCDESTROY: u32 = 0x82;
 pub const WM_SIZE: u32 = 0x05;
 pub const WM_ACTIVATE: u32 = 0x06;
 pub const WM_SETFOCUS: u32 = 0x07;
@@ -540,6 +541,8 @@ fn destroy(c: &mut Cpu, hwnd: u32) {
         return;
     }
     send(c, hwnd, WM_DESTROY, 0, 0);
+    // the last message a window gets: MFC posts WM_QUIT here when its main window goes
+    send(c, hwnd, WM_NCDESTROY, 0, 0);
     let mut s = st();
     s.wins.remove(&hwnd);
     s.timers.retain(|t| t.hwnd != hwnd);
