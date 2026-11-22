@@ -142,14 +142,24 @@ pub fn post(hwnd: u32, msg: u32, wp: u32, lp: u32) {
     st().queue.push_back(Msg { hwnd, msg, wp, lp });
 }
 
-/// Fetch the window system's input now (DirectInput reads: they get input without the game's
-/// message loop, as in Windows).
+/// When input was last fetched (ms since start).
+static LAST_POLL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Fetch the window system's input for a DirectInput read, if the game's message loop has not
+/// done so in the last 20 ms (a game may wait for a key without reading messages: Recoil's
+/// briefing). Fetching it at every read would hand a new key event to whichever read came
+/// first: Recoil reads its keyboard in two places in turn, and only one of them (0x46fa90,
+/// right after its PeekMessage) skips a video; it then missed about every second key press.
 pub fn poll_input() {
-    poll(Duration::ZERO);
+    let now = super::kernel32::ms_since_start();
+    if now.wrapping_sub(LAST_POLL.load(std::sync::atomic::Ordering::Relaxed)) >= 20 {
+        poll(Duration::ZERO);
+    }
 }
 
 /// Turn window-system input into messages and key state; due timers post WM_TIMER.
 fn poll(wait: Duration) {
+    LAST_POLL.store(super::kernel32::ms_since_start(), std::sync::atomic::Ordering::Relaxed);
     super::ddraw::show_pending();
     window::pump(wait);
     super::cdaudio::poll();

@@ -606,8 +606,10 @@ struct KmState {
     dy: i32,
     dz: i32,
     buttons: [u8; 4],
-    /// buffered events per device: (offset, data, time)
-    events: [std::collections::VecDeque<(u32, u32, u32)>; 2],
+    /// buffered events per device object (its kind, then (offset, data, time)): each has its
+    /// own buffer, as in DirectInput (Recoil reads the keyboard through two: one waits for a
+    /// key to skip a video, one feeds the game; a shared buffer gave the key to either)
+    events: std::collections::BTreeMap<u32, (usize, std::collections::VecDeque<(u32, u32, u32)>)>,
     sequence: u32,
 }
 
@@ -617,19 +619,21 @@ static KM: Mutex<KmState> = Mutex::new(KmState {
     dy: 0,
     dz: 0,
     buttons: [0; 4],
-    events: [std::collections::VecDeque::new(), std::collections::VecDeque::new()],
+    events: std::collections::BTreeMap::new(),
     sequence: 0,
 });
 
 /// Room in each device's buffer (more events than that are dropped, oldest first).
 const BUFFER: usize = 256;
 
-fn km_push(s: &mut KmState, dev: usize, ofs: u32, data: u32) {
-    let q = &mut s.events[dev];
-    if q.len() >= BUFFER {
-        q.pop_front();
+fn km_push(s: &mut KmState, kind: usize, ofs: u32, data: u32) {
+    let time = super::kernel32::ms_since_start();
+    for (_, q) in s.events.values_mut().filter(|(k, _)| *k == kind) {
+        if q.len() >= BUFFER {
+            q.pop_front();
+        }
+        q.push_back((ofs, data, time));
     }
-    q.push_back((ofs, data, super::kernel32::ms_since_start()));
 }
 
 /// The DirectInput key code (DIK) of a Windows virtual key and its scan code: the scan code,
@@ -701,6 +705,7 @@ fn km_create(kind: usize, out: u32) -> u32 {
     m.wr32(d + 4, 1);
     m.wr32(d + KM_KIND, kind as u32);
     m.wr32(d + KM_BUFFERED, 0);
+    KM.lock().unwrap().events.insert(d, (kind, std::collections::VecDeque::new()));
     m.wr32(out, d);
     pad_log!("CreateDevice: {}", KM_NAMES[kind]);
     DI_OK
@@ -771,10 +776,13 @@ fn km_get_property(c: &mut Cpu) -> u32 {
 }
 
 fn km_acquire(c: &mut Cpu) -> u32 {
-    let kind = km_kind(arg(c, 0));
+    let d = arg(c, 0);
+    let kind = km_kind(d);
     let mut s = KM.lock().unwrap();
-    // what happened before belongs to no one
-    s.events[kind].clear();
+    // what happened before belongs to no one (this device's buffer only)
+    if let Some((_, q)) = s.events.get_mut(&d) {
+        q.clear();
+    }
     if kind == MOUSE {
         (s.dx, s.dy, s.dz) = (0, 0, 0);
     }
@@ -816,20 +824,24 @@ fn km_device_data(c: &mut Cpu) -> u32 {
     let m = mem();
     let want = m.rd32(count_p) as usize;
     let mut s = KM.lock().unwrap();
-    let kind = km_kind(d);
-    let n = want.min(s.events[kind].len());
+    let KmState { events, sequence, .. } = &mut *s;
+    let Some((_, q)) = events.get_mut(&d) else {
+        m.wr32(count_p, 0);
+        return DI_OK;
+    };
+    let n = want.min(q.len());
     for k in 0..n {
-        let (ofs, data, time) = s.events[kind][k];
-        s.sequence += 1;
+        let (ofs, data, time) = q[k];
+        *sequence += 1;
         if out != 0 {
             let p = out + k as u32 * size.max(16);
-            for (j, v) in [ofs, data, time, s.sequence].into_iter().enumerate() {
+            for (j, v) in [ofs, data, time, *sequence].into_iter().enumerate() {
                 m.wr32(p + 4 * j as u32, v);
             }
         }
     }
     if flags & 1 == 0 {
-        s.events[kind].drain(..n);
+        q.drain(..n);
     }
     m.wr32(count_p, n as u32);
     DI_OK

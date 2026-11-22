@@ -232,6 +232,10 @@ White. Most apply to any game of that time. Add new ones here.
 - MCI CD audio with MCI_NOTIFY: post MM_MCINOTIFY (wParam 1, lParam the device) when the play
   ends. Games that loop their music one track at a time wait for it (Recoil) and fall silent
   after one piece without it (`cdaudio::poll` from the message loop).
+- Input fetched inside a DirectInput read goes to that read: a game that reads one keyboard
+  device in two places in turn (Recoil: one returns a pressed key to skip a video, one fills
+  its key table) lost about every second press. Fetch input in the message loop; a DirectInput
+  read fetches only when the loop has not run for 20 ms (`user32::poll_input`).
 
 ## Discovery
 
