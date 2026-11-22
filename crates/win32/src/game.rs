@@ -117,6 +117,12 @@ pub trait Game: Sync {
         matches!(msg, 0x100 | 0x101 | 0x104 | 0x105).then_some(wp)
     }
 
+    /// The key that switches the frame rate display on and off (a name as in `<PREFIX>_INPUT`:
+    /// "F12", "F10", "Pause"...; "" for none). The game does not see it: pick one it does not use.
+    fn fps_key(&self) -> &'static str {
+        "F12"
+    }
+
     /// Debug commands by name in `<PREFIX>_INPUT` ("30000:win") and on Shift+F<n>.
     fn cheats(&self) -> &'static [Cheat] {
         &[]

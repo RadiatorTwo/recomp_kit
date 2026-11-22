@@ -97,8 +97,9 @@ White. Most apply to any game of that time. Add new ones here.
   function lay before them in memory (Future Cop: a 3-instruction function at 21%).
 - The frame rate varies by ~10% from run to run (the same scene, the same build): a gain of a
   few percent does not show in fps. Time the code itself (a timer around the path, both
-  variants in one build behind a switch, alternating runs). `<PREFIX>_STATS=1` shows frames a
-  second and frame times in the window (no RivaTuner hooking our GL).
+  variants in one build behind a switch, alternating runs). The player's key (`Game::fps_key`,
+  default F12; setting `ShowFps`) or `<PREFIX>_STATS=1` shows frames a second and frame times
+  in the window (no RivaTuner hooking our GL).
 - Count before optimising a path: a temporary counter in the slow call (`rt_fpu_round`, the
   Glide flush's reasons) told what a profile could not (which operations, which state change).
 - A Glide renderer drew ~250 batches a picture because the game changed the alpha test

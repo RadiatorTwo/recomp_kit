@@ -1,4 +1,6 @@
-//! `<PREFIX>_STATS=1` (on with `<PREFIX>_SAMPLE=1` too): frames a second and frame times,
+//! The setting "ShowFps" (REG_DWORD in the game's key, default off; `Game::fps_key` switches
+//! it, F12 unless the game names another; `<PREFIX>_STATS=0/1` over it; on with
+//! `<PREFIX>_SAMPLE=1` too): frames a second and frame times,
 //! drawn by us in the window's top left corner, so no overlay tool (RivaTuner) has to hook into
 //! our GL. Counted are the new pictures shown (`picture`: Glide's and 2D frames), not the
 //! window's repaints. The text is the last half second's: frames a second and the mean frame
@@ -13,9 +15,30 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+static SHOW: super::setting::Setting = super::setting::Setting::new("ShowFps", "STATS", false);
+
 pub fn on() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| recomp::config::env_on("STATS") || recomp::config::env_on("SAMPLE"))
+    static SAMPLE: OnceLock<bool> = OnceLock::new();
+    SHOW.get() || *SAMPLE.get_or_init(|| recomp::config::env_on("SAMPLE"))
+}
+
+/// `Game::fps_key`: the display on or off, saved. Shown again, it starts anew (the frames while it was
+/// off were not counted).
+pub fn toggle() {
+    let on = !SHOW.get();
+    if on {
+        let s = &mut *STATS.lock().unwrap();
+        s.start = None;
+        s.last = None;
+        s.times.clear();
+        s.total = 0.0;
+        s.cols.clear();
+        s.col = 0;
+        s.text = [String::new(), String::new()];
+        s.text_at = None;
+        s.drawn = None;
+    }
+    SHOW.set(on);
 }
 
 /// Columns of the graph, one pixel each: the picture's width.
