@@ -2398,10 +2398,10 @@ fn buffer_swap(_: &mut Cpu) -> u32 {
         )
     });
     if let Some((tex, (w, h), gamma)) = shown {
-        super::window::show_texture(tex, w, h, gamma);
         if let Some(x) = crate::game::game().glide() {
-            x.frame_shown();
+            x.before_shown();
         }
+        super::window::show_texture(tex, w, h, gamma);
         // the next frame follows the window
         let (ww, wh) = super::display::render_size();
         let a = aspect(Some(ww as f32 / wh.max(1) as f32));

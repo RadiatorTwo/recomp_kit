@@ -37,8 +37,8 @@ pub struct Gl {
     /// what is shown: a texture, its size, whether its pixels are 0RGB/ARGB words (2D frames:
     /// the bytes are B G R A), and the gamma to show it with
     pub shown: (glow::Texture, u32, u32, bool, f32),
-    /// the swap interval set: 1 (vsync) or 0
-    vsync: bool,
+    /// the swap interval set: refreshes a picture stays (vsync), 0 off
+    vsync: u32,
     /// the framebuffers to copy pictures for the present thread through (`stage`)
     pub copy_fbo: [glow::Framebuffer; 2],
 }
@@ -219,7 +219,7 @@ impl Gl {
             video,
             video_size: None,
             shown: (frame, 640, 480, true, 1.0),
-            vsync: false,
+            vsync: 0,
             copy_fbo,
         };
         *STAGED.lock().unwrap() = Some((staged, 0));
@@ -291,10 +291,9 @@ impl Gl {
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
             self.vsync = vsync;
-            let interval = if vsync {
-                SwapInterval::Wait(NonZeroU32::MIN)
-            } else {
-                SwapInterval::DontWait
+            let interval = match NonZeroU32::new(vsync) {
+                Some(n) => SwapInterval::Wait(n),
+                None => SwapInterval::DontWait,
             };
             let _ = self.surface.set_swap_interval(&self.context, interval);
         }
@@ -627,8 +626,8 @@ pub struct Shared {
     surface: *const Surface<WindowSurface>,
     /// for drawing into the window (vertex arrays are not shared)
     vao: glow::VertexArray,
-    /// the swap interval set: 1 (vsync) or 0
-    vsync: bool,
+    /// the swap interval set: refreshes a picture stays (vsync), 0 off
+    vsync: u32,
     /// framebuffers to copy pictures through (`stage`; framebuffers are not shared)
     pub copy_fbo: [glow::Framebuffer; 2],
 }
@@ -655,7 +654,7 @@ impl SharedParts {
             context,
             surface: self.surface,
             vao,
-            vsync: false,
+            vsync: 0,
             copy_fbo,
         }
     }
@@ -677,10 +676,9 @@ impl Shared {
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
             self.vsync = vsync;
-            let interval = if vsync {
-                SwapInterval::Wait(NonZeroU32::MIN)
-            } else {
-                SwapInterval::DontWait
+            let interval = match NonZeroU32::new(vsync) {
+                Some(n) => SwapInterval::Wait(n),
+                None => SwapInterval::DontWait,
             };
             let _ = surface.set_swap_interval(&self.context, interval);
         }
@@ -704,11 +702,19 @@ impl Shared {
 
 /// Vsync: the picture changes only at the display's refresh (no tearing in fullscreen; in a
 /// window the desktop's compositor does that anyway). Off by default: the game paces itself.
-static VSYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static VSYNC: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Vsync on or off, from the next swap. The pace stays the game's (or the port's): while the
 /// game is slower than the display the driver queues a picture and the swap returns at once,
 /// so the swap's return does not say when the refresh was (LESSONS, Vsync).
 pub fn set_vsync(on: bool) {
-    VSYNC.store(on, std::sync::atomic::Ordering::Relaxed);
+    set_swap_interval(on as u32);
+}
+
+/// Each picture shown for `n` refreshes of the display (0: vsync off), from the next swap.
+/// With n > 0 the swap paces the pictures: a port drawing a picture every second refresh of a
+/// 480 Hz display with its own clock beside the display's had pictures land a refresh early or
+/// late now and then (Recoil's moving tank lagged and jumped), so let the swap pace instead.
+pub fn set_swap_interval(n: u32) {
+    VSYNC.store(n, std::sync::atomic::Ordering::Relaxed);
 }

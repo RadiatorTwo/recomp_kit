@@ -287,13 +287,43 @@ Rauch, und der Autopilot des Hakens machte nie einen Schritt (`256 / 0x114 = 0`)
 11. **Messen mit einem Bild-Log.** Pro gezeigtem Bild: Bildzeit *und* die Spielzeit, die es
     zeigt. Ungleichmäßige Schritte der Spielzeit ruckeln auch bei pünktlichen Bildern
     (future_rust_cop `framelog.rs`, `tools/framegraph.html`, liest auch CapFrameX).
+12. **Messen, was der Renderer benutzt, nicht was man selbst setzt.** Die eigenen
+    interpolierten Werte können glatt laufen, während der Renderer aus einer anderen Kopie
+    zeichnet. Pro Bild nach dem Zeichnen (vor dem Zurücksetzen) die Werte lesen, die er
+    wirklich verwendet hat (Welt-Matrix des Objekts, die vom Renderer gebaute
+    Kamera-Matrix), und die Lage des Objekts im Kamerabild über die Anzeigezeit auftragen.
+    Ein Sägezahn darin ist das Ruckeln. Gegentests mit einem verschobenen Wert können
+    täuschen: Recoils Panzer verschwand nicht, weil dort gezeichnet wurde, sondern weil die
+    Hüllkugel neu berechnet und er aussortiert wurde.
+13. **Welt-Kopien und Hierarchien.** Viele Engines (Recoil: Zippers wie MechWarrior 3)
+    halten pro Objekt die eigene Lage *und* eine Welt-Lage, aus der gezeichnet wird. Die
+    Welt-Lage einer Wurzel schreibt oft die Logik, die der Kind-Teile der Renderer, aber nur
+    für als geändert markierte Knoten, also nur im Bild des Logik-Frames. Dann in jedem Bild
+    die Welt-Lage der Wurzel mit interpolieren (nur wo sie gleich ihrer eigenen ist: Effekte
+    wie Abgas-Spuren, deren Welt-Lage die Logik getrennt setzt, wurden sonst zu langen
+    Streifen) und die der Kinder selbst nach der Regel des Renderers rechnen (gegen dessen
+    Ergebnis prüfen). Nach dem Bild alles aus den neuesten Werten neu rechnen, nicht
+    gemerkte Welt-Werte zurückschreiben: die eines Kindes sind beim Merken einen Frame alt,
+    zurückgeschrieben fiel es Frame für Frame weiter zurück (Objekt und Bild auseinander).
+    Kinder, deren Welt-Lage die Logik selbst bewegt (Effekte), nicht anfassen: erkennbar,
+    weil sie nicht zur Regel passen oder die Logik sie verändert.
+14. **Bilder auf den Takt des Bildschirms.** Erst warten, dann zeigen
+    (`GlideExt::before_shown`): wartet der Takt erst nach dem Zeigen, kommt das länger
+    gerechnete Bild des Logik-Frames jedes Mal zu spät. Die eigene Uhr driftet gegen die
+    des Bildschirms: ein Bild für zwei Durchläufe (240 auf 480 Hz) landete nahe der Grenze
+    mal einen Durchlauf früher, mal später. Der Swap hilft im Fenster nicht (er wartet nicht
+    auf den Durchlauf). `Pacer::pace_on` mit `window::vblank()` (die Zeiten des Compositors)
+    legt jedes Bild mittig zwischen zwei Durchläufe; die Bildrate ein ganzer Teil der
+    Bildwiederholrate, höchstens was das Spiel sicher schafft.
 
 Fehlerbilder: Schlieren (etwas wird in Zwischenbildern nicht gezeichnet, das Spiel löscht den
 Bildschirm nicht), Fächer (Matrix elementweise gemischt), fehlende Töne (Änderungen anderer
 Threads zurückgesetzt), Absturz nach Speicheranforderung 0 (Heap-Listen zurückgesetzt), die
 Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird zu 0), Zittern
 nur in Kurven (Kamera aus ganzzahligen Winkeln: Punkt 7), Einfrieren nach eigenem Menü und
-Pausenmenü des Spiels (Logik-Uhr geht nach: Punkt 8).
+Pausenmenü des Spiels (Logik-Uhr geht nach: Punkt 8), ein Objekt hinkt hinterher und springt
+vor, die Umgebung nicht, auf Screenshots nicht zu sehen (es bewegt sich nur im Bild des
+Logik-Frames: Punkt 13; oder Bilder landen auf dem falschen Durchlauf: Punkt 14).
 
 ## 8c. Breitbild (Hor+)
 

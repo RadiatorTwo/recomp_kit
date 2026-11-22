@@ -228,8 +228,11 @@ pub trait GlideExt: Sync {
     fn gamma(&self, game: f32) -> f32 {
         game
     }
-    /// A frame was shown (grBufferSwap).
-    fn frame_shown(&self) {}
+    /// A frame is finished and about to be shown (grBufferSwap): a port that paces its
+    /// pictures waits here, so each is shown at the time it was drawn for (waiting after the
+    /// showing, a picture that took longer to draw came late: Recoil's moving tank lagged
+    /// behind on every logic frame's picture and jumped ahead on the next).
+    fn before_shown(&self) {}
 }
 
 static GAME: OnceLock<&'static dyn Game> = OnceLock::new();

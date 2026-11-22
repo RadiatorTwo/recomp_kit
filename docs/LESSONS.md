@@ -301,6 +301,26 @@ White. Most apply to any game of that time. Add new ones here.
   captures). Count a hitch at 1.5 times the median and 4 ms over it (1.5 times alone counts
   noise at high rates).
 
+- A flaw that screenshots do not show is in the timing: a single picture is right, a series
+  is not. Measure what the drawing used, not what we set: after each picture's drawing (before
+  putting values back) read the object's world matrix and the camera matrix the drawing made,
+  and plot the object's place in camera space over the shown time. Recoil's tank, smooth in
+  our own values, stood still in the pictures between logic frames and jumped in each logic
+  frame's: the drawing drew from world values the logic writes (a root object) or only the
+  logic frame's drawing makes (a child, made from its parent's for nodes marked changed).
+- Interpolate a root's world values with its own (only where they are equal: exhaust trails,
+  roots whose world values the logic sets apart, were stretched across the picture) and make
+  the children's by the drawing's rule (check against its result); after the picture make
+  them from the newest values. Writing back world values noted at the logic frame put back a
+  child's a frame old: objects and pictures drifted apart. Marking nodes changed in a picture
+  made the drawing remake only their bounding spheres (a test that moved the object then hid
+  it by culling, which looked like success). Leave children whose world values the logic
+  moves (effects): they do not fit the rule, or the logic changed them (compare right before
+  and after the logic call).
+- A logic frame's own picture drawn after a swap less than a period before the frame was due
+  showed the game earlier than `alpha` can (cut to 0): steps alternated (1.80 and 1.54 degrees
+  at 120 Hz). Draw pictures until one is shown at the due time (`LogicClock::frame`).
+
 ## Widescreen
 
 - Look for a separate x scale of the projection before hooking every projection: Nuclear
@@ -359,6 +379,16 @@ White. Most apply to any game of that time. Add new ones here.
   missed refreshes: at 120 fps on 120 Hz a picture 1.4 ms late after the game's own frame was
   shown twice or replaced unseen, ~2 a second. Only CapFrameX (display changes) showed it; our
   own frame log showed 10 then 6.6 ms and looked fine.
+- Pace before showing (`GlideExt::before_shown`), not after: shown at once, a picture that took
+  longer to draw (the logic frame's) came late and the object in it lagged behind.
+- Our own clock drifts against the display's: 240 pictures a second on 480 Hz, each for two
+  refreshes, landed a refresh early or late now and then (a picture near a refresh goes either
+  way): the moving tank lagged and jumped. In a window the swap does not wait for the refresh
+  (it returned after 1.5 to 2.3 ms with any swap interval). `Pacer::pace_on` keeps each picture
+  halfway between two refreshes from the compositor's timing (`window::vblank`,
+  DwmGetCompositionTimingInfo; its qpcVBlank may be the next refresh, in the future); pick a
+  whole fraction of the refresh the game reaches with room (Recoil: at most 240, ~400 max).
+  Rounding: 480.001 Hz / 240 is two refreshes, not three.
 - At 480 Hz Future Cop showed ~472 fps with vsync: our work between swaps was ~0.75 ms, the
   loss was inside SwapBuffers (~10 swaps a second waited two refreshes). Not the pacing's
   fault: do not tune it for that. Overlays (RTSS) hook SwapBuffers too.
