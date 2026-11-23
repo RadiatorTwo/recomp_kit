@@ -1522,4 +1522,5 @@ pub const IMPORTS: &[Import] = &[
     ("CheckDlgButton", 3, check_dlg_button),
     ("IsDlgButtonChecked", 2, is_dlg_button_checked),
     ("MessageBoxA", 4, message_box),
+    ("MessageBoxExA", 5, message_box), // the language (argument 4) changes nothing
 ];

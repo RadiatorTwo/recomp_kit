@@ -810,6 +810,7 @@ fn ret1(_: &mut Cpu) -> u32 {
 
 pub const IMPORTS: &[Import] = &[
     ("GetDeviceCaps", 2, get_device_caps),
+    ("GetSystemPaletteEntries", 4, |_| 0), // no palette device: no entries
     ("GetTextMetricsA", 2, get_text_metrics),
     ("GetStockObject", 1, get_stock_object),
     ("CreateFontA", 14, create_font),

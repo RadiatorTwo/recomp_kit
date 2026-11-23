@@ -94,6 +94,9 @@ Das Spiel ruft Windows-Funktionen (Imports). Beim Start listet das Programm die 
 ("N imports not implemented yet: ..."); ruft das Spiel eine davon, hält es mit Meldung an.
 
 - `rtools imports <exe>`: alle Imports nach DLL.
+- Die Imports der EXE selbst früh alle umsetzen, nicht erst wenn das Spiel daran anhält: die
+  seltenen werden spät gerufen (Recoil: CompareFileTime erst am Ende des ersten Levels).
+  Die der mitgeladenen DLLs (MFC, MSVCRT) bleiben meist ungenutzt.
 - Allgemein nützliche Imports kommen in `crates/win32/src/platform/<dll>.rs` (Tabelle
   `IMPORTS`: Name, Anzahl stdcall-Argumente oder -1 für cdecl, Rust-Funktion). Vor dem
   Schreiben in den Geschwister-Ports schauen (siehe PLAN.md des Frameworks: black_white hat

@@ -164,6 +164,9 @@ White. Most apply to any game of that time. Add new ones here.
 
 ## Windows
 
+- Implement all of the EXE's own imports early, not only those the game stops at: rare ones
+  are called late (Recoil sorted files with CompareFileTime only at the end of its first
+  level, ~25 minutes in). Imports of guest DLLs loaded with it (MFC, MSVCRT) mostly stay unused.
 - VirtualAlloc hands out 64 KB aligned blocks (Windows' allocation granularity): games' own
   heaps may rely on it (Nuclear Strike's SSMemAllocAlign corrupted its free list at 4 KB).
 - A game may draw from more than one thread (Nuclear Strike's text before a mission): GL

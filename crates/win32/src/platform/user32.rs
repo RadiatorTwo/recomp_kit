@@ -1439,6 +1439,7 @@ pub const IMPORTS: &[Import] = &[
     ("SetFocus", 1, set_focus),
     ("EnableWindow", 2, enable_window),
     ("IsIconic", 1, ret0),
+    ("OpenIcon", 1, |_| 1), // never minimized (IsIconic)
     ("FindWindowA", 2, find_window),
     ("DefWindowProcA", 4, def_window_proc),
     ("PeekMessageA", 5, peek_message),

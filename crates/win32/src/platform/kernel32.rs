@@ -286,6 +286,13 @@ fn file_time_to_system_time(c: &mut Cpu) -> u32 {
     1
 }
 
+/// CompareFileTime(FILETIME*, FILETIME*): -1, 0 or 1.
+fn compare_file_time(c: &mut Cpu) -> u32 {
+    let m = mem();
+    let ft = |p: u32| m.rd32(p) as u64 | (m.rd32(p + 4) as u64) << 32;
+    ft(arg(c, 0)).cmp(&ft(arg(c, 1))) as i32 as u32
+}
+
 /// SystemTimeToFileTime(SYSTEMTIME*, FILETIME*)
 fn system_time_to_file_time(c: &mut Cpu) -> u32 {
     let m = mem();
@@ -1662,6 +1669,17 @@ fn get_current_directory(c: &mut Cpu) -> u32 {
     put_cstr(buf, dir, n)
 }
 
+/// GetTempPathA(n, buf): the game's folder, with a backslash (Recoil writes its gamez.err and
+/// gamez.out there when the current folder cannot be written).
+fn get_temp_path(c: &mut Cpu) -> u32 {
+    let (n, buf) = (arg(c, 0), arg(c, 1));
+    let dir = format!("{}\\", crate::game::id().install_dir.trim_end_matches('\\'));
+    if dir.len() as u32 >= n {
+        return dir.len() as u32 + 1;
+    }
+    put_cstr(buf, &dir, n)
+}
+
 /// SetCurrentDirectoryA: relative paths stay the game folder's.
 fn set_current_directory(c: &mut Cpu) -> u32 {
     if super::trace_api() {
@@ -1930,6 +1948,7 @@ pub const IMPORTS: &[Import] = &[
     ("LocalFileTimeToFileTime", 2, file_time_to_local_file_time),
     ("FileTimeToSystemTime", 2, file_time_to_system_time),
     ("SystemTimeToFileTime", 2, system_time_to_file_time),
+    ("CompareFileTime", 2, compare_file_time),
     ("GetUserDefaultLCID", 0, get_user_default_lcid),
     ("GetThreadLocale", 0, get_user_default_lcid),
     ("GetSystemDefaultLangID", 0, get_user_default_lcid),
@@ -1948,6 +1967,7 @@ pub const IMPORTS: &[Import] = &[
     ("GetFileSize", 2, get_file_size),
     ("GetCurrentDirectoryA", 2, get_current_directory),
     ("SetCurrentDirectoryA", 1, set_current_directory),
+    ("GetTempPathA", 2, get_temp_path),
     ("GetFullPathNameA", 4, get_full_path_name),
     ("CreateDirectoryA", 2, create_directory),
     ("DeleteFileA", 1, delete_file),
