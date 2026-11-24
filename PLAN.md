@@ -87,12 +87,20 @@
   recycle bin), DeleteFileA only inside the game folder, no writes outside it; a hidden cursor
   the game draws itself is not caught (`window::cursor_drawn`); ShowOwnedPopups, WinHelpA.
 
+- From future_rust_cop (2026-11-25): gamepad triggers pressed at 30% beyond each pad's rest
+  (`dinput::trigger_down`); a new thread's TIB and stack made in CreateThread / timeSetEvent
+  (`thread_stack`, `thread_cpu`); 2D frames with vsync end with glFinish (menu highlight lag);
+  the Linux start window reads no settings (`Gl::settings`, it has no game folder) and its error
+  has an Open Folder button. LESSONS: a busy menu loop, teleports undone by putting places back,
+  blob shadows without the depth test, effect lists cleared every picture, macOS facts. Built on
+  Windows; the Linux start window not yet run.
+
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 
-- `dinput.rs`: triggers pressed at 30% beyond each pad's rest (fixed 0.3 now).
-- `kernel32.rs` / `misc.rs`: a new thread's TIB and stack made in CreateThread / timeSetEvent,
-  not in the new thread (`new_thread_cpu`), for savestates.
-- `glide.rs`: check how batches are uploaded (glBufferSubData, no map per batch).
+- `glide.rs`: check how batches are uploaded (glBufferSubData, no map per batch; the kit
+  orphans the buffer with glBufferData now).
+- macOS (Apple Silicon): game on the main thread, stack size from `build.rs`, 16 KB pages,
+  the guest base read at run time, the app bundle's folder (future_rust_cop 2026-11-24).
 
 ## Next
 

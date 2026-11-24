@@ -32,10 +32,11 @@ fn time_set_event(c: &mut Cpu) -> u32 {
         t.insert(id, run.clone());
         id
     };
+    let stack = super::thread_stack();
     std::thread::Builder::new()
         .stack_size(64 << 20)
         .spawn(move || {
-            let mut tc = super::new_thread_cpu();
+            let mut tc = super::thread_cpu(stack);
             let start = Instant::now();
             let mut n = 1u64;
             loop {

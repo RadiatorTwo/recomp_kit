@@ -1295,6 +1295,7 @@ fn thread_handle_of(id: u32) -> u32 {
 fn create_thread(c: &mut Cpu) -> u32 {
     let (start, param, flags, id_out) = (arg(c, 2), arg(c, 3), arg(c, 4), arg(c, 5));
     let (tx, rx) = std::sync::mpsc::channel();
+    let stack = super::thread_stack();
     std::thread::Builder::new()
         .stack_size(64 << 20)
         .spawn(move || {
@@ -1304,7 +1305,7 @@ fn create_thread(c: &mut Cpu) -> u32 {
                 super::guest_thread(id).suspend();
             }
             tx.send(id).unwrap();
-            let mut tc = super::new_thread_cpu();
+            let mut tc = super::thread_cpu(stack);
             let r = guest_call(&mut tc, start, &[param]);
             let code = if tc.stop != 0 { EXIT_CODE.get() } else { r };
             let mut g = objects();

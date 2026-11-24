@@ -22,6 +22,10 @@ White. Most apply to any game of that time. Add new ones here.
   Sleep(0) sleeps 1 ms when another guest thread runs or the caller is below normal priority
   (SetThreadPriority is kept per guest thread). Count turn takes per thread when the frame
   rate swings.
+- A menu loop that runs its message pump and its frame without ever waiting keeps a core busy
+  (Future Cop's 0x40bd00, PeekMessage only). Hook the pump and, when called from that loop and
+  no message came, hand over the turn and sleep 1 ms (~1.0 -> ~0.1 core); input waits at most
+  that long, menus animate by the time passed.
 - The turn goes to waiters by priority (a higher one gets it at the holder's next loop head,
   as Windows preempts), else after the slice, then politely (behind all waiters: no
   starvation). SuspendThread stops a thread at its next loop head or before guest code after
@@ -192,8 +196,7 @@ White. Most apply to any game of that time. Add new ones here.
 - Gamepad triggers do not all rest at 0: a "HID-compliant game controller" through gilrs rests
   at ~0.45, and a fixed threshold (0.3) fired the heavy weapon all the time. Note each pad's
   lowest trigger value seen (the first read to start with) and count 30% of the travel beyond
-  that rest as pressed (future_rust_cop `dinput.rs` `trigger_down`; the kit's `dinput.rs` still
-  has the fixed 0.3).
+  that rest as pressed (`dinput.rs` `trigger_down`, from future_rust_cop).
 - DirectInput gets input without the game's message loop: a game may wait for a key with
   Sleep and GetDeviceData only (Recoil's briefing). DirectInput reads fetch the window's input
   (`user32::poll_input`), else such a wait never ends.
@@ -320,6 +323,10 @@ White. Most apply to any game of that time. Add new ones here.
   it by culling, which looked like success). Leave children whose world values the logic
   moves (effects): they do not fit the rule, or the logic changed them (compare right before
   and after the logic call).
+- Putting the real places back after a picture must skip what the game itself wrote while
+  drawing: Future Cop's render block holds logic that moves a robot into a teleporter's target;
+  writing the noted place back undid the teleport at high frame rates. Compare each place with
+  the value written for the picture and put back only those still equal.
 - A logic frame's own picture drawn after a swap less than a period before the frame was due
   showed the game earlier than `alpha` can (cut to 0): steps alternated (1.80 and 1.54 degrees
   at 120 Hz). Draw pictures until one is shown at the due time (`LogicClock::frame`).
@@ -403,6 +410,10 @@ White. Most apply to any game of that time. Add new ones here.
   DwmGetCompositionTimingInfo; its qpcVBlank may be the next refresh, in the future); pick a
   whole fraction of the refresh the game reaches with room (Recoil: at most 240, ~400 max).
   Rounding: 480.001 Hz / 240 is two refreshes, not three.
+- With vsync the driver may queue several swaps ahead of the screen: a menu highlight drawn in
+  2D followed the mouse that many refreshes late (Future Cop issue #57). 2D frames (menus,
+  videos) shown with vsync end with glFinish (`gl::Gl::draw`); 3D pictures are paced by the
+  game's frame rate code and left alone.
 - At 480 Hz Future Cop showed ~472 fps with vsync: our work between swaps was ~0.75 ms, the
   loss was inside SwapBuffers (~10 swaps a second waited two refreshes). Not the pacing's
   fault: do not tune it for that. Overlays (RTSS) hook SwapBuffers too.
@@ -426,6 +437,9 @@ White. Most apply to any game of that time. Add new ones here.
 - A primitive finds its display list record by its first vertex through a sorted index, not by
   looking a few records ahead: with the terrain moved to the front a window of 16 lost the
   fog's smoke (not lit, dark).
+- Lists kept per picture for the effects (records by position) must be cleared after every
+  picture, also when the effects are switched off and no `begin` comes: a stale index into the
+  emptied list panicked (Future Cop `effects::record_of`).
 
 ## Depth buffer
 
@@ -443,6 +457,9 @@ White. Most apply to any game of that time. Add new ones here.
 - A ground point and a model point can land on the same screen place: keep both z with their
   kind, and give a vertex the kind its primitive's other corners have (else a ground tile
   tipped forward over a pickup box).
+- The game's own blob shadows under objects (a fan blended ZERO, 1 - SRC_ALPHA) need no depth
+  test: their corners are no projected points of their own, the depths found at those screen
+  places were other things' (a robot's feet) and the test cut most of the shadow away.
 
 ## Shadows
 
@@ -470,6 +487,18 @@ White. Most apply to any game of that time. Add new ones here.
   setting. A curve chosen mid-frame changed the copies before the target: a multisample blit
   between mismatched formats, one black frame.
 
+## macOS (Apple Silicon)
+
+From future_rust_cop's port (2026-11-24; the kit does not run there yet):
+- Windows only on the main thread: the game runs there, its large stack set by the linker
+  (`build.rs`: `-stack_size`, 256 MB).
+- 16 KB pages: guest memory mappings rounded to them.
+- No place below 4 GB for the guest space (`__PAGEZERO` takes it): the base is read at run
+  time, not a fixed constant.
+- The JIT's code cache works there too; no fault reports (the vectored handler is Windows').
+- An app bundle keeps the player's files in ~/Library/Application Support/<game>: Finder hides
+  it, so the start window's error has an Open Folder button (Linux: xdg-open).
+
 ## Process
 
 - Back up the game's settings files (key bindings!) before tests that start the game; some
@@ -477,8 +506,7 @@ White. Most apply to any game of that time. Add new ones here.
 - A savestate (`platform::savestate`) is the fastest way back to a bug deep in a level.
 - Savestates: give a new guest thread its TIB and stack in CreateThread / timeSetEvent, not when
   it first runs: that timing moved every heap block after them, and the check against the saved
-  heap failed at random (future_rust_cop `thread_stack`; the kit's `new_thread_cpu` still runs
-  in the new thread).
+  heap failed at random (`platform::thread_stack`, from future_rust_cop).
 - Replay a user's recording (`<PREFIX>_RECORD`) with exactly their settings: another window
   size or renderer switch makes the replay diverge and a savestate not match.
 - Things the user tests by hand (cheat keys, comparison switches) must work without an

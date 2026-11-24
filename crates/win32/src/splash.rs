@@ -297,7 +297,7 @@ mod unix {
         PIPE.lock().unwrap().take();
     }
 
-    /// Show an error with a Close button and wait until the player closes it.
+    /// Show an error with Open Folder and Close buttons and wait until the player closes it.
     pub fn fail(text: &str) {
         show();
         OURS.store(true, Ordering::Release);
@@ -311,13 +311,32 @@ mod unix {
     /// The picture is drawn at half the window's size and shown twice as large (the dialogs'
     /// 8x8 font).
     const W: i32 = 280;
-    const H: i32 = 170;
+    const H: i32 = 184;
     const BACK: u32 = 0x0a_1440;
     const TITLE: u32 = 0x7f_d0ff;
     const TEXT: u32 = 0xe8_f0ff;
     const EDGE: u32 = 0x3c_64d2;
     const FACE: u32 = 0x0c_1e5a;
-    const BUTTON: [i32; 4] = [W - 70, H - 26, W - 10, H - 10];
+    /// a button under the mouse
+    const HOT: u32 = 0x1e_3c96;
+    const CLOSE: &str = "Close";
+    const OPEN: &str = "Open Folder";
+
+    /// The error's buttons at the bottom right, each as wide as its label and some room.
+    fn buttons() -> [([i32; 4], &'static str); 2] {
+        let (y0, y1, gap) = (H - 32, H - 10, 8);
+        let close = (text_width(CLOSE) + 28).max(64);
+        let open = text_width(OPEN) + 28;
+        let x1 = W - 10;
+        [
+            ([x1 - close - gap - open, y0, x1 - close - gap, y1], OPEN),
+            ([x1 - close, y0, x1, y1], CLOSE),
+        ]
+    }
+
+    fn inside([x0, y0, x1, y1]: [i32; 4], (x, y): (i32, i32)) -> bool {
+        (x0..x1).contains(&x) && (y0..y1).contains(&y)
+    }
 
     enum Msg {
         Status(String),
@@ -357,6 +376,15 @@ mod unix {
             window: None,
         };
         let _ = el.run_app(&mut app);
+    }
+
+    /// The game files' folder in the file manager (macOS: Finder; the error usually names it).
+    /// This process is the same program in the same folder, so `setup::root` is that folder.
+    fn open_folder() {
+        let dir = crate::setup::root();
+        let _ = std::fs::create_dir_all(&dir);
+        let tool = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let _ = Command::new(tool).arg(&dir).spawn();
     }
 
     /// Lines of at most `width` pixels, broken at spaces (and inside words longer than that).
@@ -411,12 +439,13 @@ mod unix {
 
     impl App {
         fn draw(&mut self) {
+            let mouse = self.at();
             let Some((win, gl)) = &mut self.window else {
                 return;
             };
             let mut px = vec![BACK; (W * H) as usize];
             text(&mut px, 10, 10, crate::game::id().title, TITLE);
-            let bottom = if self.failed { BUTTON[1] - 4 } else { H - 10 };
+            let bottom = if self.failed { buttons()[0].0[1] - 6 } else { H - 10 };
             for (i, line) in wrap(&self.text, W - 20).iter().enumerate() {
                 let y = 30 + 11 * i as i32;
                 if y + 8 > bottom {
@@ -425,20 +454,23 @@ mod unix {
                 text(&mut px, 10, y, line, TEXT);
             }
             if self.failed {
-                let [x0, y0, x1, y1] = BUTTON;
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        let edge = x == x0 || x == x1 - 1 || y == y0 || y == y1 - 1;
-                        px[(y * W + x) as usize] = if edge { EDGE } else { FACE };
+                for (rect, label) in buttons() {
+                    let [x0, y0, x1, y1] = rect;
+                    let face = if inside(rect, mouse) { HOT } else { FACE };
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let edge = x == x0 || x == x1 - 1 || y == y0 || y == y1 - 1;
+                            px[(y * W + x) as usize] = if edge { EDGE } else { face };
+                        }
                     }
+                    text(
+                        &mut px,
+                        (x0 + x1 - text_width(label)) / 2,
+                        (y0 + y1 - 8) / 2 + 1,
+                        label,
+                        TEXT,
+                    );
                 }
-                text(
-                    &mut px,
-                    (x0 + x1 - text_width("Close")) / 2,
-                    (y0 + y1 - 8) / 2 + 1,
-                    "Close",
-                    TEXT,
-                );
             }
             let size = win.inner_size();
             gl.frame(&px, W as u32, H as u32);
@@ -473,7 +505,9 @@ mod unix {
                 .with_title(crate::game::id().title)
                 .with_inner_size(winit::dpi::LogicalSize::new(2 * W, 2 * H))
                 .with_resizable(false);
-            self.window = Some(Gl::new(el, attrs));
+            let (win, mut gl) = Gl::new(el, attrs);
+            gl.settings = false;
+            self.window = Some((win, gl));
         }
 
         fn user_event(&mut self, el: &ActiveEventLoop, m: Msg) {
@@ -502,16 +536,25 @@ mod unix {
                     self.draw();
                 }
                 WindowEvent::RedrawRequested => self.draw(),
-                WindowEvent::CursorMoved { position, .. } => self.cursor = (position.x, position.y),
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.cursor = (position.x, position.y);
+                    // (the button under the mouse lights up)
+                    if let Some((win, _)) = &self.window
+                        && self.failed
+                    {
+                        win.request_redraw();
+                    }
+                }
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
                     button: MouseButton::Left,
                     ..
                 } if self.failed => {
-                    let (x, y) = self.at();
-                    let [x0, y0, x1, y1] = BUTTON;
-                    if (x0..x1).contains(&x) && (y0..y1).contains(&y) {
-                        el.exit();
+                    let mouse = self.at();
+                    match buttons().into_iter().find(|&(r, _)| inside(r, mouse)) {
+                        Some((_, CLOSE)) => el.exit(),
+                        Some(_) => open_folder(),
+                        None => {}
                     }
                 }
                 _ => {}

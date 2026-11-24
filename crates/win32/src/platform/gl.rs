@@ -41,6 +41,9 @@ pub struct Gl {
     vsync: u32,
     /// the framebuffers to copy pictures for the present thread through (`stage`)
     pub copy_fbo: [glow::Framebuffer; 2],
+    /// the settings may be read (the frame rate display): not in the Linux start window, a
+    /// process of its own without a game folder (Future Cop's issue #49: it panicked there)
+    pub settings: bool,
 }
 
 thread_local! {
@@ -221,6 +224,7 @@ impl Gl {
             shown: (frame, 640, 480, true, 1.0),
             vsync: 0,
             copy_fbo,
+            settings: true,
         };
         *STAGED.lock().unwrap() = Some((staged, 0));
         g.parts();
@@ -278,6 +282,7 @@ impl Gl {
             overlay: self.has_overlay.then_some(self.overlay),
             video: self.video_size.map(|(vw, vh)| (self.video, vw, vh)),
             size: (w, h),
+            stats: self.settings && super::stats::on(),
         }
     }
 
@@ -298,6 +303,12 @@ impl Gl {
             let _ = self.surface.set_swap_interval(&self.context, interval);
         }
         let _ = self.surface.swap_buffers(&self.context);
+        // 2D frames (menus, videos) with vsync: wait for the swap. The driver may queue several
+        // swaps ahead of the screen, and Future Cop's menu highlight followed the mouse that many
+        // refreshes late (its issue #57). 3D pictures are paced elsewhere and left alone.
+        if self.vsync != 0 && self.shown.3 {
+            unsafe { self.gl.finish() };
+        }
         out
     }
 
@@ -421,6 +432,7 @@ pub fn look_with(shown: (glow::Texture, u32, u32, bool, f32), size: (u32, u32)) 
         overlay,
         video,
         size,
+        stats: super::stats::on(),
     })
 }
 
@@ -442,6 +454,8 @@ pub struct Look {
     overlay: Option<glow::Texture>,
     video: Option<(glow::Texture, u32, u32)>,
     pub size: (u32, u32),
+    /// the frame rate display on top
+    stats: bool,
 }
 
 /// One thread at a time draws into the window and swaps (the window's thread, or the present
@@ -571,7 +585,7 @@ fn paint(
         (px, rw as u32, rh as u32)
     });
     // <PREFIX>_STATS' display, after the screenshot
-    if let Some(new) = super::stats::on().then(super::stats::pixels) {
+    if let Some(new) = l.stats.then(super::stats::pixels) {
         draw_stats(gl, l.blit, new, w, h);
     }
     out

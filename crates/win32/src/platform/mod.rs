@@ -1063,12 +1063,20 @@ fn init_tib(tib: u32, lo: u32, hi: u32) {
     m.wr32(tib + 0x18, tib);
 }
 
-/// Guest state for a new thread: its own TIB and a 1 MB stack from the heap.
-pub fn new_thread_cpu() -> Cpu {
+/// A new thread's TIB and stack (TIB address, stack top). Taken by the thread that creates it,
+/// in its order: taken by the new thread when it first ran, their place in the heap depended on
+/// timing, and so did every block after them (Future Cop's savestate heap check failed at
+/// random).
+pub fn thread_stack() -> (u32, u32) {
     let tib = alloc(0x1000);
     let lo = alloc_aligned(1 << 20, 0x1000);
     let hi = lo + (1 << 20);
     init_tib(tib, lo, hi);
+    (tib, hi)
+}
+
+/// Guest state for a new thread: its own TIB and a 1 MB stack from `thread_stack`.
+pub fn thread_cpu((tib, hi): (u32, u32)) -> Cpu {
     let mut c = Cpu::new(mem());
     c.fs_base = tib;
     c.fcw = 0x27f;
