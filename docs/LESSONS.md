@@ -348,6 +348,17 @@ White. Most apply to any game of that time. Add new ones here.
 - Before widening HUD marks, check whether the HUD projects anything at all: Nuclear Strike's
   HUD never calls a projection (its 3D sprites are sized by the x scale and stay round), so
   there was nothing to move.
+- Put the projection's own values back after the picture: Recoil's aim and hit tests turn
+  screen points back into directions with them (outside the picture), and left wide the shots
+  went the further off the further to the side.
+- Not every second view is a view: Recoil's target zoom draws each polygon of the picture a
+  second time, cut to a source rectangle and moved in 2D into its box. Map that 2D step into
+  the 4:3 middle (and take the source rectangle in the wide picture's columns).
+- The mouse: `window.rs` gives the game positions beside its 640 columns where the picture is
+  wider (x below 0 or past 639), so a reticle can reach the wide sides. Whatever the game draws
+  into its frame buffer is cut to its screen: draw such marks yourself
+  (`glide::draw_image`: over the whole target, since the view's viewport cuts anything beside
+  it), cut to the rows the game cuts them to.
 
 ## Drawing once
 
