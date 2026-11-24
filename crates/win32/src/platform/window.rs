@@ -1155,10 +1155,11 @@ impl App {
         let x = (self.cursor.x - ox) / s;
         let y = (self.cursor.y - oy) / s;
         // a picture rendered at the window's resolution: the game's screen is in its middle,
-        // as tall as the picture
+        // as tall as the picture; a wider picture (widescreen) reaches beyond its columns
         let (sw, sh) = SCREEN.lock().unwrap().unwrap_or((w, h));
         let k = sh as f64 / h as f64;
-        let x = (x * k - (w as f64 * k - sw as f64) / 2.0).clamp(0.0, sw as f64 - 1.0);
+        let side = (w as f64 * k - sw as f64) / 2.0;
+        let x = (x * k - side).clamp(-side.max(0.0), sw as f64 + side.max(0.0) - 1.0);
         let y = (y * k).clamp(0.0, sh as f64 - 1.0);
         (x as i32, y as i32)
     }

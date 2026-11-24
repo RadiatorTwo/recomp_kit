@@ -1659,6 +1659,24 @@ impl Glide {
         (w, h): (u32, u32),
         rgba: &[u8],
     ) {
+        let rect = [x as f32, y as f32, w as f32, h as f32];
+        let screen = [0, 0, self.res.0 as i32, self.res.1 as i32];
+        self.draw_image(gl, rect, (w, h), rgba, screen, false);
+    }
+
+    /// RGBA pixels (`w` x `h`, rows from the top) stretched over `rect` (x, y from the top,
+    /// width, height in screen pixels), cut to `clip` (x0 y0 x1 y1 in screen pixels, may lie
+    /// beside the screen: a view narrower than the frame draws there too); transparent ones
+    /// are left out, with `blend` the others are blended by their alpha.
+    fn draw_image(
+        &mut self,
+        gl: &glow::Context,
+        [x, y, rw, rh]: [f32; 4],
+        (w, h): (u32, u32),
+        rgba: &[u8],
+        clip: [i32; 4],
+        blend: bool,
+    ) {
         self.flush(gl);
         let fbo = self.draw_fbo(gl);
         let empty = self.local(gl).empty;
@@ -1666,7 +1684,7 @@ impl Glide {
         let (prog, tex) = self.blit;
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-            self.scissor(gl, [0, 0, self.res.0 as i32, self.res.1 as i32]);
+            self.scissor(gl, clip);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             gl.tex_image_2d(
@@ -1682,14 +1700,14 @@ impl Glide {
             );
             gl.use_program(Some(prog));
             gl.uniform_1_i32(super::gl::uniform(gl, prog, "img").as_ref(), 0);
-            let nx = |v: f32| v / sw * 2.0 - 1.0;
-            let ny = |v: f32| 1.0 - v / sh * 2.0;
-            let r = [
-                nx(x as f32),
-                ny((y + h as i32) as f32),
-                nx((x + w as i32) as f32),
-                ny(y as f32),
-            ];
+            // over the whole target (the view's viewport would cut what lies beside it), the
+            // screen pixels placed as the view places them
+            let ([vx, vy, vw, vh], _) = self.view_rect();
+            let (tw, th) = (self.target.0 as f32, self.target.1 as f32);
+            gl.viewport(0, 0, tw as i32, th as i32);
+            let nx = |v: f32| (vx + v * vw / sw) / tw * 2.0 - 1.0;
+            let ny = |v: f32| 1.0 - (vy + v * vh / sh) / th * 2.0;
+            let r = [nx(x), ny(y + rh), nx(x + rw), ny(y)];
             gl.uniform_4_f32(
                 super::gl::uniform(gl, prog, "rect").as_ref(),
                 r[0],
@@ -1697,9 +1715,14 @@ impl Glide {
                 r[2],
                 r[3],
             );
+            if blend {
+                gl.enable(glow::BLEND);
+                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            }
             gl.bind_vertex_array(Some(empty));
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             gl.disable(glow::SCISSOR_TEST);
+            gl.disable(glow::BLEND);
         }
     }
 
@@ -2467,6 +2490,27 @@ pub fn set_space(space: Option<(u32, u32)>) {
             g.space = s;
         }
     });
+}
+
+/// RGBA pixels (`w` x `h`, rows from the top) blended over the frame by their alpha, stretched
+/// over `rect` (x, y from the top, width, height in the game's screen pixels of the current
+/// view), cut to the screen's `rows` (from, to); beside the screen's columns too, where the
+/// frame is wider (widescreen: a mark beyond the 4:3 middle).
+pub fn draw_image(rect: [f32; 4], size: (u32, u32), rgba: &[u8], (r0, r1): (i32, i32)) {
+    with(|g, gl| {
+        let w = g.res.0 as i32;
+        g.draw_image(gl, rect, size, rgba, [-4 * w, r0, 5 * w, r1], true);
+    });
+}
+
+/// Frame pixels per screen pixel of the game (the picture's height over the screen's).
+pub fn frame_scale() -> f32 {
+    with(|g, _| g.target.1 as f32 / g.res.1.max(1) as f32).unwrap_or(1.0)
+}
+
+/// The aspect of the frame being drawn (4/3 while Glide is closed).
+pub fn frame_aspect() -> f32 {
+    with(|g, _| g.target.0 as f32 / g.target.1.max(1) as f32).unwrap_or(4.0 / 3.0)
 }
 
 /// Where the vertices that follow go in the frame.
