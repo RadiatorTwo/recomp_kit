@@ -1193,6 +1193,7 @@ impl Glide {
             gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         }
         self.multisample(gl, true);
+        TARGETS_MADE.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The multisampled framebuffer for the chosen samples and the target's size (`resized`:
@@ -2501,6 +2502,15 @@ pub fn draw_image(rect: [f32; 4], size: (u32, u32), rgba: &[u8], (r0, r1): (i32,
         let w = g.res.0 as i32;
         g.draw_image(gl, rect, size, rgba, [-4 * w, r0, 5 * w, r1], true);
     });
+}
+
+/// How often the frame was made anew (a new size or aspect): it starts black, so what a game
+/// drew only once (a HUD's panel) is gone and must be drawn again.
+static TARGETS_MADE: AtomicU32 = AtomicU32::new(0);
+
+/// A count that grows each time the frame is made anew (see `TARGETS_MADE`).
+pub fn targets_made() -> u32 {
+    TARGETS_MADE.load(Ordering::Relaxed)
 }
 
 /// Frame pixels per screen pixel of the game (the picture's height over the screen's).
