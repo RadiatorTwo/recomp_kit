@@ -81,6 +81,13 @@ pub struct Pad {
     start: bool,
 }
 
+impl Pad {
+    /// The buttons held: bit n is our button n (`CONTROLS[n]`).
+    pub fn buttons(&self) -> u32 {
+        self.buttons
+    }
+}
+
 /// A connected pad: its state, the buttons pressed since the game last read it (a short press
 /// between two reads still counts: the Controller dialog reads every 250 ms), gilrs' id (None:
 /// the scripted pad), its name.
@@ -727,6 +734,74 @@ pub fn dik(vk: u8, scan: u8) -> u8 {
     match vk {
         0x21..=0x28 | 0x2d | 0x2e | 0x6f => scan | 0x80,
         _ => scan,
+    }
+}
+
+/// A DirectInput key code's name, for menus ("Up", "F1", "A", "Numpad 4"...).
+pub fn dik_name(dik: u8) -> String {
+    const ROW1: &[u8] = b"1234567890";
+    const QWERTY: [&[u8]; 3] = [b"QWERTYUIOP", b"ASDFGHJKL", b"ZXCVBNM"];
+    let named = match dik {
+        0x01 => "Esc",
+        0x0c => "Minus",
+        0x0d => "Equals",
+        0x0e => "Backspace",
+        0x0f => "Tab",
+        0x1a => "[",
+        0x1b => "]",
+        0x1c => "Enter",
+        0x1d => "Ctrl",
+        0x27 => ";",
+        0x28 => "'",
+        0x29 => "`",
+        0x2a => "Shift",
+        0x2b => "\\",
+        0x33 => "Comma",
+        0x34 => "Period",
+        0x35 => "/",
+        0x36 => "Right Shift",
+        0x37 => "Numpad *",
+        0x38 => "Alt",
+        0x39 => "Space",
+        0x3a => "Caps Lock",
+        0x45 => "Num Lock",
+        0x46 => "Scroll Lock",
+        0x4a => "Numpad -",
+        0x4e => "Numpad +",
+        0x53 => "Numpad .",
+        0x9c => "Numpad Enter",
+        0x9d => "Right Ctrl",
+        0xb5 => "Numpad /",
+        0xb8 => "Right Alt",
+        0xc7 => "Home",
+        0xc8 => "Up",
+        0xc9 => "Page Up",
+        0xcb => "Left",
+        0xcd => "Right",
+        0xcf => "End",
+        0xd0 => "Down",
+        0xd1 => "Page Down",
+        0xd2 => "Insert",
+        0xd3 => "Delete",
+        _ => "",
+    };
+    if !named.is_empty() {
+        return named.into();
+    }
+    let ch = |s: &[u8], i: u8| (s[i as usize] as char).to_string();
+    match dik {
+        0x02..=0x0b => ch(ROW1, dik - 0x02),
+        0x10..=0x19 => ch(QWERTY[0], dik - 0x10),
+        0x1e..=0x26 => ch(QWERTY[1], dik - 0x1e),
+        0x2c..=0x32 => ch(QWERTY[2], dik - 0x2c),
+        0x3b..=0x44 => format!("F{}", dik - 0x3a),
+        0x57 | 0x58 => format!("F{}", dik - 0x4c),
+        // the keypad's digits: 7 8 9 / 4 5 6 / 1 2 3 / 0
+        0x47..=0x49 => format!("Numpad {}", dik - 0x40),
+        0x4b..=0x4d => format!("Numpad {}", dik - 0x47),
+        0x4f..=0x51 => format!("Numpad {}", dik - 0x4e),
+        0x52 => "Numpad 0".into(),
+        _ => format!("Key {dik:#04x}"),
     }
 }
 

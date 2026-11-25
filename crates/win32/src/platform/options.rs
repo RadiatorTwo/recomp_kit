@@ -6,7 +6,9 @@
 //!
 //! Keys: Up / Down choose a row, Left / Right change it, Enter / Space the next choice,
 //! Page Up / Page Down (or Tab) the page, Escape or the menu's key close it. The mouse: a click
-//! on a page's tab turns to it; on a value's left half back, else on.
+//! on a page's tab turns to it; on a value's left half back, else on. A binding row (`bind`)
+//! waits after Enter or a click for the key (or pad control, `pad`) to bind; Escape gives up,
+//! Delete or Backspace unbinds. A page longer than the panel scrolls, in smaller text.
 
 use super::dialog::font::{FIRST, GLYPHS};
 use super::dialog::{OV_H, OV_W};
@@ -33,6 +35,16 @@ pub enum Kind {
     Fullscreen,
     /// the window's size and the resolution drawn at (done by the window)
     WindowSize,
+    /// a binding: its text, bind what was pressed, unbind
+    Bind(Box<dyn Fn() -> String>, Box<dyn Fn(Bound)>, Box<dyn Fn()>),
+}
+
+/// What a binding row gets: a key (its DirectInput code) or a pad control (the game's
+/// numbering, as `pad` gets it).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Bound {
+    Key(u8),
+    Pad(u32),
 }
 
 impl Row {
@@ -46,6 +58,21 @@ impl Row {
             name,
             note,
             kind: Kind::Choice(Box::new(get), Box::new(set)),
+        }
+    }
+
+    /// A binding: `text` shows it, `bind` adds what was pressed, `clear` removes all.
+    pub fn bind(
+        name: &'static str,
+        note: &'static str,
+        text: impl Fn() -> String + 'static,
+        bind: impl Fn(Bound) + 'static,
+        clear: impl Fn() + 'static,
+    ) -> Row {
+        Row {
+            name,
+            note,
+            kind: Kind::Bind(Box::new(text), Box::new(bind), Box::new(clear)),
         }
     }
 
@@ -167,6 +194,10 @@ pub struct Menu {
     display: (u32, u32),
     /// the window is fullscreen
     fullscreen: bool,
+    /// the first row shown (a long page scrolls)
+    top: usize,
+    /// the binding row waiting for a key or pad control
+    capture: Option<usize>,
 }
 
 impl Menu {
@@ -179,6 +210,8 @@ impl Menu {
             mouse: (-1, -1),
             display,
             fullscreen,
+            top: 0,
+            capture: None,
         }
     }
 
@@ -219,6 +252,7 @@ impl Menu {
                     |z: &Option<(u32, u32)>| z.map_or("Auto".into(), |(w, h)| format!("{w}x{h}"));
                 (v.iter().map(text).collect(), k)
             }
+            Kind::Bind(..) => (Vec::new(), 0),
         }
     }
 
@@ -240,30 +274,114 @@ impl Menu {
                 Some(Action::Fullscreen(self.fullscreen))
             }
             Kind::WindowSize => Some(Action::Window(self.sizes()[i])),
+            Kind::Bind(..) => None,
+        }
+    }
+
+    /// Enter or a click on row `k`: Close closes, a binding waits for a key, the others go on.
+    fn enter(&mut self, k: usize, d: i32, out: &mut Vec<Action>) -> Result<(), ()> {
+        self.sel = k;
+        match self.rows().get(k).map(|r| &r.kind) {
+            None => return Err(()),
+            Some(Kind::Bind(..)) => self.capture = Some(k),
+            Some(_) => out.extend(self.change(k, d)),
+        }
+        Ok(())
+    }
+
+    fn unbind(&mut self) {
+        if let Some(Kind::Bind(_, _, clear)) = self.rows().get(self.sel).map(|r| &r.kind) {
+            clear();
+        }
+    }
+
+    /// Choose row `k` and scroll it into view.
+    fn select(&mut self, k: usize) {
+        self.sel = k;
+        let shown = self.shown();
+        if k < self.top {
+            self.top = k;
+        } else if k >= self.top + shown {
+            self.top = k + 1 - shown;
+        }
+    }
+
+    /// A pad control pressed while open: bound when a binding waits for one, else the D-pad
+    /// (`Up` `Down` `Left` `Right`), `A` (Enter), `B` (back), `X` (unbind) work the menu.
+    pub fn pad(&mut self, control: u32, menu: PadMenu, out: &mut Vec<Action>) -> Result<(), ()> {
+        if let Some(k) = self.capture.take() {
+            if let Some(Kind::Bind(_, bind, _)) = self.rows().get(k).map(|r| &r.kind) {
+                bind(Bound::Pad(control));
+            }
+            return Ok(());
+        }
+        let key = |vk| Input::Key {
+            vk,
+            scan: 0,
+            down: true,
+            repeat: false,
+        };
+        match menu {
+            PadMenu::Up => self.input(&key(0x26), out),
+            PadMenu::Down => self.input(&key(0x28), out),
+            PadMenu::Left => self.input(&key(0x25), out),
+            PadMenu::Right => self.input(&key(0x27), out),
+            PadMenu::Enter => self.input(&key(0x0d), out),
+            PadMenu::Back => Err(()),
+            PadMenu::Unbind => {
+                self.unbind();
+                Ok(())
+            }
+            PadMenu::PageUp => self.input(&key(0x21), out),
+            PadMenu::PageDown => self.input(&key(0x22), out),
+            PadMenu::None => Ok(()),
         }
     }
 
     fn turn(&mut self, d: i32) {
         self.page = (self.page as i32 + d).rem_euclid(self.pages.len() as i32) as usize;
         self.sel = 0;
+        self.top = 0;
         self.hot = None;
+        self.capture = None;
     }
 
     /// Input while open (`Move` in overlay pixels); `Err(())` closes the menu. The actions are
     /// the window's to do.
     pub fn input(&mut self, i: &Input, out: &mut Vec<Action>) -> Result<(), ()> {
         let n = self.count();
+        // a binding waiting: the key goes to it, Escape or a click gives up
+        if let Some(k) = self.capture {
+            match *i {
+                Input::Key {
+                    vk,
+                    scan,
+                    down: true,
+                    ..
+                } => {
+                    self.capture = None;
+                    if vk != 0x1b {
+                        if let Some(Kind::Bind(_, bind, _)) = self.rows().get(k).map(|r| &r.kind) {
+                            bind(Bound::Key(super::dinput::dik(vk, scan)));
+                        }
+                    }
+                }
+                Input::Button(_, true) => self.capture = None,
+                _ => {}
+            }
+            return Ok(());
+        }
         match *i {
             Input::Key { vk, down: true, .. } => match vk {
                 0x1b => return Err(()),
-                0x26 => self.sel = (self.sel + n - 1) % n,
-                0x28 => self.sel = (self.sel + 1) % n,
+                0x26 => self.select((self.sel + n - 1) % n),
+                0x28 => self.select((self.sel + 1) % n),
                 0x25 => out.extend(self.change(self.sel, -1)),
                 0x27 => out.extend(self.change(self.sel, 1)),
                 0x21 => self.turn(-1),
                 0x22 | 0x09 => self.turn(1),
-                0x0d | 0x20 if self.sel == n - 1 => return Err(()),
-                0x0d | 0x20 => out.extend(self.change(self.sel, 1)),
+                0x0d | 0x20 => return self.enter(self.sel, 1, out),
+                0x2e | 0x08 => self.unbind(),
                 _ => {}
             },
             Input::Move(x, y) => {
@@ -275,12 +393,13 @@ impl Menu {
                 if let Some(p) = self.tab_at(x, y) {
                     self.turn(p as i32 - self.page as i32);
                 } else if let Some((k, left)) = self.row_at(x, y) {
-                    self.sel = k;
-                    if k == n - 1 {
-                        return Err(());
-                    }
-                    out.extend(self.change(k, if left { -1 } else { 1 }));
+                    return self.enter(k, if left { -1 } else { 1 }, out);
                 }
+            }
+            // the wheel scrolls a long page, else changes the row's value
+            Input::Wheel(w) if self.shown() < n => {
+                let most = n - self.shown();
+                self.top = (self.top as i32 - w.signum()).clamp(0, most as i32) as usize;
             }
             Input::Wheel(w) => out.extend(self.change(self.sel, w.signum())),
             _ => {}
@@ -307,8 +426,11 @@ impl Menu {
             cv.label(t, page.title, if on { TEXT } else { TEXT_OFF }, 1, 2);
         }
         let rows = self.rows();
+        let scale = self.scale();
         for k in 0..self.count() {
-            let rr = self.row_rect(k);
+            let Some(rr) = self.row_rect(k) else {
+                continue;
+            };
             let sel = k == self.sel;
             if sel || self.hot == Some(k) {
                 cv.fill(rr, if sel { FACE_HOT } else { FACE });
@@ -317,19 +439,42 @@ impl Menu {
                 cv.frame(rr, EDGE_HI);
             }
             let Some(r) = rows.get(k) else {
-                cv.label(rr, "Close", TEXT, 1, 2);
+                cv.label(rr, "Close", TEXT, 1, scale);
                 continue;
             };
-            cv.label([rr[0] + 12, rr[1], rr[2], rr[3]], r.name, TEXT, 0, 2);
-            let (c, i) = self.choices(r);
+            cv.label([rr[0] + 12, rr[1], rr[2], rr[3]], r.name, TEXT, 0, scale);
             let v = value_rect(rr);
-            cv.label(v, "<", MARK, 0, 2);
-            cv.label(v, ">", MARK, 2, 2);
+            if let Kind::Bind(text, ..) = &r.kind {
+                if self.capture == Some(k) {
+                    cv.label(v, "Press...", MARK, 1, scale);
+                } else {
+                    cv.label(v, &text(), TEXT, 1, scale);
+                }
+                continue;
+            }
+            let (c, i) = self.choices(r);
+            cv.label(v, "<", MARK, 0, scale);
+            cv.label(v, ">", MARK, 2, scale);
             if let Some(t) = c.get(i) {
-                cv.label(v, t, TEXT, 1, 2);
+                cv.label(v, t, TEXT, 1, scale);
             }
         }
-        let note = rows.get(self.sel).map_or("", |r| r.note);
+        // more rows above or below
+        if self.top > 0 {
+            cv.label(self.list_edge(false), "^", MARK, 1, 1);
+        }
+        if self.top + self.shown() < self.count() {
+            cv.label(self.list_edge(true), "v", MARK, 1, 1);
+        }
+        let note = match rows.get(self.sel) {
+            Some(Row {
+                kind: Kind::Bind(..),
+                note,
+                ..
+            }) if note.is_empty() => "Enter: bind a key   Delete: none",
+            Some(r) => r.note,
+            None => "",
+        };
         cv.label([p[0], p[3] - 46, p[2], p[3] - 30], note, TEXT_OFF, 1, 1);
         let help = format!("Arrows: choose and change   PgUp/PgDn: page   {key} or Esc: close");
         cv.label([p[0], p[3] - 26, p[2], p[3] - 8], &help, TEXT_OFF, 1, 1);
@@ -345,9 +490,40 @@ impl Menu {
             .map(|p| p.rows.len() + 1)
             .max()
             .unwrap_or(1) as i32;
-        let h = TOP + most * ROW_H + 60;
+        let h = (TOP + most * ROW_H + BOTTOM).min(MAX_H);
         let (x, y) = ((OV_W - PANEL_W) / 2, (OV_H - h) / 2);
         [x, y, x + PANEL_W, y + h]
+    }
+
+    /// The page's rows fit at full size.
+    fn roomy(&self) -> bool {
+        let p = self.panel();
+        TOP + self.count() as i32 * ROW_H + BOTTOM <= p[3] - p[1]
+    }
+
+    fn row_h(&self) -> i32 {
+        if self.roomy() { ROW_H } else { ROW_H_SMALL }
+    }
+
+    fn scale(&self) -> i32 {
+        if self.roomy() { 2 } else { 1 }
+    }
+
+    /// How many rows the panel shows.
+    fn shown(&self) -> usize {
+        let p = self.panel();
+        (((p[3] - p[1] - TOP - BOTTOM) / self.row_h()).max(1) as usize).min(self.count())
+    }
+
+    /// Where the marks for more rows go: above the first row shown or below the last.
+    fn list_edge(&self, below: bool) -> [i32; 4] {
+        let p = self.panel();
+        let y = if below {
+            p[1] + TOP + self.shown() as i32 * self.row_h()
+        } else {
+            p[1] + TOP - 9
+        };
+        [p[0], y, p[2], y + 8]
     }
 
     fn tab(&self, k: usize) -> [i32; 4] {
@@ -358,10 +534,13 @@ impl Menu {
         [x, p[1] + 2, x + w, p[1] + 24]
     }
 
-    fn row_rect(&self, k: usize) -> [i32; 4] {
+    /// Row `k`'s rectangle, None when it is scrolled out of view.
+    fn row_rect(&self, k: usize) -> Option<[i32; 4]> {
+        let at = k.checked_sub(self.top).filter(|&a| a < self.shown())?;
         let p = self.panel();
-        let y = p[1] + TOP + k as i32 * ROW_H;
-        [p[0] + 10, y, p[2] - 10, y + ROW_H - 4]
+        let h = self.row_h();
+        let y = p[1] + TOP + at as i32 * h;
+        Some([p[0] + 10, y, p[2] - 10, y + h - 2])
     }
 
     fn tab_at(&self, x: i32, y: i32) -> Option<usize> {
@@ -371,7 +550,7 @@ impl Menu {
     /// The row at (x, y), and whether it is on the left half of its value.
     fn row_at(&self, x: i32, y: i32) -> Option<(usize, bool)> {
         (0..self.count()).find_map(|k| {
-            let r = self.row_rect(k);
+            let r = self.row_rect(k)?;
             let v = value_rect(r);
             inside(r, x, y).then_some((k, x < (v[0] + v[2]) / 2))
         })
@@ -380,8 +559,27 @@ impl Menu {
 
 const PANEL_W: i32 = 560;
 const ROW_H: i32 = 32;
-/// the rows' start below the panel's top (under the tabs)
-const TOP: i32 = 34;
+const ROW_H_SMALL: i32 = 18;
+/// the rows' start below the panel's top (under the tabs), the room under them (notes)
+const TOP: i32 = 38;
+const BOTTOM: i32 = 60;
+/// the tallest panel
+const MAX_H: i32 = 460;
+
+/// What a pad control does in the menu (the game's port says which control is which).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PadMenu {
+    Up,
+    Down,
+    Left,
+    Right,
+    Enter,
+    Back,
+    Unbind,
+    PageUp,
+    PageDown,
+    None,
+}
 
 fn value_rect(r: [i32; 4]) -> [i32; 4] {
     [r[0] + 270, r[1], r[2] - 10, r[3]]

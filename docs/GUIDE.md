@@ -429,6 +429,15 @@ Tasten und Knöpfe, die losgelassen werden, bekommt das Spiel trotzdem; die Maus
 DirectInput nicht. Testen: Menü in Mission und Hauptmenü auf und zu, die Missionsuhr des
 Spiels darf nicht um die Pause weiterlaufen.
 
+Belegung: `Row::bind(name, note, text, bind, clear)` fängt nach Enter die nächste Taste
+(`Bound::Key`, DirectInput-Code; Name mit `dinput::dik_name`) oder den nächsten Pad-Knopf
+(`Bound::Pad`, Nummer aus `dinput::CONTROLS`); Delete leert. Lange Seiten scrollen in
+kleinerer Schrift. Die Tasten am besten in der eigenen Tabelle des Spiels ändern (dort, wo es
+sie liest, und dort speichern: `advapi32::set_value_at` für einen anderen Schlüssel als den des
+Ports; Vorbild rustcoil `controls.rs`). Das Pad bedient das Menü selbst (D-Pad, A, B, X, LB/RB
+Seiten, Start schließt); Knöpfe in der Mission wie in rustcoil `gamepad.rs`
+(`Pad::buttons`, als Taste des Befehls drücken).
+
 ## 9. Ton, Video, Netzwerk, Installation
 
 - DirectSound und PlaySound: fertig (`dsound.rs`, Mischung auf cpal).

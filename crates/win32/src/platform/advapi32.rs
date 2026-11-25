@@ -201,13 +201,19 @@ pub fn value(sub: &str, name: &str) -> Option<(u32, Vec<u8>)> {
 
 /// Set a value of the game's key or one below it and save the registry file.
 pub fn set_value(sub: &str, name: &str, t: u32, data: &[u8]) {
-    let mut r = reg();
     let path = if sub.is_empty() {
         game_key().to_string()
     } else {
         format!("{}\\{sub}", game_key())
     };
-    let key = r.key_mut(&path);
+    set_value_at(&path, name, t, data);
+}
+
+/// Set a value of any key (a full path: `HKEY_CURRENT_USER\\SOFTWARE\\...`) and save the
+/// registry file: what the game keeps under another key than the port's.
+pub fn set_value_at(path: &str, name: &str, t: u32, data: &[u8]) {
+    let mut r = reg();
+    let key = r.key_mut(path);
     let existing = key
         .keys()
         .find(|k| k.eq_ignore_ascii_case(name))

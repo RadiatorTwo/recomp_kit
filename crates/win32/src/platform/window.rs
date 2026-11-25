@@ -189,6 +189,8 @@ pub fn pump(wait: Duration) {
         h.app.options_input();
         if h.app.options.is_some() {
             let clock = super::kernel32::guest_us();
+            super::dinput::poll();
+            let mut held = super::dinput::menu_state().0;
             while h.app.options.is_some() {
                 h.app.catch_cursor();
                 let _ = h
@@ -196,7 +198,10 @@ pub fn pump(wait: Duration) {
                     .pump_app_events(Some(Duration::from_millis(16)), &mut h.app);
                 scripted(&mut h.app.input);
                 h.app.options_input();
+                held = h.app.options_pad(held);
             }
+            // the pad's presses were the menu's
+            super::dinput::forget_presses();
             super::kernel32::set_guest_us(clock);
         }
         // a pad's Start is the Escape key (pause)
@@ -1129,6 +1134,53 @@ impl App {
             None if was => self.set_overlay(None),
             None => {}
         }
+    }
+
+    /// The pads while the settings menu is open: each button pressed (since `held`) goes to it;
+    /// Start closes it. Returns the buttons held now.
+    fn options_pad(&mut self, held: u32) -> u32 {
+        use super::options::PadMenu;
+        let start = super::dinput::poll() == Some(true);
+        let (now, _) = super::dinput::menu_state();
+        let Some(m) = &mut self.options else {
+            return now;
+        };
+        let mut actions = Vec::new();
+        let mut open = !start;
+        for b in (0..15).filter(|&b| (now & !held) >> b & 1 != 0) {
+            // our button numbers (`dinput::CONTROLS`)
+            let what = match b {
+                11 => PadMenu::Up,
+                12 => PadMenu::Down,
+                13 => PadMenu::Left,
+                14 => PadMenu::Right,
+                3 => PadMenu::Enter,
+                2 => PadMenu::Back,
+                4 => PadMenu::Unbind,
+                6 => PadMenu::PageUp,
+                7 => PadMenu::PageDown,
+                _ => PadMenu::None,
+            };
+            if open && m.pad(b, what, &mut actions).is_err() {
+                open = false;
+            }
+        }
+        if !open {
+            self.options = None;
+        }
+        for a in actions {
+            self.options_action(a);
+        }
+        if now != held || !open {
+            match &self.options {
+                Some(m) => {
+                    let px = m.render(crate::game::game().options_key());
+                    self.set_overlay(Some(px));
+                }
+                None => self.set_overlay(None),
+            }
+        }
+        now
     }
 
     fn toggle_options(&mut self) {
