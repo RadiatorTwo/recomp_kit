@@ -658,11 +658,13 @@ fn pat_blt(c: &mut Cpu) -> u32 {
 }
 
 fn delete_object(c: &mut Cpu) -> u32 {
-    OBJECTS
+    let h = arg(c, 0);
+    let gone = OBJECTS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&arg(c, 0))
-        .is_some() as u32
+        .remove(&h)
+        .is_some();
+    (gone || delete_palette(h)) as u32
 }
 
 fn get_object_type(c: &mut Cpu) -> u32 {
@@ -808,7 +810,173 @@ fn ret1(_: &mut Cpu) -> u32 {
     1
 }
 
+/// Logical palettes (0RGB entries) and the one selected into each device context.
+static PALETTES: Mutex<BTreeMap<u32, Vec<u32>>> = Mutex::new(BTreeMap::new());
+static SELECTED: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
+/// The default palette's handle (DEFAULT_PALETTE has no entries here).
+const DEFAULT_PALETTE: u32 = 0x7a00_0000;
+
+/// CreatePalette(LOGPALETTE*: version, count, PALETTEENTRY r g b flags).
+fn create_palette(c: &mut Cpu) -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(DEFAULT_PALETTE + 4);
+    let (m, p) = (mem(), arg(c, 0));
+    let n = m.rd16(p + 2) as u32;
+    let entries = (0..n)
+        .map(|k| {
+            let e = m.rd32(p + 4 + 4 * k);
+            (e & 0xff) << 16 | (e & 0xff00) | (e >> 16) & 0xff
+        })
+        .collect();
+    let h = NEXT.fetch_add(4, Ordering::Relaxed);
+    PALETTES.lock().unwrap().insert(h, entries);
+    h
+}
+
+/// SelectPalette(dc, palette, background): the one selected before.
+fn select_palette(c: &mut Cpu) -> u32 {
+    let (dc, pal) = (arg(c, 0), arg(c, 1));
+    SELECTED.lock().unwrap().insert(dc, pal).unwrap_or(DEFAULT_PALETTE)
+}
+
+/// DeleteObject of a palette.
+fn delete_palette(h: u32) -> bool {
+    PALETTES.lock().unwrap().remove(&h).is_some()
+}
+
+/// StretchDIBits(dc, x, y, w, h, source x, y, w, h, bits, BITMAPINFO*, usage, rop): an 8-,
+/// 16-, 24- or 32-bit DIB into a DirectDraw surface's device context (Smacker's video frames;
+/// colours from the DIB's table, or with DIB_PAL_COLORS from the palette selected into the
+/// DC). Other DCs are not drawn. Gives the lines drawn.
+fn stretch_dibits(c: &mut Cpu) -> u32 {
+    let a: Vec<i32> = (0..9).map(|k| arg(c, k) as i32).collect();
+    let (dc, bits, bmi, usage) = (a[0] as u32, arg(c, 9), arg(c, 10), arg(c, 11));
+    let Some((pixels, sw, sh, pitch, sbpp)) = super::ddraw::surface_of_dc(dc) else {
+        return a[8].unsigned_abs();
+    };
+    let m = mem();
+    let (head, w, h, bpp) = (
+        m.rd32(bmi),
+        m.rd32(bmi + 4) as i32,
+        m.rd32(bmi + 8) as i32,
+        m.rd16(bmi + 14) as u32,
+    );
+    let used = match m.rd32(bmi + 32) {
+        0 if bpp <= 8 => 1 << bpp,
+        n => n,
+    };
+    let table = bmi + head;
+    let colours: Vec<u32> = if bpp > 8 {
+        Vec::new()
+    } else if usage == 1 {
+        let pals = PALETTES.lock().unwrap();
+        let sel = SELECTED.lock().unwrap().get(&dc).copied().unwrap_or(DEFAULT_PALETTE);
+        let pal = pals.get(&sel);
+        (0..used)
+            .map(|k| {
+                let i = m.rd16(table + 2 * k) as usize;
+                pal.and_then(|p| p.get(i).copied()).unwrap_or(0)
+            })
+            .collect()
+    } else {
+        (0..used).map(|k| m.rd32(table + 4 * k) & 0xff_ffff).collect()
+    };
+    let stride = ((w as u32 * bpp + 31) / 32) * 4;
+    let (rows, bottom_up) = (h.unsigned_abs() as i32, h > 0);
+    let (xd, yd, wd, hd, xs, ys, ws, hs) = (a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
+    if wd == 0 || hd == 0 || ws == 0 || hs == 0 {
+        return 0;
+    }
+    // the source rectangle's top row, counted from the image's top
+    let top = if bottom_up { rows - ys - hs.abs() } else { ys };
+    let source = |sx: i32, sy: i32| -> u32 {
+        if sx < 0 || sx >= w || sy < 0 || sy >= rows {
+            return 0;
+        }
+        let row = if bottom_up { rows - 1 - sy } else { sy } as u32;
+        let p = bits + row * stride;
+        match bpp {
+            8 => colours.get(m.rd8(p + sx as u32) as usize).copied().unwrap_or(0),
+            4 => {
+                let b = m.rd8(p + sx as u32 / 2);
+                let i = if sx % 2 == 0 { b >> 4 } else { b & 15 };
+                colours.get(i as usize).copied().unwrap_or(0)
+            }
+            16 => {
+                let v = m.rd16(p + 2 * sx as u32) as u32;
+                let e = |v: u32| (v << 3) | (v >> 2);
+                e(v >> 10 & 31) << 16 | e(v >> 5 & 31) << 8 | e(v & 31)
+            }
+            24 => {
+                let q = p + 3 * sx as u32;
+                (m.rd8(q + 2) as u32) << 16 | (m.rd8(q + 1) as u32) << 8 | m.rd8(q) as u32
+            }
+            32 => m.rd32(p + 4 * sx as u32) & 0xff_ffff,
+            _ => 0,
+        }
+    };
+    for dy in 0..hd.abs() {
+        let ty = yd + if hd > 0 { dy } else { hd.abs() - 1 - dy };
+        if ty < 0 || ty >= sh as i32 {
+            continue;
+        }
+        let sy = top + (dy as i64 * hs.abs() as i64 / hd.abs() as i64) as i32;
+        let sy = if hs < 0 { top + hs.abs() - 1 - (sy - top) } else { sy };
+        for dx in 0..wd.abs() {
+            let tx = xd + if wd > 0 { dx } else { wd.abs() - 1 - dx };
+            if tx < 0 || tx >= sw as i32 {
+                continue;
+            }
+            let sx = xs + (dx as i64 * ws.abs() as i64 / wd.abs() as i64) as i32;
+            let rgb = source(sx, sy);
+            let at = pixels + ty as u32 * pitch;
+            match sbpp {
+                16 => {
+                    let v = (rgb >> 19 & 31) << 10 | (rgb >> 11 & 31) << 5 | (rgb >> 3 & 31);
+                    m.wr16(at + 2 * tx as u32, v as u16);
+                }
+                32 => m.wr32(at + 4 * tx as u32, rgb),
+                _ => {}
+            }
+        }
+    }
+    hs.unsigned_abs()
+}
+
+/// GetSystemPaletteUse(dc): SYSPAL_STATIC.
+fn get_system_palette_use(_: &mut Cpu) -> u32 {
+    1
+}
+
+/// SetStretchBltMode(dc, mode): the mode before (BLACKONWHITE).
+fn set_stretch_blt_mode(_: &mut Cpu) -> u32 {
+    1
+}
+
+/// CreateCompatibleBitmap(dc, w, h): not drawn into yet.
+fn create_compatible_bitmap(c: &mut Cpu) -> u32 {
+    log!("warn: CreateCompatibleBitmap {}x{}: not drawn", arg(c, 1), arg(c, 2));
+    0
+}
+
+/// SetPixel(dc, x, y, colour): not drawn, the colour back.
+fn set_pixel(c: &mut Cpu) -> u32 {
+    arg(c, 3)
+}
+
 pub const IMPORTS: &[Import] = &[
+    // palettes: the display has true colour, there is nothing to realise
+    ("CreatePalette", 1, create_palette),
+    ("SelectPalette", 3, select_palette),
+    ("RealizePalette", 1, super::ret0),
+    ("GetSystemPaletteUse", 1, get_system_palette_use),
+    ("SetStretchBltMode", 2, set_stretch_blt_mode),
+    // not drawn yet (Smacker's DIB path, unused while it blits with DirectDraw)
+    ("CreateCompatibleBitmap", 3, create_compatible_bitmap),
+    ("GetDIBits", 7, super::ret0),
+    ("GetPixel", 3, super::ret0),
+    ("SetPixel", 4, set_pixel),
+    // ExtEscape(dc, escape, ...): no driver escapes (0: not supported)
+    ("ExtEscape", 6, super::ret0),
     ("GetDeviceCaps", 2, get_device_caps),
     ("GetSystemPaletteEntries", 4, |_| 0), // no palette device: no entries
     ("GetTextMetricsA", 2, get_text_metrics),
@@ -839,7 +1007,7 @@ pub const IMPORTS: &[Import] = &[
     ("BitBlt", 9, ret1),
     ("StretchBlt", 11, ret1),
     ("PatBlt", 6, pat_blt),
-    ("StretchDIBits", 13, ret1),
+    ("StretchDIBits", 13, stretch_dibits),
     ("SetBkColor", 2, set_bk_color),
     ("SetBkMode", 2, set_bk_mode),
     ("SetTextColor", 2, set_text_color),

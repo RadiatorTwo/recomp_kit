@@ -900,6 +900,205 @@ fn get_key_state(c: &mut Cpu) -> u32 {
     (if k & 0x80 != 0 { 0xff80 } else { 0 }) | toggled
 }
 
+/// The US keyboard: (virtual key, set-1 scan code, extended, name as GetKeyNameTextA gives it).
+const KEYS: &[(u8, u8, bool, &str)] = &[
+    (0x1b, 0x01, false, "Esc"),
+    (0x08, 0x0e, false, "Backspace"),
+    (0x09, 0x0f, false, "Tab"),
+    (0x0d, 0x1c, false, "Enter"),
+    (0x11, 0x1d, false, "Ctrl"),
+    (0x10, 0x2a, false, "Shift"),
+    (0xa1, 0x36, false, "Right Shift"),
+    (0x12, 0x38, false, "Alt"),
+    (0x20, 0x39, false, "Space"),
+    (0x14, 0x3a, false, "Caps Lock"),
+    (0x90, 0x45, false, "Num Lock"),
+    (0x91, 0x46, false, "Scroll Lock"),
+    (0x6a, 0x37, false, "Num *"),
+    (0x6d, 0x4a, false, "Num -"),
+    (0x6b, 0x4e, false, "Num +"),
+    (0x6e, 0x53, false, "Num Del"),
+    (0x67, 0x47, false, "Num 7"),
+    (0x68, 0x48, false, "Num 8"),
+    (0x69, 0x49, false, "Num 9"),
+    (0x64, 0x4b, false, "Num 4"),
+    (0x65, 0x4c, false, "Num 5"),
+    (0x66, 0x4d, false, "Num 6"),
+    (0x61, 0x4f, false, "Num 1"),
+    (0x62, 0x50, false, "Num 2"),
+    (0x63, 0x51, false, "Num 3"),
+    (0x60, 0x52, false, "Num 0"),
+    (0x24, 0x47, true, "Home"),
+    (0x26, 0x48, true, "Up"),
+    (0x21, 0x49, true, "Page Up"),
+    (0x25, 0x4b, true, "Left"),
+    (0x27, 0x4d, true, "Right"),
+    (0x23, 0x4f, true, "End"),
+    (0x28, 0x50, true, "Down"),
+    (0x22, 0x51, true, "Page Down"),
+    (0x2d, 0x52, true, "Insert"),
+    (0x2e, 0x53, true, "Delete"),
+    (0x6f, 0x35, true, "Num /"),
+    (0xa3, 0x1d, true, "Right Ctrl"),
+    (0xa5, 0x38, true, "Right Alt"),
+    (0xbd, 0x0c, false, "-"),
+    (0xbb, 0x0d, false, "="),
+    (0xdb, 0x1a, false, "["),
+    (0xdd, 0x1b, false, "]"),
+    (0xba, 0x27, false, ";"),
+    (0xde, 0x28, false, "'"),
+    (0xc0, 0x29, false, "`"),
+    (0xdc, 0x2b, false, "\\"),
+    (0xbc, 0x33, false, ","),
+    (0xbe, 0x34, false, "."),
+    (0xbf, 0x35, false, "/"),
+];
+
+/// Scan codes of the letters A..Z.
+const LETTER_SCAN: [u8; 26] = [
+    0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18,
+    0x19, 0x10, 0x13, 0x1f, 0x14, 0x16, 0x2f, 0x11, 0x2d, 0x15, 0x2c,
+];
+
+/// Scan code of a virtual key (0 if none).
+fn scan_of(vk: u8) -> u8 {
+    match vk {
+        b'A'..=b'Z' => LETTER_SCAN[(vk - b'A') as usize],
+        b'1'..=b'9' => vk - b'1' + 2,
+        b'0' => 0x0b,
+        0x70..=0x79 => vk - 0x70 + 0x3b,
+        0x7a | 0x7b => vk - 0x7a + 0x57,
+        0xa0 => 0x2a,
+        0xa2 => 0x1d,
+        0xa4 => 0x38,
+        _ => KEYS.iter().find(|k| k.0 == vk).map_or(0, |k| k.1),
+    }
+}
+
+/// Virtual key of a scan code (not extended), 0 if none.
+fn vk_of_scan(scan: u8) -> u8 {
+    if let Some(i) = LETTER_SCAN.iter().position(|&s| s == scan) {
+        return b'A' + i as u8;
+    }
+    match scan {
+        0x02..=0x0a => b'1' + scan - 2,
+        0x0b => b'0',
+        0x3b..=0x44 => 0x70 + scan - 0x3b,
+        0x57 | 0x58 => 0x7a + scan - 0x57,
+        _ => KEYS.iter().find(|k| k.1 == scan && !k.2).map_or(0, |k| k.0),
+    }
+}
+
+/// The character a virtual key types (US layout), with or without shift.
+fn char_of(vk: u8, shift: bool) -> Option<u8> {
+    const SHIFTED_DIGITS: &[u8; 10] = b")!@#$%^&*(";
+    const SIGNS: [(u8, u8, u8); 11] = [
+        (0xbd, b'-', b'_'),
+        (0xbb, b'=', b'+'),
+        (0xdb, b'[', b'{'),
+        (0xdd, b']', b'}'),
+        (0xba, b';', b':'),
+        (0xde, b'\'', b'"'),
+        (0xc0, b'`', b'~'),
+        (0xdc, b'\\', b'|'),
+        (0xbc, b',', b'<'),
+        (0xbe, b'.', b'>'),
+        (0xbf, b'/', b'?'),
+    ];
+    Some(match vk {
+        b'A'..=b'Z' if shift => vk,
+        b'A'..=b'Z' => vk + 32,
+        b'0'..=b'9' if shift => SHIFTED_DIGITS[(vk - b'0') as usize],
+        b'0'..=b'9' => vk,
+        0x60..=0x69 => b'0' + vk - 0x60,
+        0x20 | 0x08 | 0x09 | 0x0d | 0x1b => vk,
+        0x6a => b'*',
+        0x6b => b'+',
+        0x6d => b'-',
+        0x6e => b'.',
+        0x6f => b'/',
+        _ => {
+            let s = SIGNS.iter().find(|s| s.0 == vk)?;
+            if shift { s.2 } else { s.1 }
+        }
+    })
+}
+
+/// GetKeyNameTextA(lParam, buf, n): the key's name from its scan code (bits 16-23) and the
+/// extended bit (24).
+fn get_key_name_text(c: &mut Cpu) -> u32 {
+    let (lp, buf, n) = (arg(c, 0), arg(c, 1), arg(c, 2));
+    let (scan, ext) = (((lp >> 16) & 0xff) as u8, lp & (1 << 24) != 0);
+    let name = match KEYS.iter().find(|k| k.1 == scan && k.2 == ext) {
+        Some(k) => k.3.to_string(),
+        None => match vk_of_scan(scan) {
+            v @ 0x70..=0x7b => format!("F{}", v - 0x6f),
+            v @ (b'0'..=b'9' | b'A'..=b'Z') => (v as char).to_string(),
+            _ => String::new(),
+        },
+    };
+    if n == 0 {
+        return 0;
+    }
+    put_cstr(buf, &name, n);
+    name.len().min(n as usize - 1) as u32
+}
+
+/// MapVirtualKeyA(code, type): 0 virtual key to scan code, 1 scan code to virtual key,
+/// 2 virtual key to its character, 3 scan code to the left/right virtual key.
+fn map_virtual_key(c: &mut Cpu) -> u32 {
+    let (code, ty) = ((arg(c, 0) & 0xff) as u8, arg(c, 1));
+    match ty {
+        0 => scan_of(code) as u32,
+        1 | 3 => match (vk_of_scan(code), ty) {
+            (0x10, 3) => 0xa0,
+            (0x11, 3) => 0xa2,
+            (0x12, 3) => 0xa4,
+            (v, _) => v as u32,
+        },
+        2 => char_of(code, true).map_or(0, |ch| ch.to_ascii_uppercase() as u32),
+        _ => 0,
+    }
+}
+
+/// ToAscii(vk, scan, key state[256], out word, flags): the character, 1 if there is one.
+fn to_ascii(c: &mut Cpu) -> u32 {
+    let (vk, state, out) = ((arg(c, 0) & 0xff) as u8, arg(c, 2), arg(c, 3));
+    let shift = state != 0 && mem().rd8(state + 0x10) & 0x80 != 0;
+    match char_of(vk, shift) {
+        Some(ch) => {
+            mem().wr16(out, ch as u16);
+            1
+        }
+        None => 0,
+    }
+}
+
+/// GetKeyboardState(buf[256]): bit 7 down (Num Lock toggled on, as GetKeyState says).
+fn get_keyboard_state(c: &mut Cpu) -> u32 {
+    let mut keys = st().keys;
+    for k in keys.iter_mut() {
+        *k &= 0x80;
+    }
+    keys[0x90] |= 1;
+    mem().slice(arg(c, 0), 256).copy_from_slice(&keys);
+    1
+}
+
+/// GetKeyboardLayoutNameA(buf): US.
+fn get_keyboard_layout_name(c: &mut Cpu) -> u32 {
+    put_cstr(arg(c, 0), "00000409", 9);
+    1
+}
+
+/// GetUpdateRect(hwnd, rect, erase): nothing to paint (the game draws with DirectDraw/Glide).
+fn get_update_rect(c: &mut Cpu) -> u32 {
+    if arg(c, 1) != 0 {
+        mem().slice(arg(c, 1), 16).fill(0);
+    }
+    0
+}
+
 fn keybd_event(c: &mut Cpu) -> u32 {
     let (vk, flags) = (arg(c, 0) & 0xff, arg(c, 2));
     let mut s = st();
@@ -1432,6 +1631,9 @@ pub const IMPORTS: &[Import] = &[
     ("AdjustWindowRect", 3, adjust_window_rect),
     ("AdjustWindowRectEx", 4, adjust_window_rect),
     ("ClientToScreen", 2, client_to_screen),
+    ("ScreenToClient", 2, client_to_screen),
+    // class values (icon, cursor, brush): none asked for matters
+    ("GetClassLongA", 2, ret0),
     ("SetMenu", 2, ret1),
     ("GetMenu", 1, ret0),
     ("SetActiveWindow", 1, first_arg),
@@ -1468,6 +1670,19 @@ pub const IMPORTS: &[Import] = &[
     ("GetAsyncKeyState", 1, get_async_key_state),
     ("GetKeyState", 1, get_key_state),
     ("keybd_event", 4, keybd_event),
+    ("GetKeyNameTextA", 3, get_key_name_text),
+    ("MapVirtualKeyA", 2, map_virtual_key),
+    ("ToAscii", 5, to_ascii),
+    ("GetKeyboardState", 1, get_keyboard_state),
+    // the key states are the window's: the game's own settings change nothing
+    ("SetKeyboardState", 1, ret1),
+    ("GetKeyboardLayoutNameA", 1, get_keyboard_layout_name),
+    ("GetUpdateRect", 3, get_update_rect),
+    ("BringWindowToTop", 1, ret1),
+    // no clipboard: OpenClipboard fails
+    ("OpenClipboard", 1, ret0),
+    ("CloseClipboard", 0, ret1),
+    ("GetClipboardData", 1, ret0),
     ("SystemParametersInfoA", 4, system_parameters_info),
     ("GetSystemMetrics", 1, get_system_metrics),
     ("SetWindowsHookExA", 4, set_hook),

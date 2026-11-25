@@ -441,3 +441,131 @@ pub fn aux_set_volume(c: &mut Cpu) -> u32 {
     super::dsound::cd_volume(((v & 0xffff) + (v >> 16)) as f32 / 2.0 / 65535.0);
     0
 }
+
+// ---- the mixer: one line, CD audio, with a volume control (from rustschweine) ----------------
+//
+// Games open mixer 0, find the line of component type "compact disc", take its volume control
+// (0...65535) and set it from their music volume option.
+
+const MIXERR_INVALLINE: u32 = 1024;
+const MIXERR_INVALCONTROL: u32 = 1025;
+const MIXERLINE_COMPONENTTYPE_SRC_COMPACTDISC: u32 = 0x1005;
+const MIXERCONTROL_CONTROLTYPE_VOLUME: u32 = 0x5003_0001;
+const MIXER_HANDLE: u32 = 0x4d58;
+const LINE: u32 = 1;
+const CONTROL: u32 = 1;
+
+/// The volume control's value, 0...65535. It starts full and is not kept: the game reads it
+/// at start as the music's share (0x4398e0: value / 655 as a percentage), then sets it to
+/// master volume x that share x its fades (0x43e060: fading out to 0 while a mission loads),
+/// and puts the start value back when it quits. A kept value would keep a fade (or a crash's
+/// last value) and mute the music from then on.
+static VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0xffff);
+
+fn volume() -> u32 {
+    VOLUME.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn put_str(p: u32, max: u32, s: &str) {
+    let m = mem();
+    m.slice(p, max as usize).fill(0);
+    m.slice(p, s.len().min(max as usize - 1)).copy_from_slice(&s.as_bytes()[..s.len().min(max as usize - 1)]);
+}
+
+pub fn mixer_get_num_devs(_: &mut Cpu) -> u32 {
+    1
+}
+
+/// mixerOpen(out handle, id, callback, instance, flags)
+pub fn mixer_open(c: &mut Cpu) -> u32 {
+    if arg(c, 0) != 0 {
+        mem().wr32(arg(c, 0), MIXER_HANDLE);
+    }
+    0
+}
+
+pub fn mixer_close(_: &mut Cpu) -> u32 {
+    0
+}
+
+/// mixerGetDevCapsA(id, MIXERCAPSA*, size): one destination.
+pub fn mixer_get_dev_caps(c: &mut Cpu) -> u32 {
+    let (p, size) = (arg(c, 1), arg(c, 2));
+    let m = mem();
+    m.slice(p, size.min(48) as usize).fill(0);
+    if size >= 48 {
+        put_str(p + 8, 32, "Mixer");
+        m.wr32(p + 44, 1);
+    }
+    0
+}
+
+/// mixerGetLineInfoA(handle, MIXERLINEA*, flags): the CD audio line, whatever is asked.
+pub fn mixer_get_line_info(c: &mut Cpu) -> u32 {
+    let (p, flags) = (arg(c, 1), arg(c, 2));
+    let m = mem();
+    // by component type (3): only the CD's
+    if flags & 0xf == 3 && m.rd32(p + 0x18) != MIXERLINE_COMPONENTTYPE_SRC_COMPACTDISC {
+        return MIXERR_INVALLINE;
+    }
+    m.slice(p + 4, 0xa8 - 4).fill(0);
+    m.wr32(p + 0xc, LINE);
+    m.wr32(p + 0x10, 1); // active
+    m.wr32(p + 0x18, MIXERLINE_COMPONENTTYPE_SRC_COMPACTDISC);
+    m.wr32(p + 0x1c, 2); // channels
+    m.wr32(p + 0x24, 1); // controls
+    put_str(p + 0x28, 16, "CD");
+    put_str(p + 0x38, 64, "CD Audio");
+    0
+}
+
+/// mixerGetLineControlsA(handle, MIXERLINECONTROLSA*, flags): the volume control.
+pub fn mixer_get_line_controls(c: &mut Cpu) -> u32 {
+    let (p, flags) = (arg(c, 1), arg(c, 2));
+    let m = mem();
+    // one by type (2): only the volume
+    if flags & 0xf == 2 && m.rd32(p + 8) != MIXERCONTROL_CONTROLTYPE_VOLUME {
+        return MIXERR_INVALCONTROL;
+    }
+    let ctl = m.rd32(p + 0x14);
+    if ctl == 0 {
+        return MIXERR_INVALCONTROL;
+    }
+    m.slice(ctl, 0x94).fill(0);
+    m.wr32(ctl, 0x94);
+    m.wr32(ctl + 4, CONTROL);
+    m.wr32(ctl + 8, MIXERCONTROL_CONTROLTYPE_VOLUME);
+    m.wr32(ctl + 0xc, 1); // uniform
+    put_str(ctl + 0x14, 16, "Volume");
+    put_str(ctl + 0x24, 64, "CD Volume");
+    m.wr32(ctl + 0x68, 0xffff); // maximum
+    m.wr32(ctl + 0x7c, 0x10000); // steps
+    0
+}
+
+/// mixerGetControlDetailsA(handle, MIXERCONTROLDETAILS*, flags): the volume, per channel.
+pub fn mixer_get_control_details(c: &mut Cpu) -> u32 {
+    let p = arg(c, 1);
+    let m = mem();
+    let (n, values) = (m.rd32(p + 8).max(1), m.rd32(p + 0x14));
+    let v = volume();
+    for k in 0..n.min(2) {
+        m.wr32(values + 4 * k, v);
+    }
+    0
+}
+
+/// mixerSetControlDetails(handle, MIXERCONTROLDETAILS*, flags): the volume (both channels'
+/// average when given two).
+pub fn mixer_set_control_details(c: &mut Cpu) -> u32 {
+    let p = arg(c, 1);
+    let m = mem();
+    let (n, values) = (m.rd32(p + 8).clamp(1, 2), m.rd32(p + 0x14));
+    let v = ((0..n).map(|k| m.rd32(values + 4 * k).min(0xffff)).sum::<u32>() / n).min(0xffff);
+    VOLUME.store(v, std::sync::atomic::Ordering::Relaxed);
+    if super::trace_api() {
+        log!("CD volume {v:#x}");
+    }
+    super::dsound::cd_volume(v as f32 / 65535.0);
+    0
+}

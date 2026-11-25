@@ -217,11 +217,14 @@ impl Program {
         }
         let mut data_ptrs = HashSet::new();
         for s in &code.img.sections {
-            if !matches!(s.name.as_str(), ".rdata" | ".data" | "UVA_DATA") {
-                continue;
-            }
+            // Watcom's DGROUP at 2-byte steps (its start-up tables have 6-byte entries)
+            let step = match s.name.as_str() {
+                ".rdata" | ".data" | "UVA_DATA" => 4,
+                "DGROUP" => 2,
+                _ => continue,
+            };
             let blob = code.img.read(s.va, s.rsize as usize).unwrap_or_default();
-            for k in (0..blob.len().saturating_sub(3)).step_by(4) {
+            for k in (0..blob.len().saturating_sub(3)).step_by(step) {
                 let t = u32::from_le_bytes([blob[k], blob[k + 1], blob[k + 2], blob[k + 3]]);
                 let plausible = insn_at.contains(&t)
                     || (code.img.is_code(t)
@@ -290,8 +293,10 @@ impl Program {
 
 /// The dwords of a section's raw data, aligned.
 fn words(img: &Image, s: &crate::image::Section) -> Vec<u32> {
+    // at 2-byte steps: Watcom's XI/YI start-up tables have 6-byte entries
     let blob = img.read(s.va, s.rsize as usize).unwrap_or_default();
-    blob.chunks_exact(4)
+    blob.windows(4)
+        .step_by(2)
         .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
         .collect()
 }
@@ -439,6 +444,24 @@ fn plausible(code: &mut Code, t: u32, seen: &(HashSet<u32>, HashSet<u32>)) -> bo
     else {
         return false;
     };
+    // a function starts the way compiled functions do: a word of data pointing into the
+    // middle of an instruction (Motorhead 0x433764: scasb, push, add bh,bh) took the place
+    // of a callback found later whose code runs over it
+    let Some(first) = code.at(t) else {
+        return false;
+    };
+    let usual_start = match first.mnemonic() {
+        Push | Mov | Sub | Xor | Lea | Cmp | Test | Jmp | Call | Ret | Inc | Dec | And | Or
+        | Movzx | Movsx | Pushad | Pushfd | Cld | Std | Enter | Shl | Shr | Sar | Imul | Neg
+        | Fld | Fild | Fldz | Fld1 | Fstp | Fst | Fxch | Fmul | Fadd | Fsub | Fdiv | Fldcw
+        | Fnstcw | Fninit | Wait | Nop | Cdq | Pop | Cli | Sti => true,
+        // not `add [eax], al` (00 00: zeros decoded as code)
+        Add | Adc | Sbb => first.memory_size().size() != 1 && !first.op1_register().is_gpr8(),
+        _ => false,
+    };
+    if !usual_start {
+        return false;
+    }
     let f = Func::new(code, t, s.va, s.va + s.vsize, String::new());
     f.ins
         .iter()
@@ -482,7 +505,11 @@ fn plausible(code: &mut Code, t: u32, seen: &(HashSet<u32>, HashSet<u32>)) -> bo
                 || i.is_call_far_indirect()
                 || i.is_jmp_far_indirect()
                 || (i.memory_base() != Register::None && i.memory_base().size() == 2)
-                || !matches!(i.segment_prefix(), Register::None | Register::FS);
+                // Watcom writes cs: and es: (flat) where others write none
+                || !matches!(
+                    i.segment_prefix(),
+                    Register::None | Register::FS | Register::CS | Register::ES | Register::DS
+                );
             !odd && !(a..a + i.len() as u32)
                 .any(|b| seen.0.contains(&b) && b != a || seen.1.contains(&b))
         })

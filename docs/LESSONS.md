@@ -188,6 +188,15 @@ White. Most apply to any game of that time. Add new ones here.
 - Exit with TerminateProcess (`_exit` on Linux) after saving the registry: with audio, gamepad
   and GL threads killed mid-way a driver could hang in the DLLs' clean-up.
 - ShowCursor keeps a counter; while hidden and focused, grab the cursor (confined, else locked).
+- COM QueryInterface adds a reference: Motorhead queries IDirectDrawSurface for a newer
+  interface and releases the first one; without the reference its flip chain was gone
+  ("create backbuffer(s) failed").
+- RAD's Smacker (SMACKW32.DLL): compile the game's own DLL with the EXE (`Game::dlls`,
+  rebased out of our heap at 0x10000000) instead of writing a decoder. It draws each frame
+  with GetDC on a DirectDraw surface and StretchDIBits (GetDC of a surface is the surface,
+  `ddraw::surface_of_dc`); its sound goes through waveOut.
+- 8-bit display modes must be offered: Motorhead's menu wants 640x480 or 640x400 at 8 bits
+  and quits without them.
 - DDBLTFX: dwFillColor is at 0x50 (an earlier port read 0x48 and drew black).
 - DirectDraw windowed: the primary surface is the whole desktop; show the window's rectangle.
   Show blits to the primary at the next message poll, a Flip, or 50 ms after the first unshown
@@ -255,6 +264,21 @@ White. Most apply to any game of that time. Add new ones here.
   function around it, and a callback known only from `mov edx, imm` became "call to unknown
   address" (Recoil's save game, 0x41f6f0). Far calls and jumps through memory count as not
   compiled code (`plausible`).
+- Watcom EXEs (Nuclear Strike, Motorhead): every section's virtual size is 0 (the raw size
+  is the size), the .bss has a raw size but no raw data (offset 0: zeros, not the file's
+  first bytes), and the start-up tables have 6-byte entries (data scanned at 2-byte steps in
+  DGROUP). Without the size fix `find_functions` found 55 of Motorhead's ~2200 functions.
+  Watcom writes cs:, es: and ds: prefixes that MSVC code does not: they are no sign of data.
+- A candidate found as a number must start like a function (push, mov, sub, ...): a data
+  word into the middle of an instruction (Motorhead 0x433764: scasb, push, add bh,bh) blocked
+  a real callback known only from `push offset`, whose code ran over it (`plausible`).
+- Some games keep **code in their data files** and jump into it after loading (Motorhead's
+  fonts and sprites: a run of `mov [eax+d], imm` per glyph or row). It is not compiled:
+  "call to unknown address" in the heap. Replace the game functions that jump there (they
+  are few) and run the loaded code in a small interpreter (motorhead_rust `loaded.rs`), as
+  long as it is that simple.
+- Watcom's runtime uses `call next; <table>; next: pop edi; ret` for a table's address: the
+  bytes after the call are data and decode as garbage. Hook the function (edi = the table).
 
 ## Game logic and frame rate
 

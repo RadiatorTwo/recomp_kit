@@ -160,6 +160,9 @@ pub fn unsupported(i: &Instruction) -> Option<String> {
         Movd | Movq => (0..i.op_count())
             .all(|k| i.op_kind(k) != OpKind::Register || !i.op_register(k).is_xmm()),
         Bswap => i.op0_register().is_gpr32(),
+        // far pointers: the offset only (flat segments; Watcom's printf, %n)
+        Les | Lds => i.op0_register().is_gpr32(),
+        Aam => i.immediate8() != 0,
         Bsf | Bsr => op_size(i, 0) == 4,
         Shld | Shrd => {
             i.op0_register().is_gpr32()
@@ -1400,6 +1403,21 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 let a = self.read_reg(Register::AX);
                 let v = self.b.ins().sshr_imm_u(a, 15);
                 self.write_reg(Register::DX, v);
+            }
+            Les | Lds => {
+                // the selector after the offset is dropped: segments are flat
+                let v = self.rd(i, 1, 4);
+                self.wr(i, 0, v);
+            }
+            Aam => {
+                // ah = al / imm, al = al % imm (Watcom's number formatting)
+                let al = self.read_reg(Register::AL);
+                let n = self.b.ins().iconst(I8, i.immediate8() as i64);
+                let q = self.b.ins().udiv(al, n);
+                let r = self.b.ins().urem(al, n);
+                self.write_reg(Register::AH, q);
+                self.write_reg(Register::AL, r);
+                self.set_zsp(r);
             }
             Xlatb => {
                 let (b, al) = (self.reg(3), self.read_reg(Register::AL));

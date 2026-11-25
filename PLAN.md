@@ -95,6 +95,20 @@
   blob shadows without the depth test, effect lists cleared every picture, macOS facts. Built on
   Windows; the Linux start window not yet run.
 
+- From motorhead_rust (2026-11-25): Watcom images (virtual sizes 0, .bss without raw data;
+  test `watcom_sections`), discovery for Watcom (cs:/es:/ds: prefixes, DGROUP at 2-byte
+  steps and its code pointers as entries) and a usual first instruction for candidates found
+  as numbers; les/lds (offset only) and aam (test `farptr`); DirectDraw: surface
+  QueryInterface adds a reference, 8-bit modes enumerated, GetDC of a surface is the surface,
+  ReleaseDC shows the primary; GDI palettes and StretchDIBits into surfaces (Smacker); the
+  mixer (CD volume, from rustschweine); winsock without sockets, VERSION, DirectPlay 1
+  unavailable, waveOut without a device; kernel32 ReleaseMutex, CopyFileA/MoveFileA (game
+  folder only), GetTempFileNameA, CreateProcessA/LoadModule (not started), console,
+  GetProfileIntA; user32 keyboard (GetKeyNameTextA, MapVirtualKeyA, ToAscii,
+  Get/SetKeyboardState), clipboard (none); RegOpenKeyA. `new-game.ps1` copies crates/indeo.
+  LESSONS: Watcom, code in data files, COM references, Smacker. Recoil's `rtools missing`:
+  5055 -> 5065 functions, unsupported unchanged; fcop_plain not run (no FCop EXE unpacked).
+
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 
 - `glide.rs`: check how batches are uploaded (glBufferSubData, no map per batch; the kit
@@ -121,4 +135,5 @@ Grow the kit for future games, one piece at a time, with tests:
 2. From nuclear_rust_strike: its effects (ao, lights, shadows, bloom, heat, zbuffer,
    particles) when a game wants them.
 3. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
-4. Video formats beyond MPEG-1 (Bink, Smacker, AVI) when a game needs them.
+4. Video formats beyond MPEG-1 (Bink, AVI) when a game needs them (Smacker: the game's own
+   SMACKW32.DLL compiled with it). waveOut on our mixer (Smacker's sound).

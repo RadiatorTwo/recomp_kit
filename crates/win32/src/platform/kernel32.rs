@@ -1196,6 +1196,26 @@ fn create_mutex(c: &mut Cpu) -> u32 {
     })
 }
 
+/// ReleaseMutex(h): one hold of this thread's less; free at none.
+fn release_mutex(c: &mut Cpu) -> u32 {
+    let me = thread_id();
+    let mut g = objects();
+    match g.map.get_mut(&arg(c, 0)) {
+        Some(Obj::Mutex { owner, count }) if *owner == me && *count > 0 => {
+            *count -= 1;
+            if *count == 0 {
+                *owner = 0;
+                SIGNAL.notify_all();
+            }
+            1
+        }
+        _ => {
+            set_last_error(288); // ERROR_NOT_OWNER
+            0
+        }
+    }
+}
+
 /// Whether `h` is signalled for this thread; with `take`, also what a successful wait does to it.
 fn signalled(g: &mut Objects, h: u32, take: bool) -> bool {
     let me = thread_id();
@@ -1744,6 +1764,104 @@ fn delete_file(c: &mut Cpu) -> u32 {
     }
 }
 
+/// CopyFileA(from, to, fail if it exists): only into the game folder.
+fn copy_file(c: &mut Cpu) -> u32 {
+    let (from, to) = (host_path(&cstr(arg(c, 0))), host_path(&cstr(arg(c, 1))));
+    if !inside_game(&to) {
+        log!("CopyFileA {}: outside the game folder, not written", to.display());
+        set_last_error(5);
+        return 0;
+    }
+    if arg(c, 2) != 0 && to.exists() {
+        set_last_error(80); // ERROR_FILE_EXISTS
+        return 0;
+    }
+    match std::fs::copy(&from, &to) {
+        Ok(_) => 1,
+        Err(_) => {
+            set_last_error(ERROR_FILE_NOT_FOUND);
+            0
+        }
+    }
+}
+
+/// MoveFileA(from, to): both inside the game folder.
+fn move_file(c: &mut Cpu) -> u32 {
+    let (from, to) = (host_path(&cstr(arg(c, 0))), host_path(&cstr(arg(c, 1))));
+    if !inside_game(&from) || !inside_game(&to) {
+        log!("MoveFileA {} -> {}: outside the game folder, kept", from.display(), to.display());
+        set_last_error(5);
+        return 0;
+    }
+    if to.exists() {
+        set_last_error(183); // ERROR_ALREADY_EXISTS
+        return 0;
+    }
+    match std::fs::rename(&from, &to) {
+        Ok(()) => 1,
+        Err(_) => {
+            set_last_error(ERROR_FILE_NOT_FOUND);
+            0
+        }
+    }
+}
+
+/// GetTempFileNameA(folder, prefix, unique, out): folder\<3 of prefix><hex>.TMP; with unique 0
+/// the first name not taken (the file is made, as Windows does).
+fn get_temp_file_name(c: &mut Cpu) -> u32 {
+    let (dir, prefix, unique, out) = (cstr(arg(c, 0)), cstr(arg(c, 1)), arg(c, 2), arg(c, 3));
+    let prefix: String = prefix.chars().take(3).collect();
+    let dir = dir.trim_end_matches('\\');
+    let name = |n: u32| format!("{dir}\\{prefix}{n:X}.TMP");
+    let n = if unique != 0 {
+        unique & 0xffff
+    } else {
+        let n = (1..0xffff).find(|&n| !host_path(&name(n)).exists()).unwrap_or(1);
+        let path = host_path(&name(n));
+        if inside_game(&path) {
+            let _ = std::fs::File::create(&path);
+        }
+        n
+    };
+    put_cstr(out, &name(n), 260);
+    n
+}
+
+/// GetProfileIntA(section, key, default): win.ini has nothing.
+fn get_profile_int(c: &mut Cpu) -> u32 {
+    arg(c, 2)
+}
+
+/// LoadModule(name, parameters): no other programs run (ERROR_FILE_NOT_FOUND, below 32).
+fn load_module(c: &mut Cpu) -> u32 {
+    log!("LoadModule {:?}: not started", cstr(arg(c, 0)));
+    2
+}
+
+/// CreateProcessA: no other programs run (Mplayer, the setup).
+fn create_process(c: &mut Cpu) -> u32 {
+    log!("CreateProcessA {:?} {:?}: not started", cstr(arg(c, 0)), cstr(arg(c, 1)));
+    set_last_error(ERROR_FILE_NOT_FOUND);
+    0
+}
+
+/// WriteConsoleA(h, text, n, written, reserved): into our log.
+fn write_console(c: &mut Cpu) -> u32 {
+    let (p, n, written) = (arg(c, 1), arg(c, 2), arg(c, 3));
+    let text = String::from_utf8_lossy(mem().slice(p, n as usize)).into_owned();
+    log!("console: {}", text.trim_end());
+    if written != 0 {
+        mem().wr32(written, n);
+    }
+    1
+}
+
+/// GetConsoleMode / SetConsoleMode / ReadConsoleInputA: there is no console.
+fn no_console(_: &mut Cpu) -> u32 {
+    set_last_error(6); // ERROR_INVALID_HANDLE
+    0
+}
+
 /// GetDiskFreeSpaceA(root, sectors a cluster, bytes a sector, free clusters, clusters): 1 GB
 /// free of 2 GB.
 fn get_disk_free_space(c: &mut Cpu) -> u32 {
@@ -2068,6 +2186,19 @@ pub const IMPORTS: &[Import] = &[
     ("ResetEvent", 1, reset_event),
     ("PulseEvent", 1, pulse_event),
     ("CreateMutexA", 3, create_mutex),
+    ("ReleaseMutex", 1, release_mutex),
+    ("CopyFileA", 3, copy_file),
+    ("MoveFileA", 2, move_file),
+    ("GetTempFileNameA", 4, get_temp_file_name),
+    ("CreateProcessA", 10, create_process),
+    ("GetProfileIntA", 3, get_profile_int),
+    ("LoadModule", 2, load_module),
+    ("WriteConsoleA", 5, write_console),
+    ("GetConsoleMode", 2, no_console),
+    ("SetConsoleMode", 2, no_console),
+    ("ReadConsoleInputA", 4, no_console),
+    ("SetConsoleCtrlHandler", 2, ret1),
+    ("GetUserDefaultLangID", 0, get_user_default_lcid),
     ("WaitForSingleObject", 2, wait_for_single_object),
     ("WaitForMultipleObjects", 4, wait_for_multiple_objects),
     ("WaitForMultipleObjectsEx", 5, wait_for_multiple_objects),

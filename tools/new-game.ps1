@@ -2,7 +2,7 @@
 #   tools\new-game.ps1 -Name rust_metal -Title "Gun Metal" -Target C:\!Code2\rust_metal
 # -Name: the crate and program name (lower case, letters, digits, _);
 # -Title: the game's name as shown; -Target: the new folder (must not exist).
-# The framework (crates/recomp, crates/win32, crates/tools) is copied into the new project:
+# The framework (crates/recomp, crates/win32, crates/indeo, crates/tools) is copied into the new project:
 # the game owns its copy and changes it freely; recomp_kit's commit is noted in its PLAN.md.
 param(
     [Parameter(Mandatory)] [string] $Name,
@@ -17,7 +17,7 @@ Copy-Item -Recurse (Join-Path $kit 'template') $Target
 Copy-Item (Join-Path $kit 'LICENSE') $Target
 # the dependency versions recomp_kit was tested with
 Copy-Item (Join-Path $kit 'Cargo.lock') $Target
-foreach ($crate in 'recomp', 'win32', 'tools') {
+foreach ($crate in 'recomp', 'win32', 'indeo', 'tools') {
     $to = Join-Path $Target "crates\$crate"
     Copy-Item -Recurse (Join-Path $kit "crates\$crate") $to
     if (Test-Path "$to\target") { Remove-Item -Recurse -Force "$to\target" }

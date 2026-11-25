@@ -125,7 +125,20 @@ fn bsfr(a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.ret()
 }
 
-const SNIPPETS: [(&str, Snippet); 7] = [
+/// (p, x): ecx = [p] by les and edx = [p] by lds (offsets only); eax = x's al by aam 10 and
+/// ebx = ZF after it
+fn farptr(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.mov(eax, dword_ptr(esp + 4))?;
+    a.les(ecx, fword_ptr(eax))?;
+    a.lds(edx, fword_ptr(eax))?;
+    a.mov(eax, dword_ptr(esp + 8))?;
+    a.aam(10)?;
+    a.setz(bl)?;
+    a.movzx(ebx, bl)?;
+    a.ret()
+}
+
+const SNIPPETS: [(&str, Snippet); 8] = [
     ("mmx", mmx),
     ("ports", ports),
     ("segs", segs),
@@ -133,6 +146,7 @@ const SNIPPETS: [(&str, Snippet); 7] = [
     ("segmov", segmov),
     ("flags16", flags16),
     ("bsfr", bsfr),
+    ("farptr", farptr),
 ];
 
 #[test]
@@ -208,4 +222,14 @@ fn misc() {
         (0x77, 0x77, 1),
         "zero source"
     );
+
+    m.wr32(SCRATCH, 0x1234_5678);
+    m.wr32(SCRATCH + 4, 0x0023);
+    for x in [0u32, 7, 10, 99, 0xab, 0xff, 0x1234_56c8] {
+        let cpu = g.call(7, &[SCRATCH, x]);
+        assert_eq!((cpu.r[ECX], cpu.r[EDX]), (0x1234_5678, 0x1234_5678), "les, lds");
+        let lo = x & 0xff;
+        assert_eq!(cpu.r[EAX], x & !0xffff | (lo / 10) << 8 | lo % 10, "aam {x:#x}");
+        assert_eq!(cpu.r[EBX], (lo % 10 == 0) as u32, "aam ZF {x:#x}");
+    }
 }

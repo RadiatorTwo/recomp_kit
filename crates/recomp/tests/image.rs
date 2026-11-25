@@ -133,3 +133,21 @@ fn patch_checks_old_bytes() {
     assert!(img.patch(BASE + 0x9000, &[0], &[0]).is_err());
     assert!(img.patch(at, &[0xeb], &[0x90, 0x90]).is_err());
 }
+
+/// Watcom's sections: every virtual size 0 (the raw size is the size), and a .bss with a raw
+/// size but no raw data (offset 0): zeros, not the file's first bytes.
+#[test]
+fn watcom_sections() {
+    let mut d = dll();
+    let first = 0x40 + 24 + 0xe0;
+    for k in 0..3 {
+        d[first + 40 * k + 8..first + 40 * k + 12].fill(0);
+    }
+    // .reloc as the .bss: no raw data
+    d[first + 80 + 20..first + 80 + 24].fill(0);
+    let img = Image::parse(d);
+    assert!(img.is_code(BASE + 0x1004) && img.is_code(BASE + 0x11ff));
+    assert!(!img.is_code(BASE + 0x1200));
+    assert_eq!(img.u32(BASE + 0x1010), BASE + 0x1004);
+    assert_eq!(img.read(BASE + 0x3000, 4).unwrap(), [0, 0, 0, 0], ".bss is zeros");
+}

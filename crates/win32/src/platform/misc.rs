@@ -145,6 +145,77 @@ fn wsa_startup(c: &mut Cpu) -> u32 {
     0
 }
 
+// ---- Winsock: no sockets (network play is DirectPlay's; a game's own TCP/IP code finds none) --
+
+const INVALID_SOCKET: u32 = !0;
+const SOCKET_ERROR: u32 = !0;
+const WSAENETDOWN: u32 = 10050;
+
+fn socket(_: &mut Cpu) -> u32 {
+    INVALID_SOCKET
+}
+fn socket_error(_: &mut Cpu) -> u32 {
+    SOCKET_ERROR
+}
+fn wsa_get_last_error(_: &mut Cpu) -> u32 {
+    WSAENETDOWN
+}
+fn htonl(c: &mut Cpu) -> u32 {
+    arg(c, 0).swap_bytes()
+}
+fn htons(c: &mut Cpu) -> u32 {
+    (arg(c, 0) as u16).swap_bytes() as u32
+}
+/// inet_addr("a.b.c.d"): the address in network order, INADDR_NONE when it is not one.
+fn inet_addr(c: &mut Cpu) -> u32 {
+    match super::cstr(arg(c, 0)).parse::<std::net::Ipv4Addr>() {
+        Ok(a) => u32::from_le_bytes(a.octets()),
+        Err(_) => !0,
+    }
+}
+/// inet_ntoa(in_addr): "a.b.c.d" in a buffer of its own.
+fn inet_ntoa(c: &mut Cpu) -> u32 {
+    static BUF: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let buf = *BUF.get_or_init(|| super::alloc(16));
+    let s = std::net::Ipv4Addr::from(arg(c, 0).to_le_bytes()).to_string();
+    super::put_cstr(buf, &s, 16);
+    buf
+}
+/// gethostname(buf, n): the computer's name.
+fn gethostname(c: &mut Cpu) -> u32 {
+    super::put_cstr(arg(c, 0), crate::game::id().computer_name, arg(c, 1));
+    0
+}
+
+/// waveOutOpen: MMSYSERR_NODRIVER.
+fn no_wave_driver(_: &mut Cpu) -> u32 {
+    6
+}
+
+/// MMSYSERR_INVALHANDLE: there is no open device.
+fn wave_invalid_handle(_: &mut Cpu) -> u32 {
+    5
+}
+
+// ---- VERSION: no version resources of system files -------------------------------------------
+
+/// GetFileVersionInfoSizeA / GetFileVersionInfoA / VerQueryValueA: none (the file has no
+/// version resource).
+fn no_version(_: &mut Cpu) -> u32 {
+    super::set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
+    0
+}
+
+// ---- DirectPlay 1 ------------------------------------------------------------------------------
+
+/// DirectPlayCreate(guid, out, outer): no DirectPlay 1 service provider (DPERR_UNAVAILABLE).
+fn direct_play_create(c: &mut Cpu) -> u32 {
+    if arg(c, 1) != 0 {
+        mem().wr32(arg(c, 1), 0);
+    }
+    0x8877_0000 | 1000
+}
+
 /// DirectPlayLobbyCreateA(guid, lobby*, outer, data, size): no lobby (the game was not
 /// started by one); DPERR_UNAVAILABLE.
 fn direct_play_lobby_create(c: &mut Cpu) -> u32 {
@@ -176,5 +247,45 @@ pub const IMPORTS: &[Import] = &[
     ("GetOpenFileNameA", 1, get_open_file_name),
     ("WSAStartup", 2, wsa_startup),
     ("WSACleanup", 0, ret0),
+    // waveOut: no device (Smacker's own sound then plays nothing; the game's is DirectSound)
+    ("waveOutGetNumDevs", 0, ret0),
+    ("waveOutOpen", 6, no_wave_driver),
+    ("waveOutClose", 1, wave_invalid_handle),
+    ("waveOutGetID", 2, wave_invalid_handle),
+    ("waveOutPrepareHeader", 3, wave_invalid_handle),
+    ("waveOutUnprepareHeader", 3, wave_invalid_handle),
+    ("waveOutWrite", 3, wave_invalid_handle),
+    ("waveOutReset", 1, wave_invalid_handle),
+    ("waveOutSetVolume", 2, wave_invalid_handle),
+    ("WSAGetLastError", 0, wsa_get_last_error),
+    ("socket", 3, socket),
+    ("bind", 3, socket_error),
+    ("closesocket", 1, ret0),
+    ("ioctlsocket", 3, socket_error),
+    ("recv", 4, socket_error),
+    ("recvfrom", 6, socket_error),
+    ("send", 4, socket_error),
+    ("sendto", 6, socket_error),
+    ("htonl", 1, htonl),
+    ("ntohl", 1, htonl),
+    ("htons", 1, htons),
+    ("ntohs", 1, htons),
+    ("inet_addr", 1, inet_addr),
+    ("inet_ntoa", 1, inet_ntoa),
+    ("gethostname", 2, gethostname),
+    ("gethostbyname", 1, ret0),
+    ("GetFileVersionInfoSizeA", 2, no_version),
+    ("GetFileVersionInfoA", 4, no_version),
+    ("VerQueryValueA", 4, no_version),
+    ("DirectPlayCreate", 3, direct_play_create),
+    ("DirectPlayEnumerateA", 2, ret0),
+    ("mixerGetNumDevs", 0, super::cdaudio::mixer_get_num_devs),
+    ("mixerOpen", 5, super::cdaudio::mixer_open),
+    ("mixerClose", 1, super::cdaudio::mixer_close),
+    ("mixerGetDevCapsA", 3, super::cdaudio::mixer_get_dev_caps),
+    ("mixerGetLineInfoA", 3, super::cdaudio::mixer_get_line_info),
+    ("mixerGetLineControlsA", 3, super::cdaudio::mixer_get_line_controls),
+    ("mixerGetControlDetailsA", 3, super::cdaudio::mixer_get_control_details),
+    ("mixerSetControlDetails", 3, super::cdaudio::mixer_set_control_details),
     ("DirectPlayLobbyCreateA", 5, direct_play_lobby_create),
 ];

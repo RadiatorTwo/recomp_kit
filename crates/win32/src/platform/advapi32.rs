@@ -239,6 +239,24 @@ fn reg_open_key_ex(c: &mut Cpu) -> u32 {
     OK
 }
 
+/// RegOpenKeyA(key, sub key, out): RegOpenKeyExA's.
+fn reg_open_key(c: &mut Cpu) -> u32 {
+    let (h, sub, out) = (arg(c, 0), arg(c, 1), arg(c, 2));
+    let mut r = reg();
+    let Some(p) = r.path(h, sub) else {
+        return NOT_FOUND;
+    };
+    if trace() {
+        log!("reg: open {p}");
+    }
+    if !r.exists(&p) {
+        return NOT_FOUND;
+    }
+    let k = r.open_key(p);
+    mem().wr32(out, k);
+    OK
+}
+
 fn reg_create_key_ex(c: &mut Cpu) -> u32 {
     let (h, sub, out, disp) = (arg(c, 0), arg(c, 1), arg(c, 7), arg(c, 8));
     let mut r = reg();
@@ -335,6 +353,7 @@ fn get_user_name(c: &mut Cpu) -> u32 {
 }
 
 pub const IMPORTS: &[Import] = &[
+    ("RegOpenKeyA", 3, reg_open_key),
     ("RegOpenKeyExA", 5, reg_open_key_ex),
     ("RegCreateKeyExA", 9, reg_create_key_ex),
     ("RegCloseKey", 1, reg_close_key),

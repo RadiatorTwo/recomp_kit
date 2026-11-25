@@ -402,7 +402,7 @@ fn pixel_format(p: u32, bpp: u32) {
     }
 }
 
-/// The display modes offered: the game's resolution list (index 0-9) at 16 bits.
+/// The display modes offered: the game's resolution list (index 0-9) at 8 and 16 bits.
 const MODES: [(u32, u32); 11] = [
     (320, 240),
     (400, 300),
@@ -420,10 +420,13 @@ const MODES: [(u32, u32); 11] = [
 fn dd_enum_display_modes(c: &mut Cpu) -> u32 {
     let (ctx, cb) = (arg(c, 3), arg(c, 4));
     let desc = alloc(108);
-    for (w, h) in MODES {
-        mode_desc(desc, w, h, 16);
-        if guest_call(c, cb, &[desc, ctx]) == 0 {
-            break;
+    // each at 8 bits (palettes: Motorhead's menu) and 16
+    'modes: for (w, h) in MODES {
+        for bpp in [8, 16] {
+            mode_desc(desc, w, h, bpp);
+            if guest_call(c, cb, &[desc, ctx]) == 0 {
+                break 'modes;
+            }
         }
     }
     free(desc);
@@ -571,6 +574,10 @@ fn s_query_interface(c: &mut Cpu) -> u32 {
         // IDirectDrawSurface4 only for DirectX 6 checks (GetDXVersion): its methods take
         // DDSURFACEDESC2, which this table does not know
         0x6c14_db81 | 0x5780_5885 | 0xda04_4e00 | 0x0b2b_8630 => {
+            // a reference of its own (Motorhead releases the first interface after the query)
+            if let Some(s) = dd().surfaces.get_mut(&this) {
+                s.refs += 1;
+            }
             mem().wr32(out, this);
             OK
         }
@@ -948,9 +955,32 @@ fn s_get_clipper(c: &mut Cpu) -> u32 {
     OK
 }
 
+/// GetDC: the surface itself stands for its device context (GDI draws into it: StretchDIBits,
+/// Smacker's videos).
 fn s_get_dc(c: &mut Cpu) -> u32 {
-    mem().wr32(arg(c, 1), super::gdi32::SCREEN_DC);
+    let this = arg(c, 0);
+    let dc = if dd().surfaces.contains_key(&this) {
+        this
+    } else {
+        super::gdi32::SCREEN_DC
+    };
+    mem().wr32(arg(c, 1), dc);
     OK
+}
+
+/// ReleaseDC: what GDI drew into the primary surface is shown.
+fn s_release_dc(c: &mut Cpu) -> u32 {
+    let d = dd();
+    if arg(c, 0) == d.primary {
+        changed(&d);
+    }
+    OK
+}
+
+/// The pixels of the surface behind a device context from GetDC: (address, width, height,
+/// pitch, bits per pixel), 16-bit pixels being 555.
+pub fn surface_of_dc(dc: u32) -> Option<(u32, u32, u32, u32, u32)> {
+    dd().surfaces.get(&dc).map(|s| (s.pixels, s.w, s.h, s.pitch, s.bpp))
 }
 
 fn s_get_dd_interface(c: &mut Cpu) -> u32 {
@@ -989,7 +1019,7 @@ static SURFACE: &[Import] = &[
     ("IDirectDrawSurface::Initialize", 3, ok),
     ("IDirectDrawSurface::IsLost", 1, ok),
     ("IDirectDrawSurface::Lock", 5, s_lock),
-    ("IDirectDrawSurface::ReleaseDC", 2, ok),
+    ("IDirectDrawSurface::ReleaseDC", 2, s_release_dc),
     ("IDirectDrawSurface::Restore", 1, ok),
     ("IDirectDrawSurface::SetClipper", 2, s_set_clipper),
     ("IDirectDrawSurface::SetColorKey", 3, s_set_color_key),

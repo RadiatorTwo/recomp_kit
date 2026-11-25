@@ -54,12 +54,20 @@ impl Image {
                     .take_while(|&&b| b != 0)
                     .map(|&b| b as char)
                     .collect();
+                let (vsize, mut rsize, raw) =
+                    (le32(&data, o + 8), le32(&data, o + 16), le32(&data, o + 20));
+                // Watcom leaves every virtual size 0 (the raw size is the size), and gives
+                // its .bss a raw size but no raw data (offset 0): uninitialised, zeros
+                let vsize = if vsize == 0 { rsize } else { vsize };
+                if raw == 0 {
+                    rsize = 0;
+                }
                 Section {
                     name,
-                    vsize: le32(&data, o + 8),
+                    vsize,
                     va: base + le32(&data, o + 12),
-                    rsize: le32(&data, o + 16),
-                    raw: le32(&data, o + 20),
+                    rsize,
+                    raw,
                     exec: le32(&data, o + 36) & 0x2000_0020 != 0,
                 }
             })

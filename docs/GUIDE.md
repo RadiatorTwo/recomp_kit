@@ -67,7 +67,9 @@ game..." im Splash).
 Der Recompiler übersetzt Funktion für Funktion. Zwei Wege:
 
 - **Ohne Ghidra** (Standard der Vorlage): `find_functions` folgt Aufrufen ab dem
-  Einsprungpunkt und sucht Code-Adressen in Daten. Für Future Cop: 1778 von 2176.
+  Einsprungpunkt und sucht Code-Adressen in Daten. Für Future Cop: 1778 von 2176. Watcom-EXEs
+  (Sektionen BEGTEXT/DGROUP) gehen auch (Motorhead: ~2200). Mit DLLs des Spiels
+  (`Game::dlls`) gehören `platform::module::seeds()` zu den Einsprüngen.
 - **Mit Ghidra** (genauer, empfohlen sobald es ernst wird): EXE in Ghidra analysieren, Funktionen
   als JSON exportieren (`[{"addr": "0x401000", "size": 123, "name": "FUN_00401000"}, ...]`)
   nach `data/functions.json`, in `functions()` `load_functions(include_str!(...))` nehmen.
@@ -412,8 +414,9 @@ CapFrameX sichtbar).
 ## 9. Ton, Video, Netzwerk, Installation
 
 - DirectSound und PlaySound: fertig (`dsound.rs`, Mischung auf cpal).
-- MPEG-1-Videos über DirectShow: fertig (`dshow.rs`, `mpeg/`). Andere Formate (Bink, Smacker,
-  AVI) fehlen noch.
+- MPEG-1-Videos über DirectShow: fertig (`dshow.rs`, `mpeg/`). Smacker: die mitgelieferte
+  `SMACKW32.DLL` mit der EXE kompilieren (`Game::dlls`, Basis außerhalb unseres Heaps,
+  Vorbild motorhead_rust); ihr Ton über waveOut fehlt noch. Bink und AVI fehlen noch.
 - DirectPlay (TCP/UDP): fertig für das, was Future Cop braucht (`dplay.rs`).
 - Installation: `Identity::required` (was neben der EXE liegen muss), `video_marker` (eine
   Datei im Video-Ordner der CD). Das Setup holt alles aus einem CD-Image (.iso/.bin, auch UDF).
@@ -449,6 +452,9 @@ keine Umgebungsvariable: Menü-Box, Registry oder ein Cargo-Feature für Test-Bu
 ## Wenn etwas hängt oder abstürzt
 
 1. Absturz: Meldung nennt Funktion und Adresse → `rtools dis <exe> <adresse>`.
+   "call to unknown address" mit einer Adresse im Heap: das Spiel springt in Code aus seinen
+   Daten-Dateien (Motorhead: Schriften, Sprites). Die Spiel-Funktionen, die dorthin springen,
+   durch Hooks ersetzen und den geladenen Code interpretieren (LESSONS, Discovery).
 2. Hängt: `<PREFIX>_WATCH=1` → letzter Import-Aufruf; oft ein Thread, der auf einen anderen
    wartet (siehe docs/LESSONS.md, "Threads").
 3. Falsches Ergebnis einer Funktion: Differenztest, oder die Funktion als Test-Schnipsel
