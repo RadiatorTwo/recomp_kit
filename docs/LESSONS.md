@@ -399,6 +399,11 @@ White. Most apply to any game of that time. Add new ones here.
   everything" flag (Nuclear Strike `[0x51f1b9]`, read by HUDUserDraw_) and set it for the next
   two HUD frames (one per buffer). A test passed at 640x480 only by luck: an extra picture
   between logic frames happened to draw the panel a second time.
+- What the 3D lets fall onto such a panel stays there. A game that cuts its polygons to the
+  view in software may not cut everything: Recoil's particles are tested at their centre only
+  and drawn as squares, so one near the edge reaches over the HUD's bars. Cut Glide's
+  triangles to the view's rows while the 3D is drawn (`glide::set_rows`), and turn the cut off
+  for anything the game draws outside the view on purpose (Recoil's target zoom box).
 
 ## Game checks
 
