@@ -27,6 +27,7 @@ pub mod menu;
 pub mod menupad;
 pub mod misc;
 pub mod module;
+pub mod options;
 pub mod record;
 pub mod sample;
 pub mod savestate;

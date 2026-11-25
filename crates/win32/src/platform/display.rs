@@ -33,11 +33,16 @@ pub fn chosen() -> Option<(u32, u32)> {
     (w >= 320 && h >= 200).then_some((w, h))
 }
 
-/// Preferences' OK: saved, and the window takes the size.
-pub fn set_chosen(size: Option<(u32, u32)>) {
+/// Save the chosen size (the settings menu: the window takes it itself).
+pub fn remember_chosen(size: Option<(u32, u32)>) {
     let v = size.map_or(0, |(w, h)| w << 16 | h);
     CHOSEN.store(v, Ordering::Relaxed);
     advapi32::set_value("", "RenderSize", 4, &v.to_le_bytes());
+}
+
+/// Preferences' OK: saved, and the window takes the size.
+pub fn set_chosen(size: Option<(u32, u32)>) {
+    remember_chosen(size);
     if let Some((w, h)) = size {
         window::set_window_size(w, h);
     }

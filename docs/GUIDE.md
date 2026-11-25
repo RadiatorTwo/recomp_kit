@@ -411,6 +411,24 @@ Bildwiederholrate oder darüber (oder unbegrenzt), Bilder direkt nacheinander ze
 Swap takten lassen; die eigene Uhr neben der des Bildschirms verpasst sonst Refreshes (nur in
 CapFrameX sichtbar).
 
+## 8f. Eigenes Einstellungsmenü
+
+`platform::options`: ein Menü des Ports über dem Spiel (Overlay im Stil der Dialoge), auf
+`Game::options_key` (F10; das Spiel sieht die Taste nicht, eine wählen, die es nicht nutzt).
+Das Spiel gibt seine Seiten mit `Game::options` an; ohne Seiten gibt es kein Menü. Fertige
+Zeilen: `fullscreen`, `window_size` (Auflösung), `anti_aliasing`, `textures`,
+`frame_rate_display`; eigene mit `Row::on_off` / `Row::choice` (Werte sofort benutzen und
+speichern, meist `Setting`). Was ein Spiel braucht, hängt vom Spiel ab: Breitbild nur mit
+8c, Effekte erst, wenn es sie gibt, die Belegung mit dem Gamepad.
+
+Solange es offen ist, wartet `window::pump` darin: das Spiel steht, die Uhr des Gastes wird
+danach zurückgesetzt (GetTickCount, timeGetTime, QPC laufen nicht weiter). Die feste
+Logik-Uhr (`tween::LogicClock`) springt danach auf jetzt, ohne nachzuholen. Liest ein Spiel
+in der Mission beide Uhren, die Pause prüfen wie in 8b, Punkt 8 (Missionszeit, Timer).
+Tasten und Knöpfe, die losgelassen werden, bekommt das Spiel trotzdem; die Mausbewegung für
+DirectInput nicht. Testen: Menü in Mission und Hauptmenü auf und zu, die Missionsuhr des
+Spiels darf nicht um die Pause weiterlaufen.
+
 ## 9. Ton, Video, Netzwerk, Installation
 
 - DirectSound und PlaySound: fertig (`dsound.rs`, Mischung auf cpal).

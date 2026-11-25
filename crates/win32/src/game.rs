@@ -123,6 +123,16 @@ pub trait Game: Sync {
         "F12"
     }
 
+    /// The pages of the port's settings menu (`options`): none, no menu.
+    fn options(&self) -> Vec<crate::platform::options::Page> {
+        Vec::new()
+    }
+
+    /// The key that opens and closes the settings menu (as `fps_key`). The game does not see it.
+    fn options_key(&self) -> &'static str {
+        "F10"
+    }
+
     /// Debug commands by name in `<PREFIX>_INPUT` ("30000:win") and on Shift+F<n>.
     fn cheats(&self) -> &'static [Cheat] {
         &[]

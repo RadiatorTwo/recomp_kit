@@ -65,6 +65,8 @@ struct App {
     pad_focus: bool,
     /// where the next picture goes (a mark of <PREFIX>_RECORD, F11)
     mark_shot: Option<String>,
+    /// the port's settings menu while it is open (`options`)
+    options: Option<super::options::Menu>,
 }
 
 struct Host {
@@ -141,6 +143,7 @@ fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> R {
                     cursor_hidden: false,
                     pad_focus: false,
                     mark_shot: None,
+                    options: None,
                 },
             }
         });
@@ -182,6 +185,20 @@ pub fn pump(wait: Duration) {
         }
         h.app.catch_cursor();
         scripted(&mut h.app.input);
+        // the settings menu: the game stands still while it is open, its clock too
+        h.app.options_input();
+        if h.app.options.is_some() {
+            let clock = super::kernel32::guest_us();
+            while h.app.options.is_some() {
+                h.app.catch_cursor();
+                let _ = h
+                    .event_loop
+                    .pump_app_events(Some(Duration::from_millis(16)), &mut h.app);
+                scripted(&mut h.app.input);
+                h.app.options_input();
+            }
+            super::kernel32::set_guest_us(clock);
+        }
         // a pad's Start is the Escape key (pause)
         if let Some(down) = super::dinput::poll() {
             let (vk, scan) = vk_of(KeyCode::Escape).unwrap();
@@ -379,6 +396,22 @@ const FN: [KeyCode; 12] = [
     KeyCode::F11,
     KeyCode::F12,
 ];
+
+/// The virtual key of `Game::options_key` (the settings menu), when the game has a menu.
+fn options_vk() -> Option<u8> {
+    static KEY: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    *KEY.get_or_init(|| {
+        if crate::game::game().options().is_empty() {
+            return None;
+        }
+        let name = crate::game::game().options_key();
+        let key = key_by_name(name).and_then(vk_of).map(|k| k.0);
+        if key.is_none() && !name.is_empty() {
+            log!("options_key: unknown key {name}");
+        }
+        key
+    })
+}
 
 /// The key of `Game::fps_key`.
 fn fps_key() -> Option<KeyCode> {
@@ -1029,6 +1062,119 @@ pub fn fit(w: u32, h: u32, ww: u32, wh: u32) -> (f64, f64, f64) {
 }
 
 impl App {
+    /// The settings menu's input from the queue: its key opens and closes it; while it is
+    /// open the rest goes to it, but keys and buttons going up (and the window's close and
+    /// focus) are left for the game.
+    fn options_input(&mut self) {
+        let Some(key) = options_vk() else {
+            return;
+        };
+        if self.options.is_none()
+            && !self
+                .input
+                .iter()
+                .any(|i| matches!(i, Input::Key { vk, .. } if *vk == key))
+        {
+            return;
+        }
+        let was = self.options.is_some();
+        let mut rest = VecDeque::new();
+        let mut actions = Vec::new();
+        while let Some(i) = self.input.pop_front() {
+            if let Input::Key { vk, down, repeat, .. } = i {
+                if vk == key {
+                    if down && !repeat {
+                        self.toggle_options();
+                    }
+                    continue;
+                }
+            }
+            let Some(m) = &mut self.options else {
+                rest.push_back(i);
+                continue;
+            };
+            let i = match i {
+                Input::Close => {
+                    self.options = None;
+                    rest.push_back(i);
+                    continue;
+                }
+                Input::Key { down: false, .. } | Input::Button(_, false) | Input::Focus(_) => {
+                    rest.push_back(i);
+                    continue;
+                }
+                // the game's screen is the overlay's 4:3
+                Input::Move(x, y) => {
+                    let (sw, sh) = SCREEN.lock().unwrap().unwrap_or((640, 480));
+                    Input::Move(
+                        x * super::dialog::OV_W / sw.max(1) as i32,
+                        y * super::dialog::OV_H / sh.max(1) as i32,
+                    )
+                }
+                i => i,
+            };
+            if m.input(&i, &mut actions).is_err() {
+                self.options = None;
+            }
+        }
+        self.input = rest;
+        for a in actions {
+            self.options_action(a);
+        }
+        match &self.options {
+            Some(m) => {
+                let px = m.render(crate::game::game().options_key());
+                self.set_overlay(Some(px));
+            }
+            None if was => self.set_overlay(None),
+            None => {}
+        }
+    }
+
+    fn toggle_options(&mut self) {
+        if self.options.take().is_some() {
+            return;
+        }
+        let display = self
+            .window
+            .as_ref()
+            .and_then(|w| w.current_monitor())
+            .map_or((u32::MAX, u32::MAX), |m| (m.size().width, m.size().height));
+        let full = self.window.as_ref().is_some_and(|w| w.fullscreen().is_some());
+        self.options = Some(super::options::Menu::new(
+            crate::game::game().options(),
+            display,
+            full,
+        ));
+    }
+
+    fn options_action(&mut self, a: super::options::Action) {
+        use super::options::Action;
+        let Some(win) = &self.window else { return };
+        match a {
+            Action::Fullscreen(on) => {
+                win.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
+                super::display::remember_fullscreen(on);
+            }
+            Action::Window(size) => {
+                super::display::remember_chosen(size);
+                if let Some((w, h)) = size.filter(|_| win.fullscreen().is_none()) {
+                    let _ = win.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                }
+            }
+        }
+    }
+
+    /// The overlay (ARGB, `dialog::OV_W` x `OV_H`), drawn at once.
+    fn set_overlay(&mut self, px: Option<Vec<u32>>) {
+        if let Some(gl) = &mut self.gl {
+            let (w, h) = (super::dialog::OV_W as u32, super::dialog::OV_H as u32);
+            gl.overlay(px.as_ref().map(|p| (&p[..], w, h)));
+            self.overlay_changed = true;
+            self.draw();
+        }
+    }
+
     fn frame(&mut self, px: &[u32], w: u32, h: u32) {
         match &mut self.gl {
             Some(gl) => {
@@ -1118,7 +1264,9 @@ impl App {
     fn catch_cursor(&mut self) {
         let Some(win) = &self.window else { return };
         // a scripted run (<PREFIX>_INPUT, tests) leaves the user's mouse free
-        let hidden = self.focused && CURSOR_HIDDEN.load(Ordering::Relaxed);
+        // the settings menu takes the mouse
+        let hidden =
+            self.focused && CURSOR_HIDDEN.load(Ordering::Relaxed) && self.options.is_none();
         let catch = hidden && !CURSOR_DRAWN.load(Ordering::Relaxed) && script_text().is_empty();
         // hidden while a gamepad chooses in the menu too (`menupad`)
         let hide = hidden || self.focused && self.pad_focus;
@@ -1183,7 +1331,7 @@ impl ApplicationHandler for App {
         // DirectInput's mouse is relative: the raw motion, while the window has the focus (a
         // scripted run moves it by its own items)
         if let winit::event::DeviceEvent::MouseMotion { delta } = e {
-            if self.focused && script_text().is_empty() {
+            if self.focused && script_text().is_empty() && self.options.is_none() {
                 super::dinput::motion(delta.0.round() as i32, delta.1.round() as i32);
             }
         }
