@@ -439,6 +439,11 @@ text. It is best to change the keys in the game's own table (where it reads them
 there: `advapi32::set_value_at` for a key other than the port's, see rustcoil `controls.rs`).
 The pad works the menu itself (D-pad, A, B, X, LB/RB for pages, Start closes). Buttons in the
 mission work as in rustcoil `gamepad.rs` (`Pad::buttons`, pressed as the command's key).
+Analog controls (a racing game): find the function the game asks for a control's strength
+and hook it, answering from `Pad::stick` and `Pad::triggers` (0..1, recorded as
+`pad@RT=0.4`); a squared stick steers less twitchily (motorhead_rust `pad.rs`).
+`Game::pad_buttons` changes which buttons the game sees (Motorhead's menus confirm with the
+first button: A is reported there).
 
 ## 9. Sound, video, network, installation
 
