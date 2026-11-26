@@ -5,15 +5,15 @@ recompiled to native code with Cranelift when the program starts, and Windows, D
 Glide are implemented in Rust (winit, OpenGL, cpal, gilrs). Ports run on 64-bit Windows and
 Linux. Extracted from [Future Cop: L.A.P.D. in Rust](https://github.com/RadiatorTwo/future_rust_cop).
 
-- `crates/recomp` — discovery, x86 → Cranelift lifter (x87 included), self-modifying code, JIT
+- `crates/recomp`: discovery, x86 → Cranelift lifter (x87 included), self-modifying code, JIT
   with a cache, runtime
-- `crates/win32` — kernel32, user32, gdi32, advapi32, DirectDraw, DirectSound, DirectInput,
-  DirectShow (MPEG-1), DirectPlay, Glide; dialogs, gamepad, setup from CD images
-- `crates/tools` — `rtools`: imports, unsupported instructions, disassembly, SMC, dialogs, CD
+- `crates/win32`: kernel32, user32, gdi32, advapi32, DirectDraw, DirectSound, DirectInput,
+  DirectShow (MPEG-1), DirectPlay, Glide, dialogs, gamepad, setup from CD images
+- `crates/tools`: the `rtools` program for imports, unsupported instructions, disassembly, SMC, dialogs, CD
   images, movies, version maps
-- `template/` — a new game project (`tools/new-game.ps1`); the project gets its own copy of
+- `template/`: a new game project (`tools/new-game.ps1`). The project gets its own copy of
   the crates, it does not depend on this repository
-- `docs/GUIDE.md` — how to port a game step by step (German), `docs/LESSONS.md` — known traps
+- `docs/GUIDE.md`: how to port a game step by step. `docs/LESSONS.md`: known traps
 
 A game describes itself with `win32::Identity` and adds what it needs through the
 `win32::Game` trait:
@@ -25,8 +25,8 @@ fn main() {
 }
 ```
 
-Only code is here. Games and their files belong to their owners; players bring their own copy.
+Only code is here. Games and their files belong to their owners. Players bring their own copy.
 
 MIT license. The MPEG-1 decoder is a Rust port of pl_mpeg by Dominic Szablewski (MIT). The
 Indeo 5 decoder (`crates/indeo`) is a port of FFmpeg's and stays LGPL-2.1-or-later
-(`crates/indeo/COPYING`); it is a crate of its own so the rest stays MIT.
+(`crates/indeo/COPYING`). It is a crate of its own so the rest stays MIT.

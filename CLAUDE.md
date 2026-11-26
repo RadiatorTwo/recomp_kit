@@ -17,8 +17,10 @@ EXE's function list belongs in the game's repository, not here).
 ## The user
 
 - New to reverse engineering; explain in plain words, give a recommendation, not a survey.
-- Speaks German (docs/GUIDE.md is German, the code and its comments English); short sessions,
-  watches usage limits.
+- Speaks German (answer in German); short sessions, watches usage limits.
+- recomp_kit is for other people porting their games, not a personal tool: everything in the
+  repository (README, docs, code, comments) is in English and written for those readers,
+  never with this user in mind.
 - Confirm before anything outward-facing or destructive (pushing, deleting).
 - Clean Rust first, performance later. Never run cargo fmt (it reformats whole crates).
 - No Co-Authored-By or other AI attribution in commits.

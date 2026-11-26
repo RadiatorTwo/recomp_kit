@@ -1,502 +1,496 @@
-# Anleitung: ein altes Windows-Spiel mit recomp_kit portieren
+# Guide: porting an old Windows game with recomp_kit
 
-Für Spiele der späten 90er / frühen 2000er: 32-Bit-Windows-EXE (x86), DirectX 3–7 oder Glide,
-DirectSound, DirectInput. Das Spiel wird nicht emuliert: Beim Start wird die EXE des Spielers
-in Maschinencode des eigenen Rechners übersetzt (Cranelift), und Windows/DirectX ersetzt
-Rust-Code. Jeder Schritt hat ein **Fertig, wenn …**. Erst dann weiter.
+For games of the late 90s and early 2000s: a 32-bit Windows EXE (x86), DirectX 3 to 7 or
+Glide, DirectSound, DirectInput. The game is not emulated. When the program starts, the
+player's EXE is translated into machine code for their own computer (Cranelift), and Rust code
+takes the place of Windows and DirectX. Every step has a **Done when ...**. Only then go on.
 
-Das neue Projekt bekommt eine **Kopie** des Frameworks (`crates/recomp`, `crates/win32`,
-`crates/tools`). Sie gehört dem Spiel: ändern, wo das Spiel es braucht. Werkzeuge:
-`cargo build --release -p tools` im Spiel-Projekt gibt `target/release/rtools`.
+The new project gets a **copy** of the framework (`crates/recomp`, `crates/win32`,
+`crates/tools`). The copy belongs to the game: change it wherever the game needs it. Tools:
+`cargo build --release -p tools` in the game project gives `target/release/rtools`.
 
 ---
 
-## 0. Spielregeln (vor allem anderen)
+## 0. Ground rules (before anything else)
 
-- Nur **Code** wird geteilt. Spieler bringen ihre eigene Spiel-Kopie mit.
-- **Nie committen**: die EXE, Daten aus ihr, übersetzten Code, Texturen, Sounds, Videos.
-  `game_files/`, `*.iso`, `*.bin` sind in `.gitignore`.
-- Erlaubt: Adressen, Namen und eigene Beschreibungen (`data/symbols.txt`), Funktionsgrenzen
-  aus Ghidra (`data/functions.json`), Adress-Karten zwischen Versionen.
+- Only **code** is shared. Players bring their own copy of the game.
+- **Never commit** the EXE, data from it, translated code, textures, sounds or videos.
+  `game_files/`, `*.iso` and `*.bin` are in `.gitignore`.
+- Allowed: addresses, names and your own descriptions (`data/symbols.txt`), function bounds
+  from Ghidra (`data/functions.json`), address maps between versions.
 
-### Ziel: besser als das Original, nicht gleich
+### Goal: better than the original, not the same
 
-Der Port ist kein Emulator. Er soll nicht zu 100 % so laufen wie das Original auf seiner
-Hardware, sondern **besser**: schneller, ruhiger, ohne die Fehler und Grenzen der damaligen
-Technik. Drei Regeln folgen daraus:
+The port is not an emulator. It is not meant to run 100 % like the original on its hardware,
+but **better**: faster, smoother, without the faults and limits of the technology of the time.
+Three rules follow from that:
 
-1. **Fehlerhafte Spiel-Funktionen haben keinen Bestand.** Produzieren sie Fehler (falsche
-   Sortierung, Grafikfehler, Abstürze), dürfen sie durch neuen Rust-Code ersetzt werden,
-   statt den Fehler mit immer mehr Aufwand zu umgehen.
-2. **Spiel-Code darf verändert werden, wenn es einen Vorteil bringt und das Ergebnis
-   identisch ist.** Eine heiße Funktion (Projektion, Polygon-Aufbau) läuft in Rust, wenn sie
-   dasselbe liefert: dieselben Operationen in derselben Reihenfolge, dieselbe Rundung, auch
-   die Eigenheiten des Originals. Jede solche Ersetzung bekommt einen Prüf-Schalter
-   (`<PREFIX>_..._CHECK=1`: beide laufen, Unterschiede werden geloggt) und wird erst
-   übernommen, wenn über Millionen Aufrufe nichts abweicht (Abschnitt 8a).
-3. **Grenzen der damaligen Technik dürfen behoben werden.** Was nur der Hardware von damals
-   geschuldet ist, wird besser gemacht, solange das Spiel dasselbe Spiel bleibt (seine Logik,
-   sein Ablauf, sein Aussehen in der Absicht): feste Logik-Rate mit Zwischenbildern statt
-   30/60 fps (8b), Breitbild (8c), hohe Auflösung, MSAA, Texturfilter, ein Tiefenpuffer statt
-   einer Ordering Table, die falsch sortiert, Sperren auf 640x480 (8d), Vsync (8e), Ruckeln
-   durch ganzzahlige Kamera-Winkel (8b Punkt 7), Leerlauf-Schleifen, die einen Kern verheizen
-   (LESSONS, Threads). Danach moderne Effekte (Abschnitt 11), als Einstellungen, die man
-   ausschalten kann.
+1. **Faulty game functions have no standing.** If they produce faults (wrong sorting,
+   graphics glitches, crashes), they may be replaced by new Rust code instead of working
+   around the fault with more and more effort.
+2. **Game code may be changed when it brings an advantage and the result is identical.** A
+   hot function (projection, polygon setup) runs in Rust if it gives the same result: the
+   same operations in the same order, the same rounding, the original's quirks too. Every such
+   replacement gets a check switch (`<PREFIX>_..._CHECK=1`: both run, differences are logged)
+   and is only taken over when nothing differs over millions of calls (section 8a).
+3. **Limits of the technology of the time may be lifted.** Whatever is only owed to the
+   hardware of back then is made better, as long as the game stays the same game (its logic,
+   its flow, its intended look): a fixed logic rate with pictures in between instead of 30/60
+   fps (8b), widescreen (8c), high resolution, MSAA, texture filtering, a depth buffer instead
+   of an ordering table that sorts wrong, locks to 640x480 (8d), vsync (8e), stutter from
+   whole-number camera angles (8b point 7), idle loops that burn a core (LESSONS, Threads).
+   After that come modern effects (section 11), as settings that can be switched off.
 
-## 1. Projekt anlegen
+## 1. Create the project
 
 ```powershell
-C:\!Code2\recomp_kit\tools\new-game.ps1 -Name gun_metal -Title "Gun Metal" -Target C:\!Code2\gun_metal
+..\recomp_kit\tools\new-game.ps1 -Name gun_metal -Title "Gun Metal" -Target ..\gun_metal
 ```
 
-Das Skript kopiert das Framework nach `crates/` und notiert in `PLAN.md`, von welchem
-recomp_kit-Commit. Dann im neuen Projekt:
+The script copies the framework into `crates/` and notes in `PLAN.md` which recomp_kit commit
+it came from. Then, in the new project:
 
-1. Spiel-EXE nach `game_files/<Ordner>/` legen (CD-Inhalt oder installierter Ordner).
-2. SHA-256 der EXE in `VERSIONS` in `src/main.rs` eintragen:
-   `certutil -hashfile GAME.EXE SHA256` (Kleinbuchstaben, ohne Leerzeichen).
-3. `Identity` ausfüllen: Titel, EXE-Name, Ordner, Registry-Schlüssel (Strings in der EXE:
-   `rtools imports` zeigt, ob `RegOpenKeyExA` benutzt wird; der Schlüssel steht im Klartext in
-   der EXE, z. B. mit `strings`), CD-Label falls das Spiel die CD prüft.
+1. Put the game's EXE into `game_files/<folder>/` (the CD's content or an installed folder).
+2. Enter the EXE's SHA-256 in `VERSIONS` in `src/main.rs`:
+   `certutil -hashfile GAME.EXE SHA256` (lower case, no spaces).
+3. Fill in `Identity`: title, EXE name, folder, registry key and the CD label if the game
+   checks for its CD. `rtools imports` shows whether `RegOpenKeyExA` is used. The key itself
+   is plain text in the EXE (find it with `strings`, for example).
 
-**Fertig, wenn** `cargo build --release` läuft und das Programm die EXE findet ("Compiling the
-game..." im Splash).
+**Done when** `cargo build --release` works and the program finds the EXE ("Compiling the
+game..." in the splash).
 
-## 2. Funktionen finden
+## 2. Find the functions
 
-Der Recompiler übersetzt Funktion für Funktion. Zwei Wege:
+The recompiler translates one function at a time. There are two ways:
 
-- **Ohne Ghidra** (Standard der Vorlage): `find_functions` folgt Aufrufen ab dem
-  Einsprungpunkt und sucht Code-Adressen in Daten. Für Future Cop: 1778 von 2176. Watcom-EXEs
-  (Sektionen BEGTEXT/DGROUP) gehen auch (Motorhead: ~2200). Mit DLLs des Spiels
-  (`Game::dlls`) gehören `platform::module::seeds()` zu den Einsprüngen.
-- **Mit Ghidra** (genauer, empfohlen sobald es ernst wird): EXE in Ghidra analysieren, Funktionen
-  als JSON exportieren (`[{"addr": "0x401000", "size": 123, "name": "FUN_00401000"}, ...]`)
-  nach `data/functions.json`, in `functions()` `load_functions(include_str!(...))` nehmen.
+- **Without Ghidra** (the template's default): `find_functions` follows calls from the entry
+  point and looks for code addresses in data. For Future Cop that gives 1778 of 2176. Watcom
+  EXEs (sections BEGTEXT/DGROUP) work too (Motorhead: about 2200). With DLLs of the game
+  (`Game::dlls`), `platform::module::seeds()` belong to the entry points.
+- **With Ghidra** (more exact, recommended once it gets serious): analyse the EXE in Ghidra,
+  export the functions as JSON (`[{"addr": "0x401000", "size": 123, "name": "FUN_00401000"}, ...]`)
+  to `data/functions.json` and use `load_functions(include_str!(...))` in `functions()`.
 
-Prüfen: `rtools missing game_files\X\GAME.EXE` (zählt Funktionen, listet nicht unterstützte
-Instruktionen), `rtools dis <exe> <adresse>` (eine Funktion so, wie die Discovery sie sieht).
+To check: `rtools missing game_files\X\GAME.EXE` counts the functions and lists unsupported
+instructions. `rtools dis <exe> <address>` shows one function the way discovery sees it.
 
-**Fertig, wenn** `rtools missing` eine plausible Zahl Funktionen meldet.
+**Done when** `rtools missing` reports a plausible number of functions.
 
-## 3. Fehlende Instruktionen
+## 3. Missing instructions
 
-`rtools missing` listet Instruktionen, die der Lifter (`crates/recomp/src/lift.rs`) noch nicht
-kann. Jede kommt in die Kopie im Spiel-Projekt, mit einem Test in
-`crates/recomp/tests/` (Vorbild: `misc.rs`, `x87.rs`; der Test baut ein kleines x86-Stück mit
-iced, übersetzt es und vergleicht mit dem erwarteten Ergebnis). FPU-Befehle: `lift/x87.rs`.
-Neue Instruktionen helfen jedem Spiel: zusätzlich ins recomp_kit übernehmen.
+`rtools missing` lists instructions the lifter (`crates/recomp/src/lift.rs`) cannot handle yet.
+Each one goes into the copy in the game project, with a test in `crates/recomp/tests/`
+(examples: `misc.rs`, `x87.rs`). Such a test builds a small piece of x86 with iced, translates
+it and compares it with the expected result. FPU instructions go in `lift/x87.rs`. New
+instructions help every game, so also bring them back into recomp_kit.
 
-**Fertig, wenn** `rtools missing` "0 instructions not supported" meldet und
-`cargo test --release -p recomp` grün ist.
+**Done when** `rtools missing` reports "0 instructions not supported" and
+`cargo test --release -p recomp` passes.
 
-## 4. Imports: bis das Fenster aufgeht
+## 4. Imports: until the window opens
 
-Das Spiel ruft Windows-Funktionen (Imports). Beim Start listet das Programm die noch fehlenden
-("N imports not implemented yet: ..."); ruft das Spiel eine davon, hält es mit Meldung an.
+The game calls Windows functions (imports). At start the program lists the ones still missing
+("N imports not implemented yet: ..."). If the game calls one of them, it stops with a message.
 
-- `rtools imports <exe>`: alle Imports nach DLL.
-- Die Imports der EXE selbst früh alle umsetzen, nicht erst wenn das Spiel daran anhält: die
-  seltenen werden spät gerufen (Recoil: CompareFileTime erst am Ende des ersten Levels).
-  Die der mitgeladenen DLLs (MFC, MSVCRT) bleiben meist ungenutzt.
-- Allgemein nützliche Imports kommen in `crates/win32/src/platform/<dll>.rs` (Tabelle
-  `IMPORTS`: Name, Anzahl stdcall-Argumente oder -1 für cdecl, Rust-Funktion). Vor dem
-  Schreiben in den Geschwister-Ports schauen (siehe PLAN.md des Frameworks: black_white hat
-  ~90 weitere kernel32-Funktionen, rust_metal Direct3D 9, rustschweine Direct3D 7 und
-  CD-Audio, nuclear_rust_strike Miles Sound System).
-- Nur dieses Spiel betreffende DLLs: `Game::import` im Spiel-Projekt.
-- Fehlersuche: `<PREFIX>_TRACE_API=1` (jeder Import-Aufruf mit Aufrufer),
-  `<PREFIX>_TRACE_MSG=1` (Fenster-Nachrichten), `<PREFIX>_WATCH=1` (wo das Spiel hängt, alle 2 s),
-  `<PREFIX>_TRACE_REG=1` (Registry).
+- `rtools imports <exe>`: all imports, by DLL.
+- Implement all of the EXE's own imports early, not only when the game stops at them. The rare
+  ones are called late (Recoil: CompareFileTime only at the end of the first level). Those of
+  the DLLs loaded along with it (MFC, MSVCRT) mostly stay unused.
+- Generally useful imports go into `crates/win32/src/platform/<dll>.rs` (table `IMPORTS`:
+  name, number of stdcall arguments or -1 for cdecl, Rust function). Before writing one, look
+  in the sibling ports (see the framework's PLAN.md: black_white has about 90 more kernel32
+  functions, rust_metal Direct3D 9, rustschweine Direct3D 7 and CD audio, nuclear_rust_strike
+  the Miles Sound System).
+- DLLs that only concern this game: `Game::import` in the game project.
+- Debugging: `<PREFIX>_TRACE_API=1` (every import call with its caller),
+  `<PREFIX>_TRACE_MSG=1` (window messages), `<PREFIX>_WATCH=1` (where the game hangs, every
+  2 s), `<PREFIX>_TRACE_REG=1` (registry).
 
-**Fertig, wenn** das Fenster des Spiels aufgeht.
+**Done when** the game's window opens.
 
-## 5. Selbstmodifizierender Code
+## 5. Self-modifying code
 
-Alte Software-Renderer schreiben in ihren eigenen Code (Konstanten, Sprungweiten). Das meiste
-findet `Smc::find` allein (`mov [code-adresse], x`). `rtools smc <exe>` zeigt, was gefunden
-wurde. Schreibt das Spiel Code aus einer Tabelle um (Future Cop: 555/565-Pixelformate), die
-Tabelle in `Game::smc` eintragen (`PatchTable { at, variants }`) und mit
-`rtools smc <exe> --patch <adresse>:<n>` prüfen.
+Old software renderers write into their own code (constants, jump distances). `Smc::find`
+finds most of it by itself (`mov [code address], x`). `rtools smc <exe>` shows what was found.
+If the game rewrites code from a table (Future Cop: 555/565 pixel formats), enter the table in
+`Game::smc` (`PatchTable { at, variants }`) and check it with
+`rtools smc <exe> --patch <address>:<n>`.
 
-**Fertig, wenn** das Spiel nicht mehr an Stellen abstürzt, die ihren eigenen Code ändern
-(Absturzmeldungen nennen die Funktion).
+**Done when** the game no longer crashes at places that change their own code (crash messages
+name the function).
 
-## 6. Bild
+## 6. Picture
 
-- 2D-Menüs über DirectDraw (`ddraw.rs`) laufen meist sofort.
-- 3D: Glide (`glide.rs`, OpenGL) ist fertig. Direct3D 7/9 in den Geschwister-Ports
-  (rustschweine `d3d.rs`, rust_metal `d3d9/`) – ins Framework holen, wenn ein Spiel es braucht.
-- Screenshots: `<PREFIX>_SHOT=shot.png` (alle 0,5 s; `{t}` im Namen = Millisekunden, jedes Bild
-  bleibt), `<PREFIX>_WINDOW=1280x960`.
+- 2D menus through DirectDraw (`ddraw.rs`) mostly work right away.
+- 3D: Glide (`glide.rs`, OpenGL) is done. Direct3D 7 and 9 are in the sibling ports
+  (rustschweine `d3d.rs`, rust_metal `d3d9/`). Bring them into the framework when a game
+  needs them.
+- Screenshots: `<PREFIX>_SHOT=shot.png` (every 0.5 s. `{t}` in the name is replaced by the
+  milliseconds, so every picture is kept), `<PREFIX>_WINDOW=1280x960`.
 
-**Fertig, wenn** das Hauptmenü auf dem Screenshot so aussieht wie im Original.
+**Done when** the main menu on the screenshot looks like the original.
 
-## 7. Eingabe skripten (reproduzierbare Tests)
+## 7. Scripted input (repeatable tests)
 
-- `<PREFIX>_INPUT="5000:click@320,240 8000:Enter 9000:Up*2000"`: Eingaben zu festen Zeiten
-  (ms nach Spielstart; Mausposition in 640x480-Spielpixeln; `*n` = n ms halten;
-  `text@Name` tippt; `pad@A*500` Gamepad; `@datei.txt` liest die Liste aus einer Datei).
-- `<PREFIX>_RECORD=datei.txt`: eigene Eingaben aufnehmen, später mit `INPUT=@datei.txt`
-  abspielen. F11 setzt eine Marke mit Screenshot.
-- `<PREFIX>_NO_VIDEO=1`: Videos sofort zu Ende.
+- `<PREFIX>_INPUT="5000:click@320,240 8000:Enter 9000:Up*2000"`: input at fixed times
+  (ms after the game starts). Mouse positions are in 640x480 game pixels, `*n` holds for n ms,
+  `text@Name` types, `pad@A*500` is the gamepad and `@file.txt` reads the list from a file.
+- `<PREFIX>_RECORD=file.txt`: record your own input and play it back later with
+  `INPUT=@file.txt`. F11 sets a mark with a screenshot.
+- `<PREFIX>_NO_VIDEO=1`: videos end at once.
 
-**Fertig, wenn** ein Skript reproduzierbar ins erste Level führt.
+**Done when** a script leads into the first level the same way every time.
 
-## 8. Hooks: eigene Rust-Funktionen statt Spiel-Funktionen
+## 8. Hooks: your own Rust functions instead of the game's
 
-Für alles, was über "Windows nachbauen" hinausgeht (Widescreen, Bildrate, Cheats, Gamepad-
-Belegung, Fehler des Originals): eine Spiel-Funktion durch Rust ersetzen.
+For everything beyond "rebuilding Windows" (widescreen, frame rate, cheats, gamepad layout,
+faults of the original): replace a game function with Rust.
 
-**Regel** (Abschnitt 0): Original-Funktionen haben keinen Bestand, wenn sie Fehler
-produzieren; sie dürfen auch für einen Vorteil (Tempo) ersetzt werden, wenn das Ergebnis
-identisch ist. Treue zum Original gilt nicht für seine Fehler und Grenzen.
+**Rule** (section 0): original functions have no standing when they produce faults. They may
+also be replaced for an advantage (speed) if the result is identical. Faithfulness to the
+original does not extend to its faults and limits.
 
-- In `src/hooks.rs`: `(Us(0x406a30), meine_funktion)`. Adressen sind die der
-  Referenz-Version (erste in `VERSIONS`); `.at()` rechnet für andere Versionen um.
-- `call_original(c, adresse)` ruft die Original-Funktion; Argumente mit
+- In `src/hooks.rs`: `(Us(0x406a30), my_function)`. Addresses are those of the reference
+  version (the first in `VERSIONS`). `.at()` converts them for other versions.
+- `call_original(c, address)` calls the original function. Arguments come from
   `win32::platform::arg(c, k)`.
-- Was man über eine Funktion lernt, sofort in `data/symbols.txt` (Adresse, Name, Beschreibung,
-  "?" bei Vermutungen). Absturzmeldungen und `rtools dis` zeigen dann Namen.
-- Debug-Befehle: `Game::cheats` (Name, Shift+F-Taste, Funktion); ein Hook auf die
-  Frame-Warte-Funktion ruft `cheats::run_pending(c)` und `savestate::frame()`.
+- Whatever you learn about a function goes into `data/symbols.txt` right away (address, name,
+  description, "?" for guesses). Crash messages and `rtools dis` then show names.
+- Debug commands: `Game::cheats` (name, Shift+F key, function). A hook on the frame wait
+  function calls `cheats::run_pending(c)` and `savestate::frame()`.
 
-## 8a. Tempo: bevor moderne Effekte kommen
+## 8a. Speed: before modern effects
 
-Erst schnell, dann schön: Effekte (SSAO, Schatten, Licht, Bloom) kosten jeder 10–30 % der
-Bildrate, und was vorher langsam war, wird mit ihnen nicht schneller. Nuclear Strike kam so
-von ~175 auf ~790 fps ohne Effekte (Mission 1); das Ziel waren 500.
+Fast first, then pretty. Effects (SSAO, shadows, lights, bloom) each cost 10 to 30 % of the
+frame rate, and whatever was slow before does not get faster with them. That way Nuclear
+Strike went from about 175 to about 790 fps without effects (mission 1). The goal was 500.
 
-**Regel: Bei diesen alten Spielen ist nie die GPU das Limit.** Ihre Szenen haben ein paar
-tausend Dreiecke, jede heutige GPU zeichnet sie in Bruchteilen einer Millisekunde. Ist die
-Bildrate niedrig, liegt es an der CPU-Seite: übersetzter Spiel-Code, eigener Rust-Code pro
-Aufruf, zu viele Draw-Calls oder Zustandswechsel, Uploads, Warten auf den Turn, der Treiber
-(SwapBuffers, glFlush, Synchronisation). Nie mit "die GPU schafft es nicht" erklären und
-nicht zuerst Shader oder Auflösung kürzen: messen (Punkt 1) und die CPU-Seite suchen.
+**Rule: with these old games the GPU is never the limit.** Their scenes have a few thousand
+triangles, and any GPU of today draws them in a fraction of a millisecond. If the frame rate is
+low, the cause is on the CPU side: translated game code, your own Rust code per call, too many
+draw calls or state changes, uploads, waiting for the turn, the driver (SwapBuffers, glFlush,
+synchronisation). Never explain it with "the GPU can't keep up" and do not start by cutting
+shaders or resolution. Measure (point 1) and look on the CPU side.
 
-Reihenfolge:
+In this order:
 
-1. **Messen, nicht raten.** `<PREFIX>_SAMPLE=1` (Stichproben des Spiel-Threads alle 2 s:
-   Spiel-Funktion oder Host-Modul), `<PREFIX>_PROF=1` (Zeit in Imports und beim Warten auf den
-   Turn). Eigenen Rust-Code auflösen: `<PREFIX>_SAMPLE_RAW=<datei>` gegen eine Link-Map
-   (`cargo rustc --release --bin <spiel> -- -C link-arg=/MAP:<datei>`, eigenes
-   target-Verzeichnis) oder mit `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` und
-   llvm-symbolizer. Jede Änderung als A/B messen: Läufe desselben Builds schwanken um ~5 %
-   (LESSONS, Threads: Hyperthreads).
-2. **Was das Kit schon mitbringt** (nichts zu tun, aber wissen, dass es da ist): Gastspeicher
-   an fester Adresse (`rt::FIXED_BASE`, die Basis ist eine Konstante im Code: +11 %), x87 in
-   Registern und 24-Bit-Rundung inline (`lift/x87.rs`), dichte Tabelle für indirekte Aufrufe,
-   Hook-Index im Stub, Thunks pro Thread, Turn mit Zeitscheibe und Prioritäten (Loop-Köpfe
-   rufen `rt_yield` nicht, solange die Scheibe läuft), Sleep(0) ohne Spinnen, unveränderte
-   Texturzeilen werden nicht neu geladen, Zwischenbilder schreiben nur die Seiten zurück, die
-   sie geändert haben (`tween::Statics`, Write-Watch).
-   grLfbUnlock zeichnet nur die Zeilenbänder, in die das Spiel geschrieben hat (Recoils HUD:
-   ganzer Puffer ~0,6 ms pro Bild), die Font-Datei wird pro Schrift einmal gesucht
-   (`Path::exists` öffnet unter Windows die Datei), `<PREFIX>_SAMPLE=1` loggt auch die Bilder
-   pro Sekunde. Zum Messen ein Spielschalter, der das Takten abschaltet (Recoil:
-   `RUSTCOIL_UNPACED=1`), und ein Replay, das in die Mission führt.
-   Ist das Profil nach Funktionen flach, nach Gast-Instruktionen messen:
-   `<PREFIX>_SAMPLE=insn` loggt die heißesten Instruktionen (der Lifter merkt sich zu jedem
-   Stück Maschinencode die Gast-Adresse, `jit::guest_at`), `<PREFIX>_DUMP=<hex>` zeigt den
-   Maschinencode einer Funktion mit den Gast-Adressen (`<PREFIX>_DUMP_CLIF=1` auch das IR).
-   Bei Recoil lag die Zeit dann fast nie im Spiel-Code selbst, sondern in dem, was der Lifter
-   daraus machte: x87-Läufe haben jetzt eine eigene Version für die üblichen Steuerwörter
-   (53/64 Bit, nächste Rundung; `<PREFIX>_NO_USUAL87=1` aus), Flags werden nur berechnet,
-   wo sie gelesen werden (`<PREFIX>_FLAGS_ALL=1` aus). Ungebremst erlaubt `LogicClock::frame`
-   64 Bilder pro Logik-Frame. Ein Bubble-Sort im Spiel (Recoil 0x4b13b0) ist ein Fall für
-   Punkt 4: in Rust stabil sortieren, dann im Spiel-Code dahinter weiterlaufen (die Adresse
-   als eigener Funktions-Einsprung, Stack und Register wie das Spiel sie dort hat).
-3. **Kosten pro Aufruf im eigenen Code.** Bei Hunderttausenden Aufrufen pro Sekunde zählt
-   alles: keine Locks, keine `Arc`-Klone, keine Hash-Maps mit SipHash, kein `Vec` pro
-   Primitiv, keine Umgebungsvariable pro Aufruf (einmal lesen), keine Systemaufrufe
-   (`glGetUniformLocation`; `Instant::now` in heißen Schleifen: `tsc`). Thread-lokale Kopien,
-   Tabellen nach Adresse indiziert, offene Adressierung.
-4. **Heiße Spiel-Funktionen in Rust (Regel 2, Abschnitt 0).** Zeigt das Profil eine Spiel-
-   Funktion mit großem Anteil (Nuclear Strike: zwei Projektionen ~11 %, drei Polygon-Renderer
-   ~15 %), sie als Hook in Rust schreiben, **identisch**: dieselben Operationen in derselben
-   Reihenfolge, dieselbe x87-Rundung (unter 0xc7f: SSE-Rundung auf Abschneiden und jedes
-   Ergebnis auf 24 Bit gekürzt; unter 0x27f: Double, beim Speichern zu Float gerundet), die
-   Eigenheiten des Originals behalten (Register, die es nebenbei setzt; Zustände, die es in
-   Gastspeicher schreibt). Ein Prüf-Schalter lässt beide laufen und vergleicht (Ergebnisse,
-   geschriebener Speicher, Register): erst übernehmen, wenn über Millionen Aufrufe nichts
-   abweicht. Fälle, die man nicht nachbaut (noch nicht geladene Daten), rufen das Original.
-   Nicht lohnend: Funktionen, deren Kosten der Algorithmus ist (Einfügen in eine sortierte
-   Liste), nicht der übersetzte Code.
-5. **Zeichnen bündeln.** Zustand, den das Spiel pro Primitiv ändert (Alpha-Test), gehört in
-   die Vertex-Daten, nicht in Uniforms, die einen Batch beenden. Ein Batch endet nur bei
-   Wechseln, die es wirklich brauchen (Blend, Chroma-Key, Filter, Clip). glFlush nur, wenn ein
-   zweiter Thread zeichnet. Uploads gesammelt, nicht zeilenweise.
-6. **Den Tausch der Puffer vom Spiel-Thread nehmen.** SwapBuffers kostete im Treiber 0,4 bis
-   0,7 ms pro Bild (~15 % bei 200 fps). Das Kit zeigt Glide-Bilder deshalb von einem eigenen
-   Present-Thread (`window::present_later`, geteilter Kontext): beim Bildtausch wird das Bild
-   auf der GPU in eine von zwei eigenen Texturen kopiert, ein Fence gesetzt und übergeben;
-   der Present-Thread lässt die GPU auf den Fence warten, zeichnet ins Fenster und tauscht.
-   Ausschalten zum Vergleichen: `<PREFIX>_PRESENT=0`.
-7. **Takten mit Schlafen und Spinnen** (`tween::Pacer`, `sleep_until`): ein Sleep dauert bis
-   1 ms länger als verlangt; die letzten 1,5 ms werden gespinnt (240 fps: Bildabstände
-   4,0–4,4 ms statt 3,7–4,7).
+1. **Measure, don't guess.** `<PREFIX>_SAMPLE=1` (samples of the game thread every 2 s: game
+   function or host module), `<PREFIX>_PROF=1` (time in imports and waiting for the turn). To
+   resolve your own Rust code, use `<PREFIX>_SAMPLE_RAW=<file>` against a link map
+   (`cargo rustc --release --bin <game> -- -C link-arg=/MAP:<file>`, with its own target
+   folder) or `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` and llvm-symbolizer. Measure
+   every change as A/B. Runs of the same build vary by about 5 % (LESSONS, Threads:
+   hyperthreads).
+2. **What the kit already brings** (nothing to do, but know that it is there): guest memory at
+   a fixed address (`rt::FIXED_BASE`, the base is a constant in the code: +11 %), x87 in
+   registers and 24-bit rounding inline (`lift/x87.rs`), a dense table for indirect calls, the
+   hook index in the stub, thunks per thread, the turn with a time slice and priorities (loop
+   heads do not call `rt_yield` while the slice lasts), Sleep(0) without spinning, texture rows
+   that did not change are not uploaded again, and pictures in between only write back the
+   pages they changed (`tween::Statics`, write watch).
+   grLfbUnlock only draws the bands of rows the game wrote to (Recoil's HUD: the whole buffer
+   cost about 0.6 ms per picture), the font file is looked up once per font (`Path::exists`
+   opens the file on Windows), and `<PREFIX>_SAMPLE=1` also logs the pictures per second. For
+   measuring, add a switch to the game that turns pacing off (Recoil: `RUSTCOIL_UNPACED=1`)
+   and a replay that leads into the mission.
+   If the profile by function is flat, measure by guest instruction:
+   `<PREFIX>_SAMPLE=insn` logs the hottest instructions (the lifter remembers the guest
+   address for every piece of machine code, `jit::guest_at`). `<PREFIX>_DUMP=<hex>` shows a
+   function's machine code with the guest addresses (`<PREFIX>_DUMP_CLIF=1` the IR as well).
+   With Recoil the time was then almost never in the game code itself but in what the lifter
+   made of it. x87 runs now have a version of their own for the usual control words (53/64
+   bit, round to nearest, `<PREFIX>_NO_USUAL87=1` turns it off), and flags are only computed
+   where they are read (`<PREFIX>_FLAGS_ALL=1` turns that off). Unpaced, `LogicClock::frame`
+   allows 64 pictures per logic frame. A bubble sort in the game (Recoil 0x4b13b0) is a case
+   for point 4: sort stably in Rust, then carry on in the game code behind it (that address
+   as an entry point of its own, with stack and registers as the game has them there).
+3. **Cost per call in your own code.** At hundreds of thousands of calls a second everything
+   counts: no locks, no `Arc` clones, no hash maps with SipHash, no `Vec` per primitive, no
+   environment variable per call (read it once), no system calls (`glGetUniformLocation`, and
+   `Instant::now` in hot loops: use `tsc`). Use thread-local copies, tables indexed by address,
+   open addressing.
+4. **Hot game functions in Rust (rule 2, section 0).** If the profile shows a game function
+   with a large share (Nuclear Strike: two projections about 11 %, three polygon renderers
+   about 15 %), write it as a hook in Rust, **identical**: the same operations in the same
+   order, the same x87 rounding (under 0xc7f the SSE rounding set to truncate and every result
+   cut to 24 bits, under 0x27f double, rounded to float when stored), and keep the original's
+   quirks (registers it sets on the side, state it writes to guest memory). A check switch runs
+   both and compares them (results, memory written, registers). Only take it over when nothing
+   differs over millions of calls. Cases you do not rebuild (data not loaded yet) call the
+   original.
+   Not worth it: functions whose cost is the algorithm (inserting into a sorted list), not the
+   translated code.
+5. **Batch the drawing.** State the game changes per primitive (alpha test) belongs in the
+   vertex data, not in uniforms that end a batch. A batch only ends at changes that really
+   need it (blend, chroma key, filter, clip). glFlush only when a second thread draws. Collect
+   uploads instead of doing them row by row.
+6. **Take the buffer swap off the game thread.** SwapBuffers cost 0.4 to 0.7 ms per picture in
+   the driver (about 15 % at 200 fps). That is why the kit shows Glide pictures from a present
+   thread of its own (`window::present_later`, shared context). At the buffer swap the picture
+   is copied on the GPU into one of two textures of its own, a fence is set and the picture is
+   handed over. The present thread lets the GPU wait for the fence, draws into the window and
+   swaps. To switch it off for comparison: `<PREFIX>_PRESENT=0`.
+7. **Pacing with sleeping and spinning** (`tween::Pacer`, `sleep_until`). A sleep lasts up to
+   1 ms longer than asked for, so the last 1.5 ms are spun (240 fps: gaps between pictures of
+   4.0 to 4.4 ms instead of 3.7 to 4.7).
 
-**Fertig, wenn** das Spiel ohne Effekte deutlich über der Bildwiederholrate des Bildschirms
-läuft (Ziel: ein Mehrfaches, damit die Effekte Platz haben), alle Prüf-Schalter ohne
-Abweichung laufen und das Profil keinen einzelnen Posten über ~10 % mehr zeigt, der sich
-sinnvoll ersetzen lässt. Erst dann Abschnitt 11.
+**Done when** the game runs well above the screen's refresh rate without effects (the goal is
+a multiple of it, so the effects have room), all check switches run without differences and the
+profile no longer shows a single item over about 10 % that could sensibly be replaced. Only
+then go to section 11.
 
-## 8b. Bildrate: Logik fest, Zwischenbilder dazu
+## 8b. Frame rate: fixed logic, pictures in between
 
-Alte Spiele rechnen ihre Logik für eine feste Bildrate (oft 30 oder 60, PlayStation-Ports
-60). Die Bildrate nie einfach freigeben: viel Logik zählt Frames statt Zeit oder nimmt ganze
-Frames aus einem Zeitschritt (`dt >> 8`, `dt / schritt` mit verworfenem Rest). Über der
-gedachten Rate hörten in Nuclear Strike Explosionen nie auf, Raketen zogen doppelt so viel
-Rauch, und der Autopilot des Hakens machte nie einen Schritt (`256 / 0x114 = 0`). Stattdessen
-(`win32::platform::tween`, Vorbilder: Future Cops `fps.rs`, Nuclear Strikes `pictures.rs`):
+Old games compute their logic for a fixed frame rate (often 30 or 60, PlayStation ports 60).
+Never simply unlock the frame rate. A lot of logic counts frames instead of time, or takes
+whole frames out of a time step (`dt >> 8`, `dt / step` with the rest thrown away). Above the
+intended rate, explosions in Nuclear Strike never stopped, missiles left twice as much smoke
+and the hook's autopilot never took a step (`256 / 0x114 = 0`). Instead
+(`win32::platform::tween`, examples: Future Cop's `fps.rs`, Nuclear Strike's `pictures.rs`):
 
-1. **Logik fest.** Die Spielschleife finden (Uhr lesen, auf den Frame warten) und am Anfang
-   jedes Logik-Frames `LogicClock::frame` aufrufen (Hook auf die Uhr-Funktion, nur von der
-   Schleife aus: Rücksprungadresse prüfen). Die Uhr des Spiels geht dann genau einen Frame
-   pro Durchlauf weiter. Damit läuft das Spiel wie im Original; **erst testen**, dann weiter.
-2. **Zeichen-Teil der Schleife finden.** Was ist Logik, was Zeichnen? Oft vermischt (Nuclear
-   Strike: ein Durchgang bewegt die Objekte einer Kachel, der nächste zeichnet sie). Auch
-   Zeichen-Code macht manchmal Logik (ein Rotor dreht sich beim Zeichnen weiter).
-3. **Interpolieren, einen Frame zu spät.** Jedes Bild, auch das des Logik-Frames selbst,
-   zeigt das Spiel zwischen den letzten zwei Logik-Frames (`LogicClock::alpha`). Kamera und
-   Objekte (Position, Drehmatrix) werden nur *während des Zeichnens* dorthin gesetzt (Hooks
-   der Zeichenfunktionen) und danach zurück: die Logik sieht nur ihre eigenen Werte. Wer
-   beim Zeichnen ein Objekt selbst bewegt (eine Last am Haken), behält seine Position.
-   Drehungen über Quaternionen (`mix_rotation`; elementweise gemischt wird ein schnell
-   drehender Rotor zum Fächer), Sprünge (Respawn, Kameraschnitt) nicht interpolieren.
-4. **Zwischenbilder.** In `LogicClock::frame` läuft vor der Wartezeit nur der Zeichen-Teil
-   (Bildtausch, Gelände, Objekte, HUD, Ordering Table) als eigenes Bild.
-5. **Nebenwirkungen zurücksetzen.** Nach dem Bildtausch `Statics::save`, nach dem Zeichnen
-   `restore`: die statischen Daten des Spiels (Zufallsgenerator, Hilfsmatrizen, Zähler,
-   HUD-Zustand). Ausnahmen in `left`: Listen eines Speicher-Managers, deren Einträge woanders
-   liegen (zurückgesetzt zerstörten sie den Heap). Während des Zeichnens `hold_turn(true)`:
-   sonst laufen andere Threads (Audio-Timer) und ihre Änderungen gehen mit verloren.
-6. **Daten, die das Zeichnen für den nächsten Frame vorbereitet** (ein Gelände mit zwei
-   Puffern): Zwischenbilder zeichnen aus dem Stand vor dem Zeichnen des Logik-Frames
-   (vorher sichern, im Zwischenbild einsetzen, danach zurück). Sonst schmiert das Bild.
-7. **Kamera aus den feinsten Werten des Spiels.** Viele Spiele führen Winkel intern genauer
-   (Festkomma 16.16) als die Kamera, die sie daraus bauen (ganze 1/4096 Umdrehungen). In
-   einer Kurve dreht die Kamera dann ungleichmäßig (7, 8, 6, 8 pro Frame), und eine Kamera,
-   die im Abstand um den Spieler kreist, springt mit: das Bild zittert in Kurven, auch bei
-   perfekter Interpolation (Nuclear Strike: `StrkCam_Update_` hält `[0x52301c]..` in
-   16.16, `Camera_SetYPR_` bekommt `>> 16`). Abhilfe nur für die Anzeige: pro Logik-Frame
-   den verfolgten Punkt merken (Kamera-Ort minus ihr Versatz, mit der *Matrix des Spiels*
-   gerechnet, nicht einer eigenen: deren Rundung mal Abstand rauscht wieder), im Bild die
-   feinen Winkel interpolieren, die Matrix selbst in Gleitkomma bauen (Formel aus der
-   Matrix-Funktion des Spiels abschreiben, gegen ihr Ergebnis prüfen) und die Kamera vom
-   gemerkten Punkt aus setzen. Erkennen: pro Logik-Frame Kamera- und Spieler-Ort loggen;
-   schwanken die Schritte der Kamera, die des Spielers nicht, liegt es in der Logik.
-8. **Eigene Pause (Overlay-Menü) wie die Pause des Spiels.** Hält ein eigenes Menü die
-   Logik an, darf die feste Logik-Uhr danach nicht um die Pause hinter der Uhr des Spiels
-   (`clock`, GetTickCount) zurückbleiben. Das Spiel liest beide: Nuclear Strikes Esc-Menü
-   setzt beim Fortsetzen den Missionsstart aus der echten Uhr (`strikeClockPause_`), die
-   Missionszeit aus der nachgehenden Logik-Uhr lief dann rückwärts, ein Zeitschritt unter 0
-   ließ `Slerp_` rund 4 Milliarden Mal laufen: das Spiel fror ein. Richtig: die Pause so
-   nachbilden wie das Spiel selbst. Die Logik-Uhr springt nach der Pause auf die echte Uhr
-   vor (in ganzen Ticks des Spiels), und die Startzeiten, von denen das Spiel seine Zeit
-   abzieht (Missionsstart, letzter Tick), rücken um dieselbe Pause weiter. Testen: eigenes
-   Menü auf und zu, danach das Pausenmenü des Spiels auf und zu.
-9. **Ein verspäteter Logik-Frame bleibt gleich lang.** Findet die Warte-Schleife des Spiels
-   ihren Frame ein paar Ticks zu spät (ein Bild oder ein Sleep lief drüber), nimmt das Spiel
-   die längere Zeit als Zeitschritt, bewegt Spieler und Kamera aber pro Frame gleich weit:
-   ein Ruckler. Die Uhr gibt für leicht verspätete Frames den fälligen Tick zurück, die
-   nächsten holen auf (Future Cop `fps.rs`: 1...7 Ticks zu spät).
-10. **Bilder behalten ihren eigenen Takt.** Den Zeitplan der Zwischenbilder nicht bei jedem
-    Logik-Frame neu starten (sonst passen nur ganze Bilder hinein: 60 fps wurden 75). Das
-    Bild des Logik-Frames zählt als eines der Rate und wartet auf seinen Platz; höchstens 2
-    Perioden Vorlauf (die Uhr des Spiels springt nach einer Pause zurück).
-11. **Messen mit einem Bild-Log.** Pro gezeigtem Bild: Bildzeit *und* die Spielzeit, die es
-    zeigt. Ungleichmäßige Schritte der Spielzeit ruckeln auch bei pünktlichen Bildern
-    (future_rust_cop `framelog.rs`, `tools/framegraph.html`, liest auch CapFrameX).
-12. **Messen, was der Renderer benutzt, nicht was man selbst setzt.** Die eigenen
-    interpolierten Werte können glatt laufen, während der Renderer aus einer anderen Kopie
-    zeichnet. Pro Bild nach dem Zeichnen (vor dem Zurücksetzen) die Werte lesen, die er
-    wirklich verwendet hat (Welt-Matrix des Objekts, die vom Renderer gebaute
-    Kamera-Matrix), und die Lage des Objekts im Kamerabild über die Anzeigezeit auftragen.
-    Ein Sägezahn darin ist das Ruckeln. Gegentests mit einem verschobenen Wert können
-    täuschen: Recoils Panzer verschwand nicht, weil dort gezeichnet wurde, sondern weil die
-    Hüllkugel neu berechnet und er aussortiert wurde.
-13. **Welt-Kopien und Hierarchien.** Viele Engines (Recoil: Zippers wie MechWarrior 3)
-    halten pro Objekt die eigene Lage *und* eine Welt-Lage, aus der gezeichnet wird. Die
-    Welt-Lage einer Wurzel schreibt oft die Logik, die der Kind-Teile der Renderer, aber nur
-    für als geändert markierte Knoten, also nur im Bild des Logik-Frames. Dann in jedem Bild
-    die Welt-Lage der Wurzel mit interpolieren (nur wo sie gleich ihrer eigenen ist: Effekte
-    wie Abgas-Spuren, deren Welt-Lage die Logik getrennt setzt, wurden sonst zu langen
-    Streifen) und die der Kinder selbst nach der Regel des Renderers rechnen (gegen dessen
-    Ergebnis prüfen). Nach dem Bild alles aus den neuesten Werten neu rechnen, nicht
-    gemerkte Welt-Werte zurückschreiben: die eines Kindes sind beim Merken einen Frame alt,
-    zurückgeschrieben fiel es Frame für Frame weiter zurück (Objekt und Bild auseinander).
-    Kinder, deren Welt-Lage die Logik selbst bewegt (Effekte), nicht anfassen: erkennbar,
-    weil sie nicht zur Regel passen oder die Logik sie verändert.
-14. **Bilder auf den Takt des Bildschirms.** Erst warten, dann zeigen
-    (`GlideExt::before_shown`): wartet der Takt erst nach dem Zeigen, kommt das länger
-    gerechnete Bild des Logik-Frames jedes Mal zu spät. Die eigene Uhr driftet gegen die
-    des Bildschirms: ein Bild für zwei Durchläufe (240 auf 480 Hz) landete nahe der Grenze
-    mal einen Durchlauf früher, mal später. Der Swap hilft im Fenster nicht (er wartet nicht
-    auf den Durchlauf). `Pacer::pace_on` mit `window::vblank()` (die Zeiten des Compositors)
-    legt jedes Bild mittig zwischen zwei Durchläufe; die Bildrate ein ganzer Teil der
-    Bildwiederholrate, höchstens was das Spiel sicher schafft.
+1. **Fixed logic.** Find the game loop (reads the clock, waits for the frame) and call
+   `LogicClock::frame` at the start of every logic frame (a hook on the clock function, only
+   from the loop: check the return address). The game's clock then moves exactly one frame
+   per pass. With that the game runs like the original. **Test first**, then go on.
+2. **Find the drawing part of the loop.** What is logic, what is drawing? Often they are mixed
+   (Nuclear Strike: one pass moves the objects of a tile, the next draws them). Drawing code
+   sometimes does logic too (a rotor keeps turning while it is drawn).
+3. **Interpolate, one frame late.** Every picture, including the one of the logic frame
+   itself, shows the game between the last two logic frames (`LogicClock::alpha`). Camera and
+   objects (position, rotation matrix) are only put there *while drawing* (hooks on the
+   drawing functions) and put back afterwards, so the logic only sees its own values. Whatever
+   moves an object itself while drawing (a load on the hook) keeps its position. Rotations go
+   through quaternions (`mix_rotation`. Mixed element by element, a fast rotor turns into a
+   fan). Do not interpolate jumps (respawn, camera cut).
+4. **Pictures in between.** In `LogicClock::frame`, before the wait, only the drawing part
+   runs (buffer swap, terrain, objects, HUD, ordering table) as a picture of its own.
+5. **Undo side effects.** After the buffer swap `Statics::save`, after drawing `restore`: the
+   game's static data (random generator, helper matrices, counters, HUD state). Exceptions go
+   in `left`: lists of a memory manager whose entries live elsewhere (put back, they destroyed
+   the heap). While drawing, `hold_turn(true)`. Otherwise other threads run (audio timers) and
+   their changes are lost too.
+6. **Data that drawing prepares for the next frame** (terrain with two buffers): pictures in
+   between draw from the state before the logic frame's picture was drawn (save it before,
+   put it in for the picture in between, put it back afterwards). Otherwise the picture smears.
+7. **Camera from the game's finest values.** Many games keep angles more exactly inside (16.16
+   fixed point) than the camera they build from them (whole 1/4096 turns). In a curve the
+   camera then turns unevenly (7, 8, 6, 8 per frame), and a camera circling the player at a
+   distance jumps along: the picture shakes in curves, even with perfect interpolation
+   (Nuclear Strike: `StrkCam_Update_` keeps `[0x52301c]..` in 16.16, `Camera_SetYPR_` gets
+   `>> 16`). The fix, for display only: per logic frame remember the point being followed
+   (the camera's place minus its offset, computed with *the game's matrix*, not one of your
+   own, whose rounding times the distance adds noise again), interpolate the fine angles in the
+   picture, build the matrix yourself in floating point (copy the formula from the game's
+   matrix function and check it against its result) and place the camera from the remembered
+   point. To recognise it: log the camera's and the player's place per logic frame. If the
+   camera's steps vary and the player's do not, the cause is in the logic.
+8. **Your own pause (overlay menu) like the game's pause.** If a menu of your own stops the
+   logic, the fixed logic clock must not fall behind the game's clock (`clock`, GetTickCount)
+   by the length of the pause. The game reads both. Nuclear Strike's Esc menu sets the mission
+   start from the real clock when it resumes (`strikeClockPause_`). The mission time from the
+   lagging logic clock then ran backwards, and a time step below 0 made `Slerp_` run about 4
+   billion times: the game froze. The right way is to copy the pause the way the game does it.
+   After the pause the logic clock jumps forward to the real clock (in whole ticks of the
+   game), and the start times the game subtracts its time from (mission start, last tick) move
+   on by the same pause. Test: open and close your own menu, then the game's pause menu.
+9. **A late logic frame keeps its length.** If the game's wait loop finds its frame a few
+   ticks late (a picture or a sleep ran over), the game takes the longer time as its time
+   step but moves player and camera the same distance per frame: a stutter. For slightly late
+   frames the clock returns the tick that was due, and the next ones catch up (Future Cop
+   `fps.rs`: 1 to 7 ticks late).
+10. **Pictures keep their own pace.** Do not restart the schedule of the pictures in between
+    at every logic frame (otherwise only whole pictures fit in: 60 fps became 75). The logic
+    frame's picture counts as one of the rate and waits for its slot. At most 2 periods ahead
+    (the game's clock jumps back after a pause).
+11. **Measure with a picture log.** For every picture shown: the picture time *and* the game
+    time it shows. Uneven steps of the game time stutter even with pictures on time
+    (future_rust_cop `framelog.rs`, `tools/framegraph.html`, which also reads CapFrameX).
+12. **Measure what the renderer uses, not what you set yourself.** Your own interpolated
+    values can run smoothly while the renderer draws from another copy. For every picture,
+    after drawing (before putting things back), read the values it really used (the object's
+    world matrix, the camera matrix the renderer built) and plot the object's place in the
+    camera picture over display time. A saw tooth in it is the stutter. Counter tests with a
+    shifted value can mislead: Recoil's tank did not vanish because it was drawn there, but
+    because its bounding sphere was computed again and it was culled.
+13. **World copies and hierarchies.** Many engines (Recoil: Zipper's, like MechWarrior 3)
+    keep for each object its own placement *and* a world placement it is drawn from. The world
+    placement of a root is often written by the logic, that of the child parts by the
+    renderer, but only for nodes marked as changed, so only in the logic frame's picture. Then
+    interpolate the root's world placement in every picture too (only where it equals its own:
+    effects like exhaust trails, whose world placement the logic sets separately, otherwise
+    became long streaks) and compute the children's yourself by the renderer's rule (check it
+    against its result). After the picture, compute everything again from the newest values,
+    do not write remembered world values back. A child's are one frame old when remembered,
+    and written back it fell further behind frame by frame (object and picture drifted apart).
+    Leave alone children whose world placement the logic moves itself (effects). You can tell
+    them because they do not fit the rule or the logic changes them.
+14. **Pictures on the screen's beat.** Wait first, then show (`GlideExt::before_shown`). If the
+    pacing waits only after showing, the logic frame's picture, which takes longer to compute,
+    is late every time. Your own clock drifts against the screen's: a picture for every two
+    refreshes (240 on 480 Hz) landed near the boundary sometimes one refresh early, sometimes
+    late. In a window the swap does not help (it does not wait for the refresh).
+    `Pacer::pace_on` with `window::vblank()` (the compositor's times) puts every picture in the
+    middle between two refreshes. The frame rate is a whole fraction of the refresh rate, at
+    most what the game reliably manages.
 
-Fehlerbilder: Schlieren (etwas wird in Zwischenbildern nicht gezeichnet, das Spiel löscht den
-Bildschirm nicht), Fächer (Matrix elementweise gemischt), fehlende Töne (Änderungen anderer
-Threads zurückgesetzt), Absturz nach Speicheranforderung 0 (Heap-Listen zurückgesetzt), die
-Steuerung hängt (Logik bekommt interpolierte Werte, oder ein Zeitschritt wird zu 0), Zittern
-nur in Kurven (Kamera aus ganzzahligen Winkeln: Punkt 7), Einfrieren nach eigenem Menü und
-Pausenmenü des Spiels (Logik-Uhr geht nach: Punkt 8), ein Objekt hinkt hinterher und springt
-vor, die Umgebung nicht, auf Screenshots nicht zu sehen (es bewegt sich nur im Bild des
-Logik-Frames: Punkt 13; oder Bilder landen auf dem falschen Durchlauf: Punkt 14).
+What the faults look like: streaks (something is not drawn in pictures in between and the game
+does not clear the screen), fans (a matrix mixed element by element), missing sounds (changes
+of other threads put back), a crash after a memory request of 0 (heap lists put back), the
+controls hang (the logic gets interpolated values, or a time step becomes 0), shaking only in
+curves (camera from whole-number angles: point 7), freezing after your own menu and the game's
+pause menu (the logic clock lags: point 8), an object lags behind and jumps ahead while its
+surroundings do not, invisible on screenshots (it only moves in the logic frame's picture:
+point 13, or pictures land on the wrong refresh: point 14).
 
-## 8c. Breitbild (Hor+)
+## 8c. Widescreen (Hor+)
 
-Ziel: links und rechts mehr sehen, nichts verzerrt, das HUD bleibt unverzerrt (in der
-4:3-Mitte oder an den Rändern). Vorbilder: future_rust_cop `wide.rs`/`walker.rs`,
+The goal: see more on the left and right, nothing stretched, and the HUD stays unstretched (in
+the 4:3 middle or at the edges). Examples: future_rust_cop `wide.rs`/`walker.rs`,
 nuclear_rust_strike `wide.rs`.
 
-1. **Die x-Skala der Projektion finden.** Viele Spiele haben getrennte Skalen für x und y
-   (Nuclear Strike: `View_SetWindow_` rechnet sie aus dem Sichtfenster, alle Projektionen
-   lesen sie). Diese x-Skala mal k = (4/3) / Seitenverhältnis, dazu Werte, die das Spiel aus
-   ihr ableitet (Clip-Rand, rechte Clip-Grenze). Gibt es keine solche Skala: die
-   Kamera-x vor jeder Projektion und jedem Sichtbarkeitstest mal k (Future Cop).
-2. **Breit zeichnen.** Das Glide-Ziel bekommt das Seitenverhältnis des Fensters
-   (`glide.rs` `resize(aspect, h)`), das 3D-Bild wird über die ganze Breite gestreckt
-   (`View::Full`). Weil die x-Skala um k schmaler ist, stimmen die Proportionen wieder.
-3. **HUD erkennen.** Primitive des HUD in `View::Hud(0.5)` zeichnen (4:3-Mitte). Wie man sie
-   erkennt, hängt vom Spiel ab: Future Cop über die Displayliste (`walker.rs`), Nuclear Strike
-   über die Primitive, die während der HUD-Funktion angelegt werden (Allokator gehookt,
-   Adressen in einer Menge; Menge zu Beginn des HUD leeren), und die unter einem anderen
-   Sichtfenster (Meldungsfenster). Umschalten beim Zeichnen jedes Primitivs.
-4. **Während das HUD läuft, die 4:3-Skala.** Das HUD liest die Projektionsskala auch
-   (Sprite-Größen, Marken). HUD-Marken, die aus 3D-Positionen projiziert und unverzerrt
-   gezeichnet werden, landen mit der 4:3-Skala genau dort, wo das gestreckte 3D-Bild das
-   Objekt zeigt. Wurden ihre Positionen schon im 3D-Durchgang (schmal) berechnet, muss man sie
-   verschieben (Future Cop `to_screen`: x' = cx + (x − cx) / k).
-5. **Sichtbarkeit verbreitern.** Was das Spiel vorab aussortiert (Kacheln vor der Kamera,
-   Sichtkegel), um 1/k breiter machen. Achtung: Mengen, nach denen das Spiel beim Levelstart
-   Speicher anlegt (Nuclear Strike: Kachelzahl für TileMgr), für das breiteste erwartete
-   Verhältnis anlegen (mindestens 16:9), später nur bis dahin verbreitern.
-6. **Nur im Spiel breit.** Menüs, Videos und Texte bleiben 4:3: breit nur, solange 3D/HUD
-   gezeichnet wird (Nuclear Strike: HUD in den letzten 250 ms gezeichnet), Aspekt bei jedem
-   Swap für das nächste Bild festlegen. Mit Zwischenbildern (8b): Änderungen an statischen
-   Daten vor dem Sichern des Bildes machen, sonst setzt das Zurückschreiben sie zurück.
+1. **Find the projection's x scale.** Many games have separate scales for x and y (Nuclear
+   Strike: `View_SetWindow_` computes them from the view window, all projections read them).
+   Multiply this x scale by k = (4/3) / aspect ratio, together with values the game derives
+   from it (clip margin, right clip bound). If there is no such scale, multiply the camera x
+   by k before every projection and every visibility test (Future Cop).
+2. **Draw wide.** The Glide target gets the window's aspect ratio (`glide.rs`
+   `resize(aspect, h)`), and the 3D picture is stretched over the full width (`View::Full`).
+   Because the x scale is narrower by k, the proportions are right again.
+3. **Recognise the HUD.** Draw the HUD's primitives in `View::Hud(0.5)` (the 4:3 middle). How
+   to recognise them depends on the game. Future Cop does it through the display list
+   (`walker.rs`). Nuclear Strike uses the primitives created during the HUD function (the
+   allocator hooked, addresses in a set that is emptied when the HUD starts) and those under
+   another view window (message window). Switch while drawing each primitive.
+4. **While the HUD runs, the 4:3 scale.** The HUD reads the projection scale too (sprite sizes,
+   markers). HUD markers projected from 3D positions and drawn unstretched land, with the 4:3
+   scale, exactly where the stretched 3D picture shows the object. If their positions were
+   already computed in the (narrow) 3D pass, they have to be moved (Future Cop `to_screen`:
+   x' = cx + (x - cx) / k).
+5. **Widen visibility.** Whatever the game sorts out in advance (tiles in front of the camera,
+   view cone) is made wider by 1/k. Careful: amounts the game allocates memory for at level
+   start (Nuclear Strike: the tile count for TileMgr) must be sized for the widest expected
+   ratio (at least 16:9), and later only widened up to that.
+6. **Wide only in the game.** Menus, videos and text stay 4:3. Wide only while 3D or HUD is
+   drawn (Nuclear Strike: HUD drawn within the last 250 ms), and set the aspect at every swap
+   for the next picture. With pictures in between (8b), make changes to static data before the
+   picture is saved, otherwise writing back undoes them.
+7. **Screens of their own stay 4:3.** Switch everything with its own frame over the whole
+   screen (mission menu, cockpit HUD with a smaller 3D window) to 4:3 before it draws: hook the
+   function that switches to it. If the game draws the frame only once and afterwards only the
+   changed parts, set its "draw everything" flag after every time the render target is created
+   again (LESSONS, Drawing once).
 
-7. **Eigene Bildschirme bleiben 4:3.** Alles mit eigenem Rahmen über den ganzen Bildschirm
-   (Missionsmenü, Cockpit-HUD mit kleinerem 3D-Fenster) auf 4:3 schalten, bevor es zeichnet:
-   die Umschalt-Funktion hooken. Zeichnet das Spiel den Rahmen nur einmal und danach nur
-   geänderte Teile, nach jedem Neuanlegen des Render-Ziels sein "alles zeichnen"-Flag setzen
-   (LESSONS, Drawing once).
+**Done when** in a 16:9 window the rotor or the wheels are round, the terrain reaches the edges,
+HUD and message window are unstretched and menus stay 4:3. Check: switch on and off, the pause
+menu, target markers over enemies (first see whether the HUD projects anything at all), all of
+the game's HUD modes in every game resolution, and changing window size and MSAA while the game
+runs.
 
-**Fertig, wenn** im 16:9-Fenster der Rotor/die Räder rund sind, Gelände bis an die Ränder
-reicht, HUD und Meldungsfenster unverzerrt sind und Menüs 4:3 bleiben. Prüfen: an- und
-ausschalten, Pausenmenü, Zielmarken über Gegnern (erst nachsehen, ob das HUD überhaupt
-etwas projiziert), alle HUD-Modi des Spiels in jeder Spielauflösung, Fenstergröße und MSAA
-im laufenden Spiel ändern.
+## 8d. Getting around the game's locks
 
-## 8d. Sperren des Spiels umgehen
-
-Erlaubt das Spiel etwas nur in einer Auflösung oder Konfiguration (Nuclear Strike: Cockpit-HUD
-nur bei 640x480), ist der Rest oft schon allgemein (Positionen nach Bildschirmgröße). Dann die
-Prüfung vor dem Kompilieren überspringen: `Game::code_patches` liefert (Adresse, alte Bytes,
-neue Bytes), etwa ein `jmp` über die Prüfung und `nop`s. Alle Stellen suchen
-(`rtools dis`, nach den Vergleichswerten wie `280h`/`1E0h`), sonst fehlt Vorbereitetes und
-das Spiel liest Nullzeiger. Patches in den Speicher (`on_start`) erreichen den schon
-kompilierten Code nicht.
+If the game allows something only in one resolution or configuration (Nuclear Strike: cockpit
+HUD only at 640x480), the rest is often already general (positions by screen size). Then skip
+the check before compiling: `Game::code_patches` gives (address, old bytes, new bytes), for
+example a `jmp` over the check and `nop`s. Find every place (`rtools dis`, look for the compared
+values like `280h`/`1E0h`), otherwise something prepared is missing and the game reads null
+pointers. Patches to memory (`on_start`) do not reach code that is already compiled.
 
 ## 8e. Vsync
 
-`gl::set_vsync(true)` setzt das Swap-Intervall 1 (ab dem nächsten Swap). Eigene Einstellung,
-nicht an die Bildrate gekoppelt (mit G-Sync will man es oft aus). Das Takten bleibt beim
-Port: der Treiber puffert Bilder, der Swap kehrt sofort zurück, solange das Spiel langsamer
-als der Bildschirm ist (LESSONS, Vsync). Ausnahme: liegt die gewählte Rate bei 97 % der
-Bildwiederholrate oder darüber (oder unbegrenzt), Bilder direkt nacheinander zeichnen und den
-Swap takten lassen; die eigene Uhr neben der des Bildschirms verpasst sonst Refreshes (nur in
-CapFrameX sichtbar).
+`gl::set_vsync(true)` sets the swap interval to 1 (from the next swap on). It is a setting of
+its own, not tied to the frame rate (with G-Sync you often want it off). The pacing stays with
+the port. The driver buffers pictures and the swap returns at once as long as the game is
+slower than the screen (LESSONS, Vsync). The exception: if the chosen rate is at 97 % of the
+refresh rate or above (or unlimited), draw pictures right after each other and let the swap do
+the pacing. Otherwise your own clock next to the screen's misses refreshes (only visible in
+CapFrameX).
 
-## 8f. Eigenes Einstellungsmenü
+## 8f. The port's own settings menu
 
-`platform::options`: ein Menü des Ports über dem Spiel (Overlay im Stil der Dialoge), auf
-`Game::options_key` (F10; das Spiel sieht die Taste nicht, eine wählen, die es nicht nutzt).
-Das Spiel gibt seine Seiten mit `Game::options` an; ohne Seiten gibt es kein Menü. Fertige
-Zeilen: `fullscreen`, `window_size` (Auflösung), `anti_aliasing`, `textures`,
-`frame_rate_display`; eigene mit `Row::on_off` / `Row::choice` (Werte sofort benutzen und
-speichern, meist `Setting`). Was ein Spiel braucht, hängt vom Spiel ab: Breitbild nur mit
-8c, Effekte erst, wenn es sie gibt, die Belegung mit dem Gamepad.
+`platform::options`: a menu of the port over the game (an overlay in the style of the dialogs),
+on `Game::options_key` (F10. The game does not see the key, so choose one it does not use). The
+game gives its pages with `Game::options`. Without pages there is no menu. Ready rows:
+`fullscreen`, `window_size` (resolution), `anti_aliasing`, `textures`, `frame_rate_display`.
+Your own with `Row::on_off` / `Row::choice` (use and save values at once, mostly with
+`Setting`). What a game needs depends on the game: widescreen only with 8c, effects only once
+there are any, the gamepad layout.
 
-Solange es offen ist, wartet `window::pump` darin: das Spiel steht, die Uhr des Gastes wird
-danach zurückgesetzt (GetTickCount, timeGetTime, QPC laufen nicht weiter). Die feste
-Logik-Uhr (`tween::LogicClock`) springt danach auf jetzt, ohne nachzuholen. Liest ein Spiel
-in der Mission beide Uhren, die Pause prüfen wie in 8b, Punkt 8 (Missionszeit, Timer).
-Tasten und Knöpfe, die losgelassen werden, bekommt das Spiel trotzdem; die Mausbewegung für
-DirectInput nicht. Testen: Menü in Mission und Hauptmenü auf und zu, die Missionsuhr des
-Spiels darf nicht um die Pause weiterlaufen.
+While it is open, `window::pump` waits in it. The game stands still and the guest's clock is
+set back afterwards (GetTickCount, timeGetTime and QPC do not move on). The fixed logic clock
+(`tween::LogicClock`) jumps to now afterwards, without catching up. If a game reads both clocks
+in the mission, check the pause as in 8b, point 8 (mission time, timers). The game still gets
+keys and buttons that are released, but not the mouse movement for DirectInput. Test: open and
+close the menu in a mission and in the main menu. The game's mission clock must not move on by
+the length of the pause.
 
-Belegung: `Row::bind(name, note, text, bind, clear)` fängt nach Enter die nächste Taste
-(`Bound::Key`, DirectInput-Code; Name mit `dinput::dik_name`) oder den nächsten Pad-Knopf
-(`Bound::Pad`, Nummer aus `dinput::CONTROLS`); Delete leert. Lange Seiten scrollen in
-kleinerer Schrift. Die Tasten am besten in der eigenen Tabelle des Spiels ändern (dort, wo es
-sie liest, und dort speichern: `advapi32::set_value_at` für einen anderen Schlüssel als den des
-Ports; Vorbild rustcoil `controls.rs`). Das Pad bedient das Menü selbst (D-Pad, A, B, X, LB/RB
-Seiten, Start schließt); Knöpfe in der Mission wie in rustcoil `gamepad.rs`
-(`Pad::buttons`, als Taste des Befehls drücken).
+Bindings: `Row::bind(name, note, text, bind, clear)` captures the next key after Enter
+(`Bound::Key`, a DirectInput code, its name from `dinput::dik_name`) or the next pad button
+(`Bound::Pad`, a number from `dinput::CONTROLS`). Delete clears it. Long pages scroll in smaller
+text. It is best to change the keys in the game's own table (where it reads them, and save them
+there: `advapi32::set_value_at` for a key other than the port's, see rustcoil `controls.rs`).
+The pad works the menu itself (D-pad, A, B, X, LB/RB for pages, Start closes). Buttons in the
+mission work as in rustcoil `gamepad.rs` (`Pad::buttons`, pressed as the command's key).
 
-## 9. Ton, Video, Netzwerk, Installation
+## 9. Sound, video, network, installation
 
-- DirectSound und PlaySound: fertig (`dsound.rs`, Mischung auf cpal).
-- MPEG-1-Videos über DirectShow: fertig (`dshow.rs`, `mpeg/`). Smacker: die mitgelieferte
-  `SMACKW32.DLL` mit der EXE kompilieren (`Game::dlls`, Basis außerhalb unseres Heaps,
-  Vorbild motorhead_rust); ihr Ton über waveOut fehlt noch. Bink und AVI fehlen noch.
-- DirectPlay (TCP/UDP): fertig für das, was Future Cop braucht (`dplay.rs`).
-- Installation: `Identity::required` (was neben der EXE liegen muss), `game_files` (was
-  mitwandert: Sounds, Schriften, Spielstände), `video_marker` (eine Datei im Video-Ordner der
-  CD). Das Setup nimmt ein CD-Image (.cue/.bin, .iso, .img, .mdf; ISO 9660/Joliet oder UDF; auch
-  2448-Byte-Sektoren mit Subkanal), eine kopierte CD oder einen installierten Spielordner. Liegt
-  das Spiel auf der CD nur in einem InstallShield-Archiv (data1.cab, ggf. data1.hdr):
-  `cab_left_out` = die Dateigruppen, die nicht installiert werden (Deinstaller, Treiber, die
-  Videos, wenn die CD sie auch lose hat; `rtools iscab data1.cab` listet die Gruppen). Dann
-  packt das Setup das Archiv selbst aus (Datei für Datei unter `.part`, die EXE zuletzt), auch
-  um einem installierten Spiel fehlende Dateien (MFC-DLLs im Windows-Ordner) nachzuliefern. Nur
-  eine EXE mit bekannter SHA-256 zählt (Launcher heißen oft gleich, Recoils
-  `Westwood\RECOIL\Recoil3Dfx.exe`). Eine CD-Prüfung, die nach einer Videodatei sucht, besser
-  per `code_patches` bestehen lassen: das Spiel läuft dann auch ohne Videos (Recoil 0x42e78a).
-  CD-Musik (`cdaudio.rs`): die .cue im Spielordner, in `game_files` (2 Ebenen tief) oder neben
-  dem Programm.
+- DirectSound and PlaySound: done (`dsound.rs`, mixed on cpal).
+- MPEG-1 videos through DirectShow: done (`dshow.rs`, `mpeg/`). Smacker: compile the
+  `SMACKW32.DLL` that comes with the game along with the EXE (`Game::dlls`, with a base
+  outside our heap, see motorhead_rust). Its sound through waveOut is still missing. Bink and
+  AVI are still missing.
+- DirectPlay (TCP/UDP): done for what Future Cop needs (`dplay.rs`).
+- Installation: `Identity::required` (what must lie next to the EXE), `game_files` (what moves
+  along: sounds, fonts, save games), `video_marker` (a file in the CD's video folder). Setup
+  takes a CD image (.cue/.bin, .iso, .img, .mdf, ISO 9660/Joliet or UDF, also 2448-byte sectors
+  with subchannel), a copied CD or an installed game folder. If the CD holds the game only in
+  an InstallShield archive (data1.cab, maybe data1.hdr), `cab_left_out` gives the file groups
+  that are not installed (uninstaller, drivers, the videos if the CD also has them loose.
+  `rtools iscab data1.cab` lists the groups). Setup then unpacks the archive itself (file by
+  file under `.part`, the EXE last), also to supply files an installed game lacks (MFC DLLs in
+  the Windows folder). Only an EXE with a known SHA-256 counts (launchers often have the same
+  name, like Recoil's `Westwood\RECOIL\Recoil3Dfx.exe`). A CD check that looks for a video file
+  is better passed with `code_patches`, so the game also runs without videos (Recoil
+  0x42e78a). CD music (`cdaudio.rs`): the .cue in the game folder, in `game_files` (2 levels
+  deep) or next to the program.
 
-## 10. Differenztest und Release
+## 10. Difference test and release
 
-- Differenztest gegen Unicorn (prüft jede Funktion gegen einen echten x86-Emulator): noch im
-  future_rust_cop-Repo (`src/bin/difftest.rs`), nicht im Framework (siehe PLAN.md).
-- Release: Version in `Cargo.toml`, Tag `v0.1.0` pushen; `.github/workflows/build.yml` baut
-  Windows und Linux und macht eine GitHub-Release.
+- Difference test against Unicorn (checks every function against a real x86 emulator): still
+  in the future_rust_cop repository (`src/bin/difftest.rs`), not in the framework (see
+  PLAN.md).
+- Release: set the version in `Cargo.toml` and push a tag `v0.1.0`.
+  `.github/workflows/build.yml` builds Windows and Linux and makes a GitHub release.
 
-## 11. Moderne Effekte (nach 8a)
+## 11. Modern effects (after 8a)
 
-Vorbilder: future_rust_cop und nuclear_rust_strike (`ao.rs`, `lights.rs`, `shadows.rs`,
-`bloom.rs`, `heat.rs`, `zbuffer.rs`, `particles.rs`). Grundlage ist eine Tiefe pro Vertex
-(Glide-Vertices haben meist keine: aus den Projektionen des Spiels holen). Effekte erkennt man
-an den Funktionen des Spiels, nie an der Farbe (LESSONS, Modern effects). Jeder Effekt ist
-eine Einstellung, die man ausschalten kann, und wird einzeln gemessen.
+Examples: future_rust_cop and nuclear_rust_strike (`ao.rs`, `lights.rs`, `shadows.rs`,
+`bloom.rs`, `heat.rs`, `zbuffer.rs`, `particles.rs`). The basis is a depth per vertex (Glide
+vertices mostly have none, so take it from the game's projections). Recognise effects by the
+game's functions, never by colour (LESSONS, Modern effects). Every effect is a setting that can
+be switched off, and each one is measured on its own.
 
-Reihenfolge in Future Cop: perspektivisch korrekte Texturen (aus derselben Tiefe), Tiefenpuffer
-(das Spiel sortiert nur grob: Gelände zuerst, nur Deckendes schreibt Tiefe; LESSONS, Depth
-buffer), SSAO, dynamische Lichter, Schatten (Shadow Map aus den Dreiecken des Spiels, mit
-"Ring" für Dinge knapp außerhalb des Bildes; LESSONS, Shadows), Hitzeflimmern, Bloom, HDR mit
-Tone Mapping. Grafikfehler werden behoben, auch wenn das Original sie hat; nicht erst
-nachweisen, dass es sie hat.
+The order in Future Cop: perspective-correct textures (from the same depth), a depth buffer
+(the game only sorts roughly: terrain first, only opaque things write depth. LESSONS, Depth
+buffer), SSAO, dynamic lights, shadows (a shadow map from the game's triangles, with a "ring"
+for things just outside the picture. LESSONS, Shadows), heat shimmer, bloom, HDR with tone
+mapping. Graphics glitches are fixed even if the original has them. Do not spend time proving
+that it does.
 
-Einstellungen, die der Spieler (oder der Nutzer beim Testen) von Hand umschaltet, brauchen
-keine Umgebungsvariable: Menü-Box, Registry oder ein Cargo-Feature für Test-Builds
-(`--features cheats`). Umgebungsvariablen nur für Skript-Tests.
+Settings the player (or a developer while testing) switches by hand do not need an environment
+variable: a menu box, the registry or a Cargo feature for test builds (`--features cheats`).
+Environment variables only for scripted tests.
 
 ---
 
-## Wenn etwas hängt oder abstürzt
+## When something hangs or crashes
 
-1. Absturz: Meldung nennt Funktion und Adresse → `rtools dis <exe> <adresse>`.
-   "call to unknown address" mit einer Adresse im Heap: das Spiel springt in Code aus seinen
-   Daten-Dateien (Motorhead: Schriften, Sprites). Die Spiel-Funktionen, die dorthin springen,
-   durch Hooks ersetzen und den geladenen Code interpretieren (LESSONS, Discovery).
-2. Hängt: `<PREFIX>_WATCH=1` → letzter Import-Aufruf; oft ein Thread, der auf einen anderen
-   wartet (siehe docs/LESSONS.md, "Threads").
-3. Falsches Ergebnis einer Funktion: Differenztest, oder die Funktion als Test-Schnipsel
-   nachbauen.
-4. Grafikfehler: `<PREFIX>_SHOT` mit `{t}`, Bilder vergleichen.
-5. docs/LESSONS.md durchsehen – viele Fallen sind dort schon beschrieben.
+1. Crash: the message names the function and address → `rtools dis <exe> <address>`.
+   "call to unknown address" with an address in the heap: the game jumps into code from its
+   data files (Motorhead: fonts, sprites). Replace the game functions that jump there with
+   hooks and interpret the loaded code (LESSONS, Discovery).
+2. Hangs: `<PREFIX>_WATCH=1` → the last import call. Often a thread waiting for another one
+   (see docs/LESSONS.md, "Threads").
+3. Wrong result of a function: the difference test, or rebuild the function as a test snippet.
+4. Graphics glitches: `<PREFIX>_SHOT` with `{t}`, compare the pictures.
+5. Look through docs/LESSONS.md. Many traps are already described there.

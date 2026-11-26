@@ -10,18 +10,16 @@ Only code is shared; players supply their own game files. **Never commit anythin
 from the EXE** (translated code, extracted data). `game_files/` is git-ignored. Function
 boundaries (`data/functions.json`) and our notes by address (`data/symbols.txt`) are fine.
 
-## The user
+## Rules
 
-- New to reverse engineering; explain in plain words, give a recommendation, not a survey.
-- Speaks German; works in short sessions and watches usage limits.
 - Confirm before anything outward-facing or destructive (pushing, deleting).
 - Clean Rust first, performance later.
 - The GPU is never the limit with this old game: a low frame rate is CPU side (game code,
   our code, draw calls, driver). Measure (recomp_kit GUIDE 8a).
 - Better than the original: glitches are fixed whether or not the original has them.
-- No environment variables for what the user tests by hand (cheat keys: Cargo feature
-  `cheats`, never in a release; settings: menu or registry). Replay the user's recordings with
-  exactly their settings.
+- No environment variables for what is tested by hand (cheat keys: Cargo feature
+  `cheats`, never in a release; settings: menu or registry). Replay recordings with exactly
+  the settings they were made with.
 
 ## How it works
 
