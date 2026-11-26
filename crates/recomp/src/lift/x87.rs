@@ -128,6 +128,10 @@ pub struct Cache {
     pub enabled: bool,
     /// TOP minus TOP at the run's start
     d: i64,
+    /// TOP as read once in the run, and `d` then: every later TOP and slot is that value plus
+    /// a constant (a chain of `(top + 1) & 7` per fld and fstp cost a dependent add and mask
+    /// each; only the last TOP of the run is used)
+    pub(super) base: Option<(Value, i64)>,
     /// by place relative to TOP at the run's start: the value, and whether memory lacks it
     vals: [Option<(Value, bool)>; 8],
     /// the control word (I16; memory has it too): one value along the run, so the rounding
@@ -163,6 +167,7 @@ impl Lifter<'_, '_> {
         }
         self.xc.vals = [None; 8];
         self.xc.d = 0;
+        self.xc.base = None;
         self.xc.cw = None;
         self.xc.mode = None;
         self.usual87 = false;
@@ -225,13 +230,7 @@ impl Lifter<'_, '_> {
     // ---- the register stack --------------------------------------------------------------
     /// Host pointer to the physical slot of ST(k), as a byte offset into the 8-entry arrays.
     fn slot(&mut self, k: u32) -> Value {
-        let t = self.b.use_var(self.top);
-        let t = if k == 0 {
-            t
-        } else {
-            self.b.ins().iadd_imm_s(t, k as i64)
-        };
-        let t = self.b.ins().band_imm_u(t, 7);
+        let t = self.top_plus(k as i64);
         let t = self.b.ins().uextend(I64, t);
         let t = self.b.ins().ishl_imm_u(t, 3);
         self.b.ins().iadd(self.cpu, t)
@@ -259,11 +258,41 @@ impl Lifter<'_, '_> {
         let p = self.slot(k);
         self.b.ins().store(mf(), v, p, offset_of!(Cpu, st) as i32);
     }
+    /// (TOP + k) & 7 (I32). In a cached run from the TOP read once (`Cache::base`).
+    fn top_plus(&mut self, k: i64) -> Value {
+        let (t, k) = if self.xc.enabled {
+            let (base, at) = match self.xc.base {
+                Some(b) => b,
+                None => {
+                    let b = (self.b.use_var(self.top), self.xc.d);
+                    self.xc.base = Some(b);
+                    b
+                }
+            };
+            (base, self.xc.d - at + k)
+        } else {
+            (self.b.use_var(self.top), k)
+        };
+        let t = if k == 0 {
+            t
+        } else {
+            self.b.ins().iadd_imm_s(t, k)
+        };
+        self.b.ins().band_imm_u(t, 7)
+    }
     fn add_top(&mut self, d: i64) {
+        if self.xc.enabled && self.xc.base.is_none() {
+            // read TOP before it moves
+            self.top_plus(0);
+        }
         self.xc.d += d;
-        let t = self.b.use_var(self.top);
-        let t = self.b.ins().iadd_imm_s(t, d);
-        let t = self.b.ins().band_imm_u(t, 7);
+        let t = if self.xc.enabled {
+            self.top_plus(0)
+        } else {
+            let t = self.b.use_var(self.top);
+            let t = self.b.ins().iadd_imm_s(t, d);
+            self.b.ins().band_imm_u(t, 7)
+        };
         self.b.def_var(self.top, t);
     }
     fn fpush(&mut self, v: Value) {
@@ -292,15 +321,12 @@ impl Lifter<'_, '_> {
         }
     }
 
+    /// The status word (a variable, `Lifter::fsw`).
     fn fsw(&mut self) -> Value {
-        self.b
-            .ins()
-            .load(I16, mf(), self.cpu, offset_of!(Cpu, fsw) as i32)
+        self.b.use_var(self.fsw)
     }
     fn set_fsw(&mut self, v: Value) {
-        self.b
-            .ins()
-            .store(mf(), v, self.cpu, offset_of!(Cpu, fsw) as i32);
+        self.b.def_var(self.fsw, v);
     }
 
     // ---- memory operands -------------------------------------------------------------------
@@ -425,6 +451,9 @@ impl Lifter<'_, '_> {
             self.b.create_block(),
         );
         self.b.append_block_param(done, F64);
+        // the rare ways at the function's end: the common ones stay close together
+        self.b.set_cold_block(edge);
+        self.b.set_cold_block(call_blk);
         self.b.ins().brif(usual, done, &[fast.into()], slow, &[]);
         self.b.switch_to_block(slow);
         let (ok, r) = self.round24_between(op, x, y, s, md);
@@ -484,6 +513,9 @@ impl Lifter<'_, '_> {
             self.b.create_block(),
         );
         self.b.append_block_param(done, F64);
+        // the rare ways at the function's end (see `arith`)
+        self.b.set_cold_block(other);
+        self.b.set_cold_block(call_blk);
         self.b.ins().brif(normal, done, &[r.into()], other, &[]);
         // zero: exact unless a product or quotient of nonzero numbers came out below the
         // doubles' range (a sum of doubles is zero only if exact)

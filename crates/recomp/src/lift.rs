@@ -279,6 +279,10 @@ pub struct Lifter<'a, 'f> {
     of: Variable,
     /// x87 TOP (0..7)
     top: Variable,
+    /// x87 status word (I16, TOP's bits not kept): in memory only across calls and exits, so
+    /// a compare's condition codes read by fnstsw and a test stay in registers, and what
+    /// nobody reads is not made
+    fsw: Variable,
     cfg: TargetFrontendConfig,
     blocks: HashMap<u32, Block>,
     /// blocks that leave the function towards an address
@@ -333,6 +337,7 @@ impl<'a, 'f> Lifter<'a, 'f> {
             b.declare_var(I8),
         );
         let top = b.declare_var(I32);
+        let fsw = b.declare_var(I16);
         let mut l = Lifter {
             b,
             f,
@@ -350,6 +355,7 @@ impl<'a, 'f> Lifter<'a, 'f> {
             sf,
             of,
             top,
+            fsw,
             cfg,
             blocks: HashMap::new(),
             exits: HashMap::new(),
@@ -394,6 +400,13 @@ impl<'a, 'f> Lifter<'a, 'f> {
             .ins()
             .load(I32, mf(), self.cpu, offset_of!(Cpu, top) as i32);
         self.b.def_var(self.top, t);
+        // TOP read anew: a cached run's later TOPs from this one
+        self.xc.base = None;
+        let sw = self
+            .b
+            .ins()
+            .load(I16, mf(), self.cpu, offset_of!(Cpu, fsw) as i32);
+        self.b.def_var(self.fsw, sw);
     }
 
     fn store_state(&mut self) {
@@ -411,6 +424,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
         self.b
             .ins()
             .store(mf(), t, self.cpu, offset_of!(Cpu, top) as i32);
+        let sw = self.b.use_var(self.fsw);
+        self.b
+            .ins()
+            .store(mf(), sw, self.cpu, offset_of!(Cpu, fsw) as i32);
     }
 
     fn reg(&mut self, k: usize) -> Value {

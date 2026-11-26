@@ -33,6 +33,11 @@ enum Op {
     /// fldcw of control word j of the data block's four (24 bits truncating or to nearest,
     /// 53 bits)
     Cw(u32),
+    /// fcom sti(i)
+    Com(u32),
+    /// fnstsw into status word j of the data block's eight: the condition codes and TOP in
+    /// the middle of a run (TOP from the run's first read, `Cache::base`)
+    Status(u32),
 }
 
 thread_local! {
@@ -44,7 +49,7 @@ fn sti(i: u32) -> AsmRegisterSt {
 }
 
 /// The data block: inputs (doubles at 0..128, dwords at 128..192, control words at 600),
-/// outputs from 256.
+/// outputs from 256 (status words at 616).
 fn prog(a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.mov(eax, dword_ptr(esp + 4))?;
     a.mov(ecx, 3u32)?;
@@ -99,6 +104,8 @@ fn prog(a: &mut CodeAssembler) -> Result<(), IcedError> {
                 a.mov(dword_ptr(eax + 128 + 4 * ((j + 1) % 16)), edx)?;
             }
             Op::Cw(j) => a.fldcw(word_ptr(eax + 600 + 2 * j))?,
+            Op::Com(i) => a.fcom_2(st0, sti(i))?,
+            Op::Status(j) => a.fnstsw(word_ptr(eax + 616 + 2 * j))?,
             Op::Skip => {
                 let mut skip = a.create_label();
                 a.test(ecx, 1u32)?;
@@ -136,9 +143,11 @@ fn random_ops(rng: &mut Rng) -> Vec<Op> {
             12 if depth > 3 => Op::StorePop(r(rng, 16)),
             13 => Op::StoreF32(r(rng, 16)),
             14 if depth > 3 => Op::PopTo(r(rng, depth)),
-            15 => match r(rng, 3) {
+            15 => match r(rng, 5) {
                 0 => Op::Skip,
                 1 => Op::Int(r(rng, 16)),
+                2 => Op::Com(r(rng, depth)),
+                3 => Op::Status(r(rng, 8)),
                 _ => Op::Cw(r(rng, 4)),
             },
             _ => continue,
@@ -183,6 +192,17 @@ fn run(rng: &mut Rng, ops: &[Op], cached: bool) -> Vec<u8> {
     m.slice(SCRATCH, 640).to_vec()
 }
 
+/// Two NaNs in the same double (f64 outputs at 256..512, the final stores) count as equal: an
+/// operation on two NaNs gives one of them, which one depends on the operands' order, and
+/// Cranelift may swap a product's.
+fn same_up_to_nan(a: &[u8], b: &[u8]) -> bool {
+    let nan = |x: &[u8], k: usize| f64::from_le_bytes(x[k..k + 8].try_into().unwrap()).is_nan();
+    (0..a.len()).all(|k| {
+        let q = k & !7;
+        a[k] == b[k] || ((256..512).contains(&q) && nan(a, q) && nan(b, q))
+    })
+}
+
 #[test]
 fn x87_cache() {
     let mut rng = Rng(0x0123_4567_89ab_cdef);
@@ -191,6 +211,9 @@ fn x87_cache() {
         let seed = rng.next();
         let a = run(&mut Rng(seed), &ops, false);
         let b = run(&mut Rng(seed), &ops, true);
-        assert!(a == b, "program {n} differs with the cache: {ops:?}");
+        assert!(
+            same_up_to_nan(&a, &b),
+            "program {n} differs with the cache: {ops:?}"
+        );
     }
 }
