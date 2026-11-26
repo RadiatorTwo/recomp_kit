@@ -160,6 +160,19 @@ pub fn frame_rate_display() -> Row {
     )
 }
 
+/// The glow around bright things (`bloom.rs`; the game calls `glide::bloom`).
+pub fn bloom() -> Row {
+    Row::choice(
+        "Bloom",
+        "A soft glow around fire, explosions and shots",
+        || {
+            let names = super::bloom::LEVEL_NAMES.iter().map(|n| n.to_string());
+            (names.collect(), super::bloom::level())
+        },
+        super::bloom::set_level,
+    )
+}
+
 /// Window sizes offered (those that fit the display): 4:3, then 16:9 (widescreen).
 const SIZES: [(u32, u32); 11] = [
     (960, 720),

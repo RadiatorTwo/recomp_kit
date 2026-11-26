@@ -478,6 +478,14 @@ for things just outside the picture. LESSONS, Shadows), heat shimmer, bloom, HDR
 mapping. Graphics glitches are fixed even if the original has them. Do not spend time proving
 that it does.
 
+Bloom is in the kit (`bloom.rs`, from rustcoil). Call `glide::bloom(rows)` once the 3D views are
+drawn and before the HUD, with the view's rows (rustcoil `cut::bloom`). Add the row
+`options::bloom()` to a page (setting `BloomLevel`: Off, Low, Medium, High). Only effects glow:
+glide draws a glow mask beside the picture. A primitive that is blended and writes no depth
+(fire, explosions, shots, the glow of lights) writes its alpha there, every other one writes 0.
+Check first that this holds for your game: leave out exactly these primitives in a test
+(`flush`) and look at what goes missing. In Recoil only the effects went, sky and sand stayed.
+
 Settings the player (or a developer while testing) switches by hand do not need an environment
 variable: a menu box, the registry or a Cargo feature for test builds (`--features cheats`).
 Environment variables only for scripted tests.

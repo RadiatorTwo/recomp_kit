@@ -109,6 +109,11 @@
   LESSONS: Watcom, code in data files, COM references, Smacker. Recoil's `rtools missing`:
   5055 -> 5065 functions, unsupported unchanged; fcop_plain not run (no FCop EXE unpacked).
 
+- From rustcoil (2026-11-26): bloom (`bloom.rs`, after nuclear_rust_strike's; levels
+  Off/Low/Medium/High, setting `BloomLevel`, `options::bloom`; `glide::bloom(rows)` once the
+  views are drawn) with glide's glow mask (a second attachment: blended primitives without
+  depth writes glow, the rest not). GUIDE 11.
+
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 
 - `glide.rs`: check how batches are uploaded (glBufferSubData, no map per batch; the kit

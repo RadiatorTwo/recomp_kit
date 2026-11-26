@@ -8,6 +8,7 @@
 
 pub mod advapi32;
 pub mod avi;
+pub mod bloom;
 pub mod cdaudio;
 pub mod cheats;
 pub mod cinepak;

@@ -89,7 +89,12 @@ const LFB_BAND_GAP: u32 = 8;
 /// The pixels of a locked buffer's row (16 bits each) the game wrote: from the first to past
 /// the last, or None. Compared four at a time.
 fn touched(row: &[u8]) -> Option<(usize, usize)> {
-    let four = u64::from_ne_bytes([LFB_UNTOUCHED.to_le_bytes(); 4].concat().try_into().unwrap());
+    let four = u64::from_ne_bytes(
+        [LFB_UNTOUCHED.to_le_bytes(); 4]
+            .concat()
+            .try_into()
+            .unwrap(),
+    );
     let differs = |c: &[u8]| u64::from_ne_bytes(c.try_into().unwrap()) != four;
     let px = |x: &usize| u16::from_le_bytes([row[2 * x], row[2 * x + 1]]) != LFB_UNTOUCHED;
     let n = row.len() / 2;
@@ -236,6 +241,13 @@ struct Glide {
     rows: Option<(i32, i32)>,
     /// the texture shown (drawn into through each thread's framebuffer, `Local`)
     color: glow::Texture,
+    /// beside `color` (its second attachment, R8): where glowing effects were drawn, for
+    /// `bloom`. A primitive blended and not writing depth (fire, explosions, shots, glows)
+    /// writes its alpha there, any other writes 0 (blended like the colour: what is drawn in
+    /// front covers the mask). Only the game's primitives (`flush`) draw into it.
+    glow_mask: glow::Texture,
+    /// with MSAA: the mask's multisampled renderbuffer (resolved into `glow_mask` for `bloom`)
+    ms_glow: Option<glow::Renderbuffer>,
     /// with MSAA: the multisampled renderbuffer drawn into, its samples and its number (a
     /// thread's framebuffer for it is found by that, not by the GL name, which may come again);
     /// resolved into `color` at grBufferSwap
@@ -304,6 +316,8 @@ struct Glide {
     lfb_rgba: Vec<u8>,
     /// drawing LFB pixels over the picture: a program and a texture
     blit: (glow::Program, glow::Texture),
+    /// the glow's passes, once used (`bloom`)
+    bloom: Option<super::bloom::Bloom>,
 }
 
 /// Glide's state, global: a game may draw from more than one thread (Nuclear Strike: its game
@@ -440,7 +454,9 @@ vec2 st;
 flat in vec4 konst;    // the constant colour
 flat in uvec4 vmode;   // combine units and texture, packed by `add`
 flat in vec4 st_box;   // the primitive's texture rectangle
-out vec4 color;
+uniform float glow;    // 1: a glowing effect's primitive (see `Glide::glow_mask`)
+layout(location = 0) out vec4 color;
+layout(location = 1) out vec4 glow_mask;
 
 ivec4 cc;              // colour combine: function, factor, local, other
 int cc_inv;
@@ -609,6 +625,8 @@ void main() {
         else c = mix(c, fog_color, f);
     }
     color = vec4(c, a);
+    // blended like the colour (its alpha the factor): an effect's coverage, 0 for the rest
+    glow_mask = vec4(glow, 0.0, 0.0, a);
 }
 "#;
 
@@ -654,6 +672,7 @@ struct Uniforms {
     depth_bias: Option<glow::UniformLocation>,
     fog_mode: Option<glow::UniformLocation>,
     fog_color: Option<glow::UniformLocation>,
+    glow: Option<glow::UniformLocation>,
 }
 
 impl Uniforms {
@@ -674,7 +693,27 @@ impl Uniforms {
             depth_bias: u("depth_bias"),
             fog_mode: u("fog_mode"),
             fog_color: u("fog_color"),
+            glow: u("glow"),
         }
+    }
+}
+
+/// The glow mask's storage for a target of `size` (cleared: nothing glows).
+fn mask_storage(gl: &glow::Context, t: glow::Texture, (w, h): (u32, u32)) {
+    unsafe {
+        gl.bind_texture(glow::TEXTURE_2D, Some(t));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::R8 as i32,
+            w as i32,
+            h as i32,
+            0,
+            glow::RED,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(&vec![0u8; (w * h) as usize])),
+        );
+        gl.bind_texture(glow::TEXTURE_2D, None);
     }
 }
 
@@ -1028,6 +1067,8 @@ impl Glide {
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(None),
             );
+            let glow_mask = texture(gl, true);
+            mask_storage(gl, glow_mask, target);
             let prog = compile(gl, VS, FS);
             let vbo = gl.create_buffer().expect("GL buffer");
             let aniso_max = if gl
@@ -1061,6 +1102,8 @@ impl Glide {
                 view: View::Full,
                 rows: None,
                 color,
+                glow_mask,
+                ms_glow: None,
                 ms: None,
                 made: 0,
                 ms_max: gl.get_parameter_i32(glow::MAX_SAMPLES).max(0) as u32,
@@ -1112,6 +1155,7 @@ impl Glide {
                 lfb: None,
                 lfb_rgba: Vec::new(),
                 blit,
+                bloom: None,
             }
         }
     }
@@ -1126,7 +1170,7 @@ impl Glide {
 
     /// This thread's framebuffer drawing into `color`.
     fn color_fbo(&mut self, gl: &glow::Context) -> glow::Framebuffer {
-        let (color, depth) = (self.color, self.depth_rb);
+        let (color, depth, mask) = (self.color, self.depth_rb, self.glow_mask);
         *self
             .local(gl)
             .fbos
@@ -1139,6 +1183,13 @@ impl Glide {
                     glow::COLOR_ATTACHMENT0,
                     glow::TEXTURE_2D,
                     Some(color),
+                    0,
+                );
+                gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT1,
+                    glow::TEXTURE_2D,
+                    Some(mask),
                     0,
                 );
                 gl.framebuffer_renderbuffer(
@@ -1190,6 +1241,7 @@ impl Glide {
     /// This thread's framebuffer drawing into the multisampled renderbuffer, if there is one.
     fn ms_fbo(&mut self, gl: &glow::Context) -> Option<glow::Framebuffer> {
         let (rb, _, n, depth) = self.ms?;
+        let mask = self.ms_glow?;
         Some(
             *self
                 .local(gl)
@@ -1203,6 +1255,12 @@ impl Glide {
                         glow::COLOR_ATTACHMENT0,
                         glow::RENDERBUFFER,
                         Some(rb),
+                    );
+                    gl.framebuffer_renderbuffer(
+                        glow::FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT1,
+                        glow::RENDERBUFFER,
+                        Some(mask),
                     );
                     gl.framebuffer_renderbuffer(
                         glow::FRAMEBUFFER,
@@ -1275,6 +1333,7 @@ impl Glide {
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(None),
             );
+            mask_storage(gl, self.glow_mask, (w, h));
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(self.depth_rb));
             gl.renderbuffer_storage(
                 glow::RENDERBUFFER,
@@ -1311,6 +1370,9 @@ impl Glide {
                 gl.delete_renderbuffer(rb);
                 gl.delete_renderbuffer(depth);
             }
+            if let Some(m) = self.ms_glow.take() {
+                gl.delete_renderbuffer(m);
+            }
             if samples == 0 {
                 return;
             }
@@ -1333,6 +1395,10 @@ impl Glide {
                 w,
                 h,
             );
+            let mask = gl.create_renderbuffer().expect("GL renderbuffer");
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(mask));
+            gl.renderbuffer_storage_multisample(glow::RENDERBUFFER, samples as i32, glow::R8, w, h);
+            self.ms_glow = Some(mask);
             self.made += 1;
             self.ms = Some((rb, samples, self.made, depth));
             let fbo = self.ms_fbo(gl).unwrap();
@@ -1379,6 +1445,37 @@ impl Glide {
         }
     }
 
+    /// With MSAA: the glow mask's samples into `glow_mask`, inside `clip` (x y w h, GL's).
+    fn resolve_glow_mask(&mut self, gl: &glow::Context, [x, y, w, h]: [i32; 4]) {
+        let Some(fbo) = self.ms_fbo(gl) else {
+            return;
+        };
+        let color = self.color_fbo(gl);
+        unsafe {
+            gl.disable(glow::SCISSOR_TEST);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
+            gl.read_buffer(glow::COLOR_ATTACHMENT1);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(color));
+            gl.draw_buffers(&[glow::NONE, glow::COLOR_ATTACHMENT1]);
+            let (x1, y1) = (x + w, y + h);
+            gl.blit_framebuffer(
+                x,
+                y,
+                x1,
+                y1,
+                x,
+                y,
+                x1,
+                y1,
+                glow::COLOR_BUFFER_BIT,
+                glow::NEAREST,
+            );
+            gl.draw_buffers(&[glow::COLOR_ATTACHMENT0]);
+            gl.read_buffer(glow::COLOR_ATTACHMENT0);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+    }
+
     /// Draw what is batched with the current state.
     fn flush(&mut self, gl: &glow::Context) {
         if self.batch.is_empty() {
@@ -1397,6 +1494,7 @@ impl Glide {
             self.scissor(gl, clip);
             gl.use_program(Some(self.prog));
             gl.bind_vertex_array(Some(vao));
+            gl.draw_buffers(&[glow::COLOR_ATTACHMENT0, glow::COLOR_ATTACHMENT1]);
             let u = &self.uniforms;
             gl.uniform_2_f32(u.space.as_ref(), self.space.0 as f32, self.space.1 as f32);
             let filter = FILTER.load(Ordering::Relaxed);
@@ -1485,6 +1583,8 @@ impl Glide {
                 0
             };
             gl.uniform_1_i32(u.edge.as_ref(), edge);
+            let glowing = !opaque && !s.depth_mask;
+            gl.uniform_1_f32(u.glow.as_ref(), glowing as u8 as f32);
             if opaque && edge != 1 {
                 gl.disable(glow::BLEND);
             } else {
@@ -1564,6 +1664,7 @@ impl Glide {
                 std::slice::from_raw_parts(self.batch.as_ptr() as *const u8, self.batch.len() * 4);
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
             gl.draw_arrays(self.batch_mode, 0, (self.batch.len() / VERTEX) as i32);
+            gl.draw_buffers(&[glow::COLOR_ATTACHMENT0]);
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::BLEND);
             gl.disable(glow::DEPTH_TEST);
@@ -1936,7 +2037,10 @@ impl Glide {
         if write {
             let untouched = LFB_UNTOUCHED.to_le_bytes();
             for y in 0..h {
-                for p in m.slice(buf + y * LFB_STRIDE, 2 * w as usize).chunks_exact_mut(2) {
+                for p in m
+                    .slice(buf + y * LFB_STRIDE, 2 * w as usize)
+                    .chunks_exact_mut(2)
+                {
                     p.copy_from_slice(&untouched);
                 }
             }
@@ -2385,8 +2489,15 @@ fn sst_win_close(_: &mut Cpu) -> u32 {
         }
         gl.delete_renderbuffer(g.depth_rb);
         gl.delete_program(g.blit.0);
+        if let Some(mut b) = g.bloom.take() {
+            b.delete(gl);
+        }
         gl.delete_texture(g.blit.1);
         gl.delete_texture(g.color);
+        gl.delete_texture(g.glow_mask);
+        if let Some(m) = g.ms_glow.take() {
+            gl.delete_renderbuffer(m);
+        }
         gl.delete_texture(g.array);
         gl.delete_texture(g.alpha);
     });
@@ -2427,6 +2538,10 @@ fn buffer_clear(c: &mut Cpu) -> u32 {
             }
             gl.clear(bits);
             gl.color_mask(true, true, true, true);
+            // the glow mask where the colour was cleared
+            if s.color_mask.0 {
+                gl.clear_buffer_f32_slice(glow::COLOR, 1, &[0.0; 4]);
+            }
             gl.disable(glow::SCISSOR_TEST);
         }
     });
@@ -2740,6 +2855,38 @@ pub fn set_rows(rows: Option<(i32, i32)>) {
             g.flush(gl);
             g.rows = rows;
         }
+    });
+}
+
+/// The 3D views are drawn (before the HUD): the glow over them (`bloom.rs`), when it is on,
+/// inside the rows (screen pixels from the top, from..to), as wide as the view goes.
+pub fn bloom(rows: (i32, i32)) {
+    if !super::bloom::enabled() {
+        return;
+    }
+    with(|g, gl| {
+        g.flush(gl);
+        let ([_, vy, _, vh], (cut0, cut1)) = g.view_rect();
+        let th = g.target.1 as f32;
+        let sy = vh / g.res.1 as f32;
+        let y0 = (vy + rows.0 as f32 * sy).round().max(0.0);
+        let y1 = (vy + rows.1 as f32 * sy).round().min(th);
+        let (x0, x1) = (cut0.round(), cut1.round());
+        if y1 <= y0 || x1 <= x0 {
+            return;
+        }
+        let clip = [
+            x0 as i32,
+            (th - y1) as i32,
+            (x1 - x0) as i32,
+            (y1 - y0) as i32,
+        ];
+        let out = g.draw_fbo(gl);
+        g.resolve_glow_mask(gl, clip);
+        let (target, mask) = (g.target, g.glow_mask);
+        g.bloom
+            .get_or_insert_with(|| super::bloom::Bloom::new(gl))
+            .run(gl, out, mask, target, clip);
     });
 }
 
