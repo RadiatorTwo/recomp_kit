@@ -765,6 +765,55 @@ impl<'a, 'f> Lifter<'a, 'f> {
     }
 
     /// Run a host helper on the synced state.
+    /// rep movs (`copy`) or rep stos of `size`-byte elements as a loop in the code, element by
+    /// element as the CPU does (a copy onto a later part of its own source repeats a pattern).
+    /// The game's memcpy and memset: ~22 million mostly short ones in two minutes of Recoil,
+    /// each a call to `rt_string` with the state stored and loaded. Backwards (DF set) still
+    /// goes there.
+    fn rep_move(&mut self, copy: bool, size: u32, op: i64) {
+        let (head, body, back, done) = (
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+            self.b.create_block(),
+        );
+        self.b.set_cold_block(back);
+        let df = self
+            .b
+            .ins()
+            .load(I8, mf(), self.cpu, offset_of!(Cpu, df) as i32);
+        self.b.ins().brif(df, back, &[], head, &[]);
+        self.b.switch_to_block(back);
+        self.helper(self.refs.string, Some(op));
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(head);
+        let n = self.reg(1);
+        self.b.ins().brif(n, body, &[], done, &[]);
+        self.b.switch_to_block(body);
+        let di = self.reg(7);
+        let v = if copy {
+            let si = self.reg(6);
+            let v = self.load(si, size);
+            let si = self.b.ins().iadd_imm_s(si, size as i64);
+            self.set_reg(6, si);
+            v
+        } else {
+            let a = self.reg(0);
+            if size == 4 {
+                a
+            } else {
+                self.b.ins().ireduce(ty(size), a)
+            }
+        };
+        self.store(di, v);
+        let di = self.b.ins().iadd_imm_s(di, size as i64);
+        self.set_reg(7, di);
+        let n = self.b.ins().iadd_imm_s(n, -1);
+        self.set_reg(1, n);
+        self.b.ins().jump(head, &[]);
+        self.b.switch_to_block(done);
+    }
+
     fn helper(&mut self, f: FuncRef, extra: Option<i64>) {
         self.store_state();
         match extra {
@@ -1529,7 +1578,12 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 } else {
                     0
                 };
-                self.helper(self.refs.string, Some(kind | size << 4 | rep << 8));
+                let op = kind | size << 4 | rep << 8;
+                if rep == 1 && kind <= 1 {
+                    self.rep_move(kind == 0, size as u32, op);
+                } else {
+                    self.helper(self.refs.string, Some(op));
+                }
             }
         }
         false

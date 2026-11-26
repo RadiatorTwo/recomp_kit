@@ -116,6 +116,9 @@
 - From rustcoil (2026-11-26): x87 speed in the lifter: TOP from one read per cached run
   (`Cache::base`), the status word a variable (`Lifter::fsw`), the rounding's rare ways cold;
   `x87_cache` with fcom and fnstsw, two NaNs equal. Recoil ~10 % (GUIDE 8a).
+- From rustcoil (2026-11-26): rep movs / rep stos forward as a loop in the lifted code
+  (`Lifter::rep_move`) instead of a call to `rt_string` (Recoil: ~22 million short memcpy /
+  memset calls in two minutes, 5 % of the frame); test `string.rs`.
 
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 
