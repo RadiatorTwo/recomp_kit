@@ -228,6 +228,8 @@ impl Gl {
         };
         *STAGED.lock().unwrap() = Some((staged, 0));
         g.parts();
+        #[cfg(not(windows))]
+        release_surface(&g.context);
         (win, g)
     }
 
@@ -292,6 +294,8 @@ impl Gl {
         // the present thread may be drawing the window
         super::window::present_wait();
         let _p = PAINT.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(not(windows))]
+        take_surface(&self.context, &self.surface);
         let out = paint(&self.gl, self.vao, &self.look(w, h), shot);
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
@@ -309,6 +313,8 @@ impl Gl {
         if self.vsync != 0 && self.shown.3 {
             unsafe { self.gl.finish() };
         }
+        #[cfg(not(windows))]
+        release_surface(&self.context);
         out
     }
 
@@ -646,16 +652,58 @@ pub struct Shared {
     pub copy_fbo: [glow::Framebuffer; 2],
 }
 
+/// EGL and GLX let a window's surface be current in one thread at a time (EGL_BAD_ACCESS: the
+/// present thread died and the game waited for it forever at the first Glide picture, Linux
+/// only; WGL does not mind). Off Windows a context has the surface only while it draws into the
+/// window (under PAINT) and is current without one the rest of the time.
+#[cfg(not(windows))]
+fn without_surface(c: NotCurrentContext) -> PossiblyCurrentContext {
+    let r = match c {
+        NotCurrentContext::Egl(c) => c.make_current_surfaceless().map(PossiblyCurrentContext::Egl),
+        NotCurrentContext::Glx(c) => c.make_current_surfaceless().map(PossiblyCurrentContext::Glx),
+        #[allow(unreachable_patterns)]
+        _ => panic!("no EGL or GLX context"),
+    };
+    r.expect("cannot make the shared GL context current")
+}
+
+/// The window's surface given up by this thread's context (see `without_surface`).
+#[cfg(not(windows))]
+fn release_surface(c: &PossiblyCurrentContext) {
+    let r = match c {
+        PossiblyCurrentContext::Egl(c) => c.make_current_surfaceless(),
+        PossiblyCurrentContext::Glx(c) => c.make_current_surfaceless(),
+        #[allow(unreachable_patterns)]
+        _ => Ok(()),
+    };
+    if let Err(e) = r {
+        eprintln!("warn: GL context without a surface: {e}");
+    }
+}
+
+/// The window's surface for this thread's context, to draw into the window (under PAINT).
+#[cfg(not(windows))]
+fn take_surface(c: &PossiblyCurrentContext, s: &Surface<WindowSurface>) {
+    use glutin::context::PossiblyCurrentGlContext;
+    if let Err(e) = c.make_current(s) {
+        eprintln!("warn: cannot draw into the window: {e}");
+    }
+}
+
 impl SharedParts {
     pub fn make_current(self) -> Shared {
+        #[cfg(windows)]
         let context = self
             .context
             .make_current(unsafe { &*self.surface })
             .expect("cannot make the shared GL context current");
+        #[cfg(not(windows))]
+        let context = without_surface(self.context);
         let display = self.display;
         let gl =
             unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s)) };
         let vao = unsafe { gl.create_vertex_array() }.expect("GL vertex array");
+        #[cfg(windows)]
         let _ = unsafe { &*self.surface }.set_swap_interval(&context, SwapInterval::DontWait);
         let copy_fbo = unsafe {
             [
@@ -668,7 +716,8 @@ impl SharedParts {
             context,
             surface: self.surface,
             vao,
-            vsync: 0,
+            // off Windows set at the first picture, with the surface
+            vsync: if cfg!(windows) { 0 } else { u32::MAX },
             copy_fbo,
         }
     }
@@ -687,6 +736,8 @@ impl Shared {
         let _p = PAINT.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: the window's surface lives as long as the window (see SharedParts)
         let surface = unsafe { &*self.surface };
+        #[cfg(not(windows))]
+        take_surface(&self.context, surface);
         let vsync = VSYNC.load(std::sync::atomic::Ordering::Relaxed);
         if vsync != self.vsync {
             self.vsync = vsync;
@@ -710,6 +761,8 @@ impl Shared {
             }
         }
         let _ = surface.swap_buffers(&self.context);
+        #[cfg(not(windows))]
+        release_surface(&self.context);
         out
     }
 }

@@ -115,6 +115,11 @@ White. Most apply to any game of that time. Add new ones here.
   draws with the game's GL code: anything there that reads a setting (the registry lies in the
   game folder) panicked with "game folder not set" (rustcoil v0.1.1). Settings give their
   default where no game folder is known (`has_game_dir`).
+- EGL and GLX let a window's surface be current in one thread at a time (WGL does not mind):
+  the present thread's shared context failed with EGL_BAD_ACCESS and died, the game waited for
+  it forever (black window before the first video; rustcoil v0.1.2, the same in motorhead_rust).
+  Off Windows a context holds the surface only while it draws into the window (under PAINT)
+  and is current surfaceless otherwise (`gl.rs`: take_surface, release_surface).
 - Count before optimising a path: a temporary counter in the slow call (`rt_fpu_round`, the
   Glide flush's reasons) told what a profile could not (which operations, which state change).
 - A Glide renderer drew ~250 batches a picture because the game changed the alpha test
