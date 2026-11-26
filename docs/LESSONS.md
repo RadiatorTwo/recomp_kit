@@ -219,7 +219,7 @@ White. Most apply to any game of that time. Add new ones here.
   parent, the CD's top folder, for reads), and nothing is written outside it. Test runs pass
   the EXE's path; a start without it runs the setup.
 - Scripted runs (`<PREFIX>_INPUT`) never catch the cursor: the window takes the focus and would
-  lock the user's mouse while Claude tests.
+  lock the mouse of whoever sits at the computer while the script runs.
 - Glide textures: s and t go 0..256 over the longer side for every texture size (scale by
   size / 256); a tmu's oow may be 0 (use the vertex's, also for the texture rectangle); small
   textures repeat over a primitive (wrap inside the texture, its layer is larger). A game may
@@ -462,7 +462,7 @@ White. Most apply to any game of that time. Add new ones here.
   Debug names help (Nuclear Strike's `pyro*`); the effect kinds usually come from one data
   file and are the same in every level.
 - Keep a log of the effects by kind with their counts (`NSTRIKE_LIGHT_LOG=1`) and an
-  environment override of the list: the user names what misbehaves, the log says its kind.
+  environment override of the list: the tester names what misbehaves, the log says its kind.
 - A primitive finds its display list record by its first vertex through a sorted index, not by
   looking a few records ahead: with the terrain moved to the front a window of 16 lost the
   fog's smoke (not lit, dark).
@@ -536,8 +536,8 @@ From future_rust_cop's port (2026-11-24; the kit does not run there yet):
 - Savestates: give a new guest thread its TIB and stack in CreateThread / timeSetEvent, not when
   it first runs: that timing moved every heap block after them, and the check against the saved
   heap failed at random (`platform::thread_stack`, from future_rust_cop).
-- Replay a user's recording (`<PREFIX>_RECORD`) with exactly their settings: another window
-  size or renderer switch makes the replay diverge and a savestate not match.
-- Things the user tests by hand (cheat keys, comparison switches) must work without an
+- Replay a recording (`<PREFIX>_RECORD`) with exactly the settings it was made with: another
+  window size or renderer switch makes the replay diverge and a savestate not match.
+- Things tested by hand (cheat keys, comparison switches) must work without an
   environment variable: a Cargo feature (`cheats`, never in a release), a menu box or the
   registry. Environment variables are for scripted tests only.
