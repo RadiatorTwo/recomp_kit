@@ -66,8 +66,8 @@
   lookups in sort comparisons, frame pacing (late frames keep their length, pictures keep their
   schedule, frame logs with the shown game time), vsync near the refresh, gamepad trigger rest,
   savestates and new threads' stacks, depth buffer, shadow map and its ring, tone mapping
-  targets; the user's rules (glitches fixed regardless of the original, no environment
-  variables for hand tests, replays with the user's settings).
+  targets; the rules for a port (glitches fixed regardless of the original, no environment
+  variables for hand tests, replays with the recording's settings).
 - From rustcoil (Recoil, 2026-11-21): game DLLs loaded and compiled with the EXE
   (`Game::dlls`, `platform/module.rs`: MFC 4.2, MSVCRT), the MFC window layer in user32 (WH_CBT
   hook in CreateWindowExA, classes, properties, menus from MENU resources: `platform/menu.rs`),
@@ -81,7 +81,7 @@
   vertex's for the texture rectangle too, repeated textures wrapped inside the texture with
   mipmaps; DirectInput reads fetch the window's input; a scripted run does not catch the mouse.
   Then: the texture layer in 12 bits (black textures past 256 layers), clamp at the texture's
-  edge, a scripted run ignores the user's mouse and keys over the window. Open: with SHOT and the
+  edge, a scripted run ignores real mouse and key input over the window. Open: with SHOT and the
   present thread pictures sometimes stop while the game goes on (PRESENT=0 meanwhile).
   And: setup never removes anything (its cleanup put a game's files and CD image into the
   recycle bin), DeleteFileA only inside the game folder, no writes outside it; a hidden cursor
