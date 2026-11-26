@@ -1482,13 +1482,26 @@ fn sleep(c: &mut Cpu) -> u32 {
 /// made in.
 pub static LAST_MISSION: Mutex<String> = Mutex::new(String::new());
 
-/// Whether a host path lies inside the game folder (its folder exists and is below it). The
-/// CD's top folder (the game folder's parent, read as a fallback) is never written.
+/// Whether a host path lies inside the game folder: its nearest folder that exists is below
+/// it, and the folders still missing are plain names (no `..`). The CD's top folder (the game
+/// folder's parent, read as a fallback) is never written.
 fn inside_game(p: &std::path::Path) -> bool {
-    let Some(dir) = p.parent().and_then(|d| std::fs::canonicalize(d).ok()) else {
-        return false;
-    };
-    std::fs::canonicalize(super::game_dir()).is_ok_and(|g| dir.starts_with(g))
+    inside(super::game_dir(), p)
+}
+
+fn inside(root: &std::path::Path, p: &std::path::Path) -> bool {
+    let mut dir = p.parent();
+    while let Some(d) = dir {
+        if let Ok(real) = std::fs::canonicalize(d) {
+            let rest = p.strip_prefix(d).map_or(false, |r| {
+                r.components().all(|c| matches!(c, std::path::Component::Normal(_)))
+            });
+            return rest
+                && std::fs::canonicalize(root).is_ok_and(|g| real.starts_with(g));
+        }
+        dir = d.parent();
+    }
+    false
 }
 
 fn create_file(c: &mut Cpu) -> u32 {
@@ -1504,6 +1517,13 @@ fn create_file(c: &mut Cpu) -> u32 {
         return INVALID_HANDLE;
     }
 
+    // a folder the original setup made and ours has not (Motorhead's HiScores): made now
+    if write && matches!(disp, 1 | 2 | 4) {
+        if let Some(d) = path.parent().filter(|d| !d.exists()) {
+            log!("CreateFileA {name}: making the folder {}", d.display());
+            let _ = std::fs::create_dir_all(d);
+        }
+    }
     let mut o = std::fs::OpenOptions::new();
     o.read(access & 0x8000_0000 != 0 || !write).write(write);
     match disp {
@@ -1515,7 +1535,8 @@ fn create_file(c: &mut Cpu) -> u32 {
     };
     match o.open(&path) {
         Ok(f) => {
-            if super::trace_api() {
+            // writes are few and worth seeing (saves, settings)
+            if super::trace_api() || write {
                 log!("CreateFileA {name} (access {access:#x}, disposition {disp})");
             }
             if name.to_ascii_lowercase().contains("missions\\") {
@@ -2230,4 +2251,24 @@ fn exit_process_from_terminate(c: &mut Cpu) -> u32 {
     log!("TerminateProcess({code})");
     super::advapi32::save();
     terminate(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inside;
+
+    #[test]
+    fn writes_inside_the_game_folder_also_into_missing_folders() {
+        let root = std::env::temp_dir().join(format!("inside_test_{}", std::process::id()));
+        let game = root.join("game");
+        std::fs::create_dir_all(game.join("Game")).unwrap();
+        assert!(inside(&game, &game.join("Game").join("a.cfg")));
+        // Motorhead's HiScores: a folder the setup did not make
+        assert!(inside(&game, &game.join("HiScores").join("x.MHI")));
+        assert!(inside(&game, &game.join("a").join("b").join("c.txt")));
+        // never above the game folder
+        assert!(!inside(&game, &root.join("x.txt")));
+        assert!(!inside(&game, &game.join("Missing").join("..").join("..").join("x.txt")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

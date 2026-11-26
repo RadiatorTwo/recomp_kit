@@ -542,3 +542,7 @@ From future_rust_cop's port (2026-11-24; the kit does not run there yet):
 - Things tested by hand (cheat keys, comparison switches) must work without an
   environment variable: a Cargo feature (`cheats`, never in a release), a menu box or the
   registry. Environment variables are for scripted tests only.
+- A game may write into a folder its own setup made empty (Motorhead's HiScores after a race):
+  our setup copies files, so empty folders are missing. `CreateFileA` makes a missing folder
+  inside the game folder when it writes (`kernel32::inside`), and logs every file opened for
+  writing, so a refused save shows in the log.
