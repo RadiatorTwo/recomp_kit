@@ -353,7 +353,11 @@ nuclear_rust_strike `wide.rs`.
    Strike: `View_SetWindow_` computes them from the view window, all projections read them).
    Multiply this x scale by k = (4/3) / aspect ratio, together with values the game derives
    from it (clip margin, right clip bound). If there is no such scale, multiply the camera x
-   by k before every projection and every visibility test (Future Cop).
+   by k before every projection and every visibility test (Future Cop). If x and y share
+   one scale (a focal length: Motorhead's camera +0), multiplying it by k makes the picture
+   lower by k as well: draw the 3D in `View::Tall(1 / k)` instead of `View::Full` (1 / k
+   times the frame's height around its middle, cut to the frame), which puts the height back.
+   Check it: the same moment at 4:3 and wide, an object's height in pixels must be the same.
 2. **Draw wide.** The Glide target gets the window's aspect ratio (`glide.rs`
    `resize(aspect, h)`), and the 3D picture is stretched over the full width (`View::Full`).
    Because the x scale is narrower by k, the proportions are right again.

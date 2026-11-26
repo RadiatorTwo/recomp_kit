@@ -118,6 +118,10 @@ const LFB_STRIDE: u32 = 2048;
 pub enum View {
     /// the whole frame
     Full,
+    /// the whole frame's width, this many times its height around its middle, cut to the
+    /// frame (widescreen: a game whose field of view is widened through its focal length also
+    /// draws everything lower; this puts the height back)
+    Tall(f32),
     /// a 4:3 part: 0 at the left edge, 0.5 centred, 1 at the right edge
     Hud(f32),
     /// split screen: a 4:3 HUD whose left (or right) half is centred in the left (right)
@@ -1279,6 +1283,7 @@ impl Glide {
         let w43 = (th * 4.0 / 3.0).min(tw);
         match self.view {
             View::Full => ([0.0, 0.0, tw, th], (0.0, tw)),
+            View::Tall(s) => ([0.0, th * (1.0 - s) / 2.0, tw, th * s], (0.0, tw)),
             View::Hud(at) => ([(tw - w43) * at, 0.0, w43, th], (0.0, tw)),
             View::Half(false) => ([tw / 4.0 - w43 / 4.0, 0.0, w43, th], (0.0, tw / 2.0)),
             View::Half(true) => ([tw * 0.75 - w43 * 0.75, 0.0, w43, th], (tw / 2.0, tw)),
@@ -1294,8 +1299,8 @@ impl Glide {
         let x0 = (vx + c[0] as f32 * sx).max(cut0).round() as i32;
         let x1 = (vx + c[2] as f32 * sx).min(cut1).round() as i32;
         let (y0, y1) = (
-            (vy + c[1] as f32 * sy).round() as i32,
-            (vy + c[3] as f32 * sy).round() as i32,
+            (vy + c[1] as f32 * sy).max(0.0).round() as i32,
+            (vy + c[3] as f32 * sy).min(th).round() as i32,
         );
         unsafe {
             gl.viewport(
