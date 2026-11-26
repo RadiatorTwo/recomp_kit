@@ -111,6 +111,13 @@ pub trait Game: Sync {
         None
     }
 
+    /// The buttons pad `n` reports to the game (bit k: our button k, `dinput::CONTROLS`), from
+    /// the ones held: a game's own layout (Motorhead: A confirms in the menus, where the game
+    /// takes the first button).
+    fn pad_buttons(&self, _n: u32, buttons: u32) -> u32 {
+        buttons
+    }
+
     /// Whether a video plays (the pad's A is Space then: skips it).
     fn video_playing(&self) -> bool {
         false

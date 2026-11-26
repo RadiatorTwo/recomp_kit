@@ -77,6 +77,8 @@ const AXIS_DEAD_ZONE: f32 = 0.25;
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Pad {
     pub stick: [f32; 4],
+    /// right and left trigger, 0 (at rest) ... 1 (fully pulled)
+    pub triggers: [f32; 2],
     buttons: u32,
     start: bool,
 }
@@ -141,6 +143,11 @@ static REST: Mutex<Vec<((usize, bool), f32)>> = Mutex::new(Vec::new());
 
 /// A trigger at `v` is pressed: 30% of its travel beyond its rest.
 fn trigger_down(pad: usize, left: bool, v: f32) -> bool {
+    trigger_value(pad, left, v) > 0.3
+}
+
+/// How far a trigger at `v` is pulled, 0 at its rest ... 1.
+fn trigger_value(pad: usize, left: bool, v: f32) -> f32 {
     let mut r = REST.lock().unwrap();
     let rest = match r.iter_mut().find(|e| e.0 == (pad, left)) {
         Some(e) => {
@@ -152,7 +159,7 @@ fn trigger_down(pad: usize, left: bool, v: f32) -> bool {
             v
         }
     };
-    v > rest + 0.3 * (1.0 - rest)
+    ((v - rest) / (1.0 - rest).max(0.01)).clamp(0.0, 1.0)
 }
 
 /// Our button for a gilrs event of `pad` that presses one.
@@ -170,9 +177,9 @@ fn pressed_by(pad: usize, e: &gilrs::EventType) -> Option<u32> {
 
 fn read(g: &gilrs::Gamepad) -> Pad {
     let id: usize = g.id().into();
-    let trigger = |b, left| g.button_data(b).is_some_and(|d| trigger_down(id, left, d.value()));
-    let mut buttons =
-        trigger(Button::RightTrigger2, false) as u32 | (trigger(Button::LeftTrigger2, true) as u32) << 1;
+    let trigger = |b, left| g.button_data(b).map_or(0.0, |d| trigger_value(id, left, d.value()));
+    let triggers = [trigger(Button::RightTrigger2, false), trigger(Button::LeftTrigger2, true)];
+    let mut buttons = (triggers[0] > 0.3) as u32 | ((triggers[1] > 0.3) as u32) << 1;
     for (b, n) in BUTTONS.into_iter().zip(BUTTON_NUMBERS) {
         buttons |= (g.is_pressed(b) as u32) << n;
     }
@@ -183,6 +190,7 @@ fn read(g: &gilrs::Gamepad) -> Pad {
             g.value(Axis::RightStickX),
             -g.value(Axis::RightStickY),
         ],
+        triggers,
         buttons,
         start: g.is_pressed(Button::Start),
     }
@@ -269,6 +277,10 @@ fn update() {
         for (k, x) in v.iter_mut().enumerate().take(15) {
             *x = (buttons >> k & 1) as f32;
         }
+        // the triggers as far as they are pulled (a press between reads: fully)
+        for k in 0..2 {
+            v[k] = v[k].max(p.triggers[k]);
+        }
         v[15] = p.start as u8 as f32;
         v[16..].copy_from_slice(&[p.stick[0], -p.stick[1], p.stick[2], -p.stick[3]]);
         super::record::pad(&v);
@@ -341,7 +353,15 @@ pub fn script(k: usize, v: f32) {
     let p = s.get_or_insert_default();
     let on = v != 0.0;
     match k {
-        0..=14 => p.buttons = p.buttons & !(1 << k) | (on as u32) << k,
+        0..=14 => {
+            // a trigger counts as a button pulled 30% (as a real one)
+            let on = if k < 2 { v > 0.3 } else { on };
+            p.buttons = p.buttons & !(1 << k) | (on as u32) << k;
+            if k < 2 {
+                // `pad@RT=0.5*n`: pulled halfway
+                p.triggers[k] = v.clamp(0.0, 1.0);
+            }
+        }
         15 => p.start = on,
         16 => p.stick[0] = v,
         17 => p.stick[1] = -v,
@@ -610,13 +630,15 @@ fn axis_value(d: u32, axis: u32, p: &Pad) -> u32 {
 fn get_device_state(c: &mut Cpu) -> u32 {
     let (d, size, out) = (arg(c, 0), arg(c, 1), arg(c, 2));
     let m = mem();
-    let p = pad(m.rd32(d + 8));
+    let n = m.rd32(d + 8);
+    let p = pad(n);
+    let buttons = crate::game::game().pad_buttons(n, p.buttons);
     let mut s = [0u8; 0x50];
     s[0..4].copy_from_slice(&axis_value(d, 0, &p).to_le_bytes());
     s[4..8].copy_from_slice(&axis_value(d, 1, &p).to_le_bytes());
     s[0x20..0x30].fill(0xff);
     for b in 0..32 {
-        s[0x30 + b] = if p.buttons >> b & 1 != 0 { 0x80 } else { 0 };
+        s[0x30 + b] = if buttons >> b & 1 != 0 { 0x80 } else { 0 };
     }
     let n = (size as usize).min(s.len());
     m.slice(out, n).copy_from_slice(&s[..n]);
