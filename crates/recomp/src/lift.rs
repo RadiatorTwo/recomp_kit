@@ -283,6 +283,10 @@ pub struct Lifter<'a, 'f> {
     /// a compare's condition codes read by fnstsw and a test stay in registers, and what
     /// nobody reads is not made
     fsw: Variable,
+    /// x87 control word (I16, in memory too) and its tests for the arithmetic (`x87::Mode`:
+    /// usual, near_or_trunc, add), see `set_fcw`
+    fcw: Variable,
+    mode_vars: [Variable; 3],
     cfg: TargetFrontendConfig,
     blocks: HashMap<u32, Block>,
     /// blocks that leave the function towards an address
@@ -338,6 +342,8 @@ impl<'a, 'f> Lifter<'a, 'f> {
         );
         let top = b.declare_var(I32);
         let fsw = b.declare_var(I16);
+        let fcw = b.declare_var(I16);
+        let mode_vars = [b.declare_var(I8), b.declare_var(I8), b.declare_var(I64)];
         let mut l = Lifter {
             b,
             f,
@@ -356,6 +362,8 @@ impl<'a, 'f> Lifter<'a, 'f> {
             of,
             top,
             fsw,
+            fcw,
+            mode_vars,
             cfg,
             blocks: HashMap::new(),
             exits: HashMap::new(),
@@ -407,6 +415,14 @@ impl<'a, 'f> Lifter<'a, 'f> {
             .ins()
             .load(I16, mf(), self.cpu, offset_of!(Cpu, fsw) as i32);
         self.b.def_var(self.fsw, sw);
+        // (left out where nothing reads it)
+        let cw = self.b.ins().load(
+            I16,
+            mf().with_notrap(),
+            self.cpu,
+            offset_of!(Cpu, fcw) as i32,
+        );
+        self.set_fcw(cw);
     }
 
     fn store_state(&mut self) {

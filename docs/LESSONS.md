@@ -53,7 +53,14 @@ White. Most apply to any game of that time. Add new ones here.
   put ~8 cycles on every operation of a chain.
 - Cranelift makes a pure value where it is first used: values made once for a run (the
   rounding mode's tests) were made again in every operation's block, as those do not
-  dominate each other. A store of them (`Cpu::x87_mode`, read by nobody) pins them down.
+  dominate each other. Now the control word and its tests are Cranelift variables
+  (`Lifter::set_fcw`), made where the control word changes (function start, after calls,
+  fldcw): branchy x87 code (Recoil 0x487f90) no longer loads and tests it at every join
+  (~1.5 %).
+- Alias regions in Cranelift's memory flags (`Cpu` state and guest memory apart) gave
+  nothing measurable, and one access tagged with the wrong region breaks the game silently
+  (test `alias.rs`). Keeping x87 registers across jumps (shapes per target, fix-ups on
+  edges) was correct but no faster than the control word's variables alone.
 - Under 0xc7f a straight run with 4 or more x87 operations is lifted twice (`rz_runs`,
   `versions`): if the control word truncates to 24 bits, `rt_mxcsr_rz` sets the SSE rounding
   to truncate as well, and each operation is the double one cut to 24 bits (truncating twice

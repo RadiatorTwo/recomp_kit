@@ -42,9 +42,6 @@ pub struct Cpu {
     /// test whether they can toggle them (ID: whether CPUID exists)
     pub ac: u8,
     pub id: u8,
-    /// Written by generated code only: the x87 rounding mode's values for a run (see
-    /// `lift::x87`'s `mode`)
-    pub x87_mode: [u64; 2],
 }
 
 pub const EAX: usize = 0;
@@ -80,7 +77,6 @@ impl Cpu {
             stop: 0,
             ac: 0,
             id: 0,
-            x87_mode: [0; 2],
         }
     }
 }

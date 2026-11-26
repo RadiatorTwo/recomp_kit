@@ -119,6 +119,10 @@
 - From rustcoil (2026-11-26): rep movs / rep stos forward as a loop in the lifted code
   (`Lifter::rep_move`) instead of a call to `rt_string` (Recoil: ~22 million short memcpy /
   memset calls in two minutes, 5 % of the frame); test `string.rs`.
+- From rustcoil (2026-11-26): x87 control word and its rounding tests in variables
+  (`set_fcw`, `Cpu::x87_mode` gone; Recoil ~1.5 %); `x87_cache` with joins (other values or
+  stack depth per edge); test `alias.rs`. Tried without gain: alias regions, x87 registers
+  across jumps (LESSONS).
 
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 

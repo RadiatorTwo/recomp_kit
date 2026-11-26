@@ -134,11 +134,6 @@ pub struct Cache {
     pub(super) base: Option<(Value, i64)>,
     /// by place relative to TOP at the run's start: the value, and whether memory lacks it
     vals: [Option<(Value, bool)>; 8],
-    /// the control word (I16; memory has it too): one value along the run, so the rounding
-    /// mode's tests are made once, not at every operation
-    cw: Option<Value>,
-    /// the control word's tests for the arithmetic (`Mode`), made where the run is
-    mode: Option<Mode>,
 }
 
 /// What the control word says for the arithmetic's rounding.
@@ -168,8 +163,6 @@ impl Lifter<'_, '_> {
         self.xc.vals = [None; 8];
         self.xc.d = 0;
         self.xc.base = None;
-        self.xc.cw = None;
-        self.xc.mode = None;
         self.usual87 = false;
         // the end of a run's 0xc7f version: the SSE rounding as it was
         if let Some(old) = self.rz.take() {
@@ -177,11 +170,27 @@ impl Lifter<'_, '_> {
         }
     }
 
+    /// The control word's tests for the arithmetic, from the variables `set_fcw` made.
     fn mode(&mut self) -> Mode {
-        if let Some(m) = self.xc.mode.filter(|_| self.xc.enabled) {
-            return m;
-        }
         let cw = self.fcw();
+        Mode {
+            cw: self.b.ins().uextend(I32, cw),
+            usual: self.b.use_var(self.mode_vars[0]),
+            near_or_trunc: self.b.use_var(self.mode_vars[1]),
+            add: self.b.use_var(self.mode_vars[2]),
+        }
+    }
+
+    /// The control word (I16; a variable, `Lifter::fcw`).
+    pub(super) fn fcw(&mut self) -> Value {
+        self.b.use_var(self.fcw)
+    }
+
+    /// A new control word (I16, in memory too): it and its tests for the arithmetic (`Mode`)
+    /// in variables, made where it changes (at the function's start, after calls, fldcw), not
+    /// at every operation or join. What no operation reads, Cranelift leaves out.
+    pub(super) fn set_fcw(&mut self, cw: Value) {
+        self.b.def_var(self.fcw, cw);
         let cw = self.b.ins().uextend(I32, cw);
         // rounding control 00 (to nearest) and precision control 1x (53 or 64 bits)
         let m = self.b.ins().band_imm_u(cw, 0xe00);
@@ -193,34 +202,9 @@ impl Lifter<'_, '_> {
         let half = self.iconst(I64, 1 << 28);
         let zero = self.iconst(I64, 0);
         let add = self.b.ins().select(near, half, zero);
-        // stored (nothing reads them): made here once, not again in every operation's block
-        // (Cranelift makes a pure value where it is first used; the operations' blocks do not
-        // dominate each other)
-        let flag = self.b.ins().uextend(I64, near_or_trunc);
-        let at = offset_of!(Cpu, x87_mode) as i32;
-        self.b.ins().store(mf(), add, self.cpu, at);
-        self.b.ins().store(mf(), flag, self.cpu, at + 8);
-        let m = Mode {
-            cw,
-            usual,
-            near_or_trunc,
-            add,
-        };
-        self.xc.mode = Some(m);
-        m
-    }
-
-    /// The control word (I16).
-    pub(super) fn fcw(&mut self) -> Value {
-        if let Some(v) = self.xc.cw.filter(|_| self.xc.enabled) {
-            return v;
+        for (var, v) in self.mode_vars.into_iter().zip([usual, near_or_trunc, add]) {
+            self.b.def_var(var, v);
         }
-        let v = self
-            .b
-            .ins()
-            .load(I16, mf(), self.cpu, offset_of!(Cpu, fcw) as i32);
-        self.xc.cw = Some(v);
-        v
     }
 
     fn place(&self, k: u32) -> usize {
@@ -989,8 +973,7 @@ impl Lifter<'_, '_> {
                 self.b
                     .ins()
                     .store(mf(), v, self.cpu, offset_of!(Cpu, fcw) as i32);
-                self.xc.cw = Some(v);
-                self.xc.mode = None;
+                self.set_fcw(v);
             }
             Fnclex => {
                 let sw = self.fsw();
@@ -1003,8 +986,7 @@ impl Lifter<'_, '_> {
                 self.b
                     .ins()
                     .store(mf(), cw, self.cpu, offset_of!(Cpu, fcw) as i32);
-                self.xc.cw = Some(cw);
-                self.xc.mode = None;
+                self.set_fcw(cw);
                 let z = self.iconst(I16, 0);
                 self.set_fsw(z);
                 let z = self.iconst(I32, 0);

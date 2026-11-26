@@ -205,7 +205,8 @@ In this order:
    read once and every later slot is that plus a constant (no `(top + 1) & 7` chain per fld),
    the status word is a variable (in memory only across calls and exits), and the rounding's
    rare ways are cold blocks at the function's end (Recoil: ~10 %). rep movs / rep stos
-   forward are a loop in the code, not a call (a game's memcpy and memset). Unpaced, `LogicClock::frame`
+   forward are a loop in the code, not a call (a game's memcpy and memset); the x87 control
+   word and its rounding tests are variables, made where it changes. Unpaced, `LogicClock::frame`
    allows 64 pictures per logic frame. A bubble sort in the game (Recoil 0x4b13b0) is a case
    for point 4: sort stably in Rust, then carry on in the game code behind it (that address
    as an entry point of its own, with stack and registers as the game has them there).
