@@ -187,16 +187,6 @@ fn gethostname(c: &mut Cpu) -> u32 {
     0
 }
 
-/// waveOutOpen: MMSYSERR_NODRIVER.
-fn no_wave_driver(_: &mut Cpu) -> u32 {
-    6
-}
-
-/// MMSYSERR_INVALHANDLE: there is no open device.
-fn wave_invalid_handle(_: &mut Cpu) -> u32 {
-    5
-}
-
 // ---- VERSION: no version resources of system files -------------------------------------------
 
 /// GetFileVersionInfoSizeA / GetFileVersionInfoA / VerQueryValueA: none (the file has no
@@ -247,16 +237,6 @@ pub const IMPORTS: &[Import] = &[
     ("GetOpenFileNameA", 1, get_open_file_name),
     ("WSAStartup", 2, wsa_startup),
     ("WSACleanup", 0, ret0),
-    // waveOut: no device (Smacker's own sound then plays nothing; the game's is DirectSound)
-    ("waveOutGetNumDevs", 0, ret0),
-    ("waveOutOpen", 6, no_wave_driver),
-    ("waveOutClose", 1, wave_invalid_handle),
-    ("waveOutGetID", 2, wave_invalid_handle),
-    ("waveOutPrepareHeader", 3, wave_invalid_handle),
-    ("waveOutUnprepareHeader", 3, wave_invalid_handle),
-    ("waveOutWrite", 3, wave_invalid_handle),
-    ("waveOutReset", 1, wave_invalid_handle),
-    ("waveOutSetVolume", 2, wave_invalid_handle),
     ("WSAGetLastError", 0, wsa_get_last_error),
     ("socket", 3, socket),
     ("bind", 3, socket_error),

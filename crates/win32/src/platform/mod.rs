@@ -36,6 +36,7 @@ pub mod stats;
 pub mod text;
 pub mod tween;
 pub mod user32;
+pub mod waveout;
 pub mod window;
 
 use recomp::image::Image;
@@ -1191,7 +1192,7 @@ pub(crate) fn find_import(dll: &str, name: &str) -> Option<&'static Import> {
         "ADVAPI32.DLL" => &[advapi32::IMPORTS],
         "DDRAW.DLL" => &[ddraw::IMPORTS],
         "DSOUND.DLL" => &[dsound::IMPORTS],
-        "WINMM.DLL" => &[dsound::IMPORTS, misc::IMPORTS],
+        "WINMM.DLL" => &[dsound::IMPORTS, misc::IMPORTS, waveout::IMPORTS],
         "OLE32.DLL" => &[dshow::IMPORTS, misc::IMPORTS],
         "DINPUT.DLL" => &[dinput::IMPORTS],
         "AVIFIL32.DLL" | "MSVFW32.DLL" => &[avi::IMPORTS],

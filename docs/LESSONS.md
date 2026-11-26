@@ -194,7 +194,8 @@ White. Most apply to any game of that time. Add new ones here.
 - RAD's Smacker (SMACKW32.DLL): compile the game's own DLL with the EXE (`Game::dlls`,
   rebased out of our heap at 0x10000000) instead of writing a decoder. It draws each frame
   with GetDC on a DirectDraw surface and StretchDIBits (GetDC of a surface is the surface,
-  `ddraw::surface_of_dc`); its sound goes through waveOut.
+  `ddraw::surface_of_dc`); its sound goes through waveOut (`waveout.rs`: CALLBACK_NULL, it polls WHDR_DONE, so a
+  header is marked done by a host thread when the mixer has played it).
 - 8-bit display modes must be offered: Motorhead's menu wants 640x480 or 640x400 at 8 bits
   and quits without them.
 - DDBLTFX: dwFillColor is at 0x50 (an earlier port read 0x48 and drew black).

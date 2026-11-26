@@ -437,7 +437,8 @@ mission work as in rustcoil `gamepad.rs` (`Pad::buttons`, pressed as the command
 - DirectSound and PlaySound: done (`dsound.rs`, mixed on cpal).
 - MPEG-1 videos through DirectShow: done (`dshow.rs`, `mpeg/`). Smacker: compile the
   `SMACKW32.DLL` that comes with the game along with the EXE (`Game::dlls`, with a base
-  outside our heap, see motorhead_rust). Its sound through waveOut is still missing. Bink and
+  outside our heap, see motorhead_rust). Its sound goes through waveOut (`waveout.rs`, into
+  the mixer's stream). Bink and
   AVI are still missing.
 - DirectPlay (TCP/UDP): done for what Future Cop needs (`dplay.rs`).
 - Installation: `Identity::required` (what must lie next to the EXE), `game_files` (what moves

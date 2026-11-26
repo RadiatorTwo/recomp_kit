@@ -136,4 +136,4 @@ Grow the kit for future games, one piece at a time, with tests:
    particles) when a game wants them.
 3. Difftest (Unicorn, GPL-2.0) as its own crate `crates/difftest` (still in future_rust_cop).
 4. Video formats beyond MPEG-1 (Bink, AVI) when a game needs them (Smacker: the game's own
-   SMACKW32.DLL compiled with it). waveOut on our mixer (Smacker's sound).
+   SMACKW32.DLL compiled with it). waveOut on our mixer: done (`waveout.rs`, from motorhead_rust).
