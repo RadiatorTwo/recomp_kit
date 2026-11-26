@@ -146,6 +146,8 @@ struct Texture {
     staged: Vec<u8>,
     staged_alpha: Vec<u8>,
     pending: Option<(u32, u32)>,
+    /// the palette's hash (`Glide::palette_stamp`) its texels were converted with (P_8, AP_88)
+    pal_stamp: u64,
 }
 
 /// Layers of the texture array at first: TMU memory holds 64 textures of 256x256 at 8 bits.
@@ -262,6 +264,11 @@ struct Glide {
     aniso_max: f32,
     textures: BTreeMap<u32, Texture>,
     downloads: u64,
+    /// the texture palette (grTexDownloadTable, 0RGB) and a hash of it (`palette_hash`):
+    /// textures of a palette format are converted again when drawn with another palette than
+    /// the one they were converted with
+    palette: Vec<u32>,
+    palette_stamp: u64,
     state: State,
     /// Vertex attributes, so that changing them draws nothing yet: the colour and alpha
     /// combine units (function, factor, local, other, invert), the constant colour (ARGB) and
@@ -315,6 +322,9 @@ struct Local {
     empty: glow::VertexArray,
     fbos: HashMap<(bool, u64), glow::Framebuffer>,
     copy: [glow::Framebuffer; 2],
+    /// the picture and its depth at the Glide screen's size, for reading them back
+    /// (`read_screen`, `read_depth`)
+    read: Option<(glow::Framebuffer, [glow::Renderbuffer; 2], (u32, u32))>,
 }
 
 impl Local {
@@ -331,6 +341,7 @@ impl Local {
                 empty,
                 fbos: HashMap::new(),
                 copy: [fbo(), fbo()],
+                read: None,
             }
         }
     }
@@ -342,6 +353,12 @@ impl Local {
             gl.delete_vertex_array(self.empty);
             for f in self.fbos.into_values().chain(self.copy) {
                 gl.delete_framebuffer(f);
+            }
+            if let Some((f, rbs, _)) = self.read {
+                gl.delete_framebuffer(f);
+                for rb in rbs {
+                    gl.delete_renderbuffer(rb);
+                }
             }
         }
     }
@@ -764,9 +781,15 @@ fn lod_size(lod: u32, aspect: u32) -> (u32, u32) {
     }
 }
 
-/// Texels of a format as RGBA bytes (alpha 255 where the format has none).
-fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
-    let m = mem();
+/// Texels of a format as RGBA bytes (alpha 255 where the format has none); P_8 and AP_88
+/// through `palette` (0RGB).
+fn convert(format: u32, src: &[u8], n: usize, palette: &[u32]) -> Vec<u8> {
+    let rd8 = |k: u32| src[k as usize];
+    let rd16 = |k: u32| u16::from_le_bytes([src[k as usize], src[k as usize + 1]]);
+    let pal = |i: u8| {
+        let c = palette[i as usize];
+        [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+    };
     let e5 = |v: u32| ((v << 3) | (v >> 2)) as u8;
     let e6 = |v: u32| ((v << 2) | (v >> 4)) as u8;
     let e4 = |v: u32| (v * 17) as u8;
@@ -774,7 +797,7 @@ fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
     for k in 0..n as u32 {
         let px: [u8; 4] = match format {
             0xb => {
-                let v = m.rd16(data + 2 * k) as u32;
+                let v = rd16(2 * k) as u32;
                 [
                     e5(v >> 10 & 31),
                     e5(v >> 5 & 31),
@@ -783,20 +806,20 @@ fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
                 ]
             }
             0xa => {
-                let v = m.rd16(data + 2 * k) as u32;
+                let v = rd16(2 * k) as u32;
                 [e5(v >> 11), e6(v >> 5 & 63), e5(v & 31), 255]
             }
             0xc => {
-                let v = m.rd16(data + 2 * k) as u32;
+                let v = rd16(2 * k) as u32;
                 [e4(v >> 8 & 15), e4(v >> 4 & 15), e4(v & 15), e4(v >> 12)]
             }
             0xd => {
-                let v = m.rd16(data + 2 * k);
+                let v = rd16(2 * k);
                 let i = v as u8;
                 [i, i, i, (v >> 8) as u8]
             }
             0 => {
-                let v = m.rd8(data + k) as u32;
+                let v = rd8(k) as u32;
                 [
                     (v >> 5) as u8 * 36,
                     (v >> 2 & 7) as u8 * 36,
@@ -804,16 +827,49 @@ fn convert(format: u32, data: u32, n: usize) -> Vec<u8> {
                     255,
                 ]
             }
-            2 => [255, 255, 255, m.rd8(data + k)],
+            2 => [255, 255, 255, rd8(k)],
             3 => {
-                let i = m.rd8(data + k);
+                let i = rd8(k);
                 [i, i, i, 255]
+            }
+            // P_8
+            5 => {
+                let [r, g, b] = pal(rd8(k));
+                [r, g, b, 255]
+            }
+            // AP_88
+            0xe => {
+                let v = rd16(2 * k);
+                let [r, g, b] = pal(v as u8);
+                [r, g, b, (v >> 8) as u8]
             }
             _ => [255, 0, 255, 255],
         };
         out.extend(px);
     }
     out
+}
+
+/// Converted texels (rgba) of rows r0..=r1 into a texture's staged top level, to go up at its
+/// next draw: premultiplied by coverage (a black texel is keyed out), the alpha apart.
+fn stage(t: &mut Texture, r0: u32, r1: u32, px: &[u8]) {
+    let at = (r0 * t.w) as usize;
+    let (rgb, alpha) = (&mut t.staged[at * 4..], &mut t.staged_alpha[at * 2..]);
+    for (k, p) in px.chunks_exact(4).enumerate() {
+        let covered = p[..3] != [0, 0, 0];
+        rgb[4 * k..4 * k + 4].copy_from_slice(&if covered {
+            [p[0], p[1], p[2], 255]
+        } else {
+            [0; 4]
+        });
+        alpha[2 * k..2 * k + 2].copy_from_slice(&if covered { [p[3], 0] } else { [0, p[3]] });
+    }
+    t.pending = Some(t.pending.map_or((r0, r1), |(a, b)| (a.min(r0), b.max(r1))));
+}
+
+/// Whether a texture format reads the palette.
+fn paletted(format: u32) -> bool {
+    matches!(format, 5 | 0xe)
 }
 
 /// 0xRRGGBB as a 565 pixel.
@@ -1022,6 +1078,8 @@ impl Glide {
                 aniso_max,
                 textures: BTreeMap::new(),
                 downloads: 0,
+                palette: vec![0; 256],
+                palette_stamp: palette_hash(&[0; 256]),
                 cc: [1, 0, 0, 0, 0],
                 ac: [1, 0, 0, 0, 0],
                 constant: 0xffff_ffff,
@@ -1091,6 +1149,42 @@ impl Glide {
                 );
                 f
             })
+    }
+
+    /// This thread's framebuffer at the Glide screen's size, for reading the picture back.
+    fn read_fbo(&mut self, gl: &glow::Context) -> glow::Framebuffer {
+        let size = self.res;
+        let l = self.local(gl);
+        if let Some((f, _, s)) = l.read {
+            if s == size {
+                return f;
+            }
+        }
+        unsafe {
+            if let Some((f, rbs, _)) = l.read.take() {
+                gl.delete_framebuffer(f);
+                for rb in rbs {
+                    gl.delete_renderbuffer(rb);
+                }
+            }
+            let f = gl.create_framebuffer().expect("GL framebuffer");
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
+            let rbs = [
+                (glow::RGBA8, glow::COLOR_ATTACHMENT0),
+                (glow::DEPTH_COMPONENT32F, glow::DEPTH_ATTACHMENT),
+            ]
+            .map(|(format, attachment)| {
+                let rb = gl.create_renderbuffer().expect("GL renderbuffer");
+                gl.bind_renderbuffer(glow::RENDERBUFFER, Some(rb));
+                gl.renderbuffer_storage(glow::RENDERBUFFER, format, size.0 as i32, size.1 as i32);
+                gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, attachment, glow::RENDERBUFFER, Some(rb));
+                rb
+            });
+            gl.bind_renderbuffer(glow::RENDERBUFFER, None);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            l.read = Some((f, rbs, size));
+            f
+        }
     }
 
     /// This thread's framebuffer drawing into the multisampled renderbuffer, if there is one.
@@ -1512,6 +1606,7 @@ impl Glide {
         // MAX_LAYERS) and the replacement's layer + 1, its size
         let bytes = |u: [u32; 5]| u[0] | u[1] << 8 | u[2] << 16 | u[3] << 24;
         if let Some(a) = self.tex {
+            self.repalette(a);
             self.commit(gl, a);
         }
         let tex = self.tex.and_then(|a| self.textures.get(&a));
@@ -1623,39 +1718,120 @@ impl Glide {
         [p(a, -h, -h), p(a, -h, h), p(b, h, -h), p(b, h, h)]
     }
 
+    /// The depth buffer so far at the Glide screen's size, rows from the top, as Glide keeps
+    /// it: z-buffer values (ooz, 0..0xffff, larger nearer). Motorhead reads it to see whether
+    /// a light is hidden (its halo and lens flare drawn or not).
+    fn read_depth(&mut self, gl: &glow::Context) -> Vec<u16> {
+        self.flush(gl);
+        let (tw, th) = (self.target.0 as i32, self.target.1 as i32);
+        let src = self.color_fbo(gl);
+        let ([vx, vy, vw, vh], _) = self.view_rect();
+        let (w, h) = self.res;
+        let ms = self.ms_fbo(gl);
+        let dst = self.read_fbo(gl);
+        let mut raw = vec![0u8; (w * h * 4) as usize];
+        unsafe {
+            gl.disable(glow::SCISSOR_TEST);
+            // multisampled: its depth into the target's own first (a resolve keeps the size)
+            if let Some(ms) = ms {
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(ms));
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(src));
+                gl.blit_framebuffer(0, 0, tw, th, 0, 0, tw, th, glow::DEPTH_BUFFER_BIT, glow::NEAREST);
+            }
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(dst));
+            // (GL rows from the bottom)
+            gl.blit_framebuffer(
+                vx.round() as i32,
+                (th as f32 - vy - vh).round() as i32,
+                (vx + vw).round() as i32,
+                (th as f32 - vy).round() as i32,
+                0,
+                0,
+                w as i32,
+                h as i32,
+                glow::DEPTH_BUFFER_BIT,
+                glow::NEAREST,
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(dst));
+            gl.read_pixels(
+                0,
+                0,
+                w as i32,
+                h as i32,
+                glow::DEPTH_COMPONENT,
+                glow::FLOAT,
+                glow::PixelPackData::Slice(Some(&mut raw)),
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        let d: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let w_buffer = matches!(self.state.depth_mode, 2 | 4);
+        let mut out = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            out.extend(d[((h - 1 - y) * w) as usize..][..w as usize].iter().map(|&v| {
+                // z as drawn (ooz / 65535); w turned round as `buffer_clear` does (an
+                // approximation: Glide keeps w as a 4.12 float)
+                let v = if w_buffer { 1.0 - v } else { v };
+                (v.clamp(0.0, 1.0) * 65535.0).round() as u16
+            }));
+        }
+        out
+    }
+
     /// The picture so far at the Glide screen's size, rows from the top, as 0xRRGGBB.
     fn read_screen(&mut self, gl: &glow::Context) -> Vec<u32> {
         self.flush(gl);
         self.resolve(gl);
-        let (tw, th) = self.target;
-        let mut px = vec![0u8; (tw * th * 4) as usize];
-        let fbo = self.color_fbo(gl);
+        // the view's rectangle brought down to the screen's size on the GPU (nearest pixel)
+        // and only that read back: reading the whole target (up to the window's size) and
+        // picking its pixels here was ~30% of a race in Motorhead, which reads the screen
+        // every picture
+        let th = self.target.1 as f32;
+        let ([vx, vy, vw, vh], _) = self.view_rect();
+        let (w, h) = self.res;
+        let src = self.color_fbo(gl);
+        let dst = self.read_fbo(gl);
+        let mut px = vec![0u8; (w * h * 4) as usize];
         unsafe {
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.disable(glow::SCISSOR_TEST);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(dst));
+            // (GL rows from the bottom)
+            gl.blit_framebuffer(
+                vx.round() as i32,
+                (th - vy - vh).round() as i32,
+                (vx + vw).round() as i32,
+                (th - vy).round() as i32,
+                0,
+                0,
+                w as i32,
+                h as i32,
+                glow::COLOR_BUFFER_BIT,
+                glow::NEAREST,
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(dst));
             gl.read_pixels(
                 0,
                 0,
-                tw as i32,
-                th as i32,
+                w as i32,
+                h as i32,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
                 glow::PixelPackData::Slice(Some(&mut px)),
             );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
-        // nearest target pixel of each screen pixel, in the view's rectangle (GL rows from
-        // the bottom)
-        let ([vx, vy, vw, vh], _) = self.view_rect();
-        let (w, h) = self.res;
         let mut out = Vec::with_capacity((w * h) as usize);
         for y in 0..h {
-            let ty = (vy + (y as f32 + 0.5) * vh / h as f32) as u32;
-            let row = th - 1 - ty.min(th - 1);
-            for x in 0..w {
-                let tx = ((vx + (x as f32 + 0.5) * vw / w as f32) as u32).min(tw - 1);
-                let p = ((row * tw + tx) * 4) as usize;
-                out.push((px[p] as u32) << 16 | (px[p + 1] as u32) << 8 | px[p + 2] as u32);
-            }
+            let row = &px[((h - 1 - y) * w * 4) as usize..][..(w * 4) as usize];
+            out.extend(
+                row.chunks_exact(4)
+                    .map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32),
+            );
         }
         out
     }
@@ -1738,7 +1914,16 @@ impl Glide {
 
     /// grLfbLock: the guest buffer of the Glide screen (read: the picture so far; write:
     /// `LFB_UNTOUCHED`, drawn where changed at grLfbUnlock).
-    fn lfb_lock(&mut self, gl: &glow::Context, write: bool, mode: u32, lower: bool) -> u32 {
+    /// `buffer`: GR_BUFFER_FRONTBUFFER 0, BACKBUFFER 1 (the picture), AUXBUFFER 2 (depth;
+    /// read only).
+    fn lfb_lock(
+        &mut self,
+        gl: &glow::Context,
+        write: bool,
+        buffer: u32,
+        mode: u32,
+        lower: bool,
+    ) -> u32 {
         static BUF: AtomicU32 = AtomicU32::new(0);
         let (w, h) = self.res;
         let mut buf = BUF.load(Ordering::Relaxed);
@@ -1753,6 +1938,14 @@ impl Glide {
             for y in 0..h {
                 for p in m.slice(buf + y * LFB_STRIDE, 2 * w as usize).chunks_exact_mut(2) {
                     p.copy_from_slice(&untouched);
+                }
+            }
+        } else if buffer == 2 {
+            let z = self.read_depth(gl);
+            for y in 0..h {
+                let row = if lower { h - 1 - y } else { y };
+                for x in 0..w {
+                    m.wr16(buf + row * LFB_STRIDE + 2 * x, z[(y * w + x) as usize]);
                 }
             }
         } else {
@@ -1898,6 +2091,7 @@ impl Glide {
                         staged: vec![0; (w * h * 4) as usize],
                         staged_alpha: vec![0; (w * h * 2) as usize],
                         pending: None,
+                        pal_stamp: 0,
                     },
                 );
                 layer
@@ -1910,13 +2104,9 @@ impl Glide {
             t.known[r0 as usize..=r1 as usize].fill(true);
         }
         let n = ((r1 - r0 + 1) * w) as usize;
-        let mut px = convert(format, data, n);
-        let key = super::hd::hash(
-            format,
-            w,
-            r1 - r0 + 1,
-            mem().slice(data, n * bytes_per_texel(format) as usize),
-        );
+        let bytes_in = mem().slice(data, n * bytes_per_texel(format) as usize);
+        let mut px = convert(format, bytes_in, n, &self.palette);
+        let key = super::hd::hash(format, w, r1 - r0 + 1, bytes_in);
         if let Some(x) = crate::game::game().glide() {
             x.recolour(key, &mut px);
         }
@@ -1927,25 +2117,30 @@ impl Glide {
             .collect();
         super::hd::dump(key, w, r1 - r0 + 1, &original);
         let t = self.textures.get_mut(&addr).unwrap();
-        let at = (r0 * w) as usize;
-        let (rgb, alpha) = (&mut t.staged[at * 4..], &mut t.staged_alpha[at * 2..]);
-        // premultiplied by coverage: a black texel is keyed out
-        for (k, p) in px.chunks_exact(4).enumerate() {
-            let covered = p[..3] != [0, 0, 0];
-            rgb[4 * k..4 * k + 4].copy_from_slice(&if covered {
-                [p[0], p[1], p[2], 255]
-            } else {
-                [0; 4]
-            });
-            alpha[2 * k..2 * k + 2].copy_from_slice(&if covered { [p[3], 0] } else { [0, p[3]] });
-        }
-        t.pending = Some(t.pending.map_or((r0, r1), |(a, b)| (a.min(r0), b.max(r1))));
+        t.pal_stamp = self.palette_stamp;
+        stage(t, r0, r1, &px);
         // the replacements read the original's layer: up at once
         if self.hd.is_some() {
             self.flush(gl);
             self.commit(gl, addr);
             self.replace(gl, addr, key, (r0, r1), &original);
         }
+    }
+
+    /// A texture of a palette format drawn after the palette changed: its texels converted
+    /// again with the palette now (Glide looks them up when drawing).
+    fn repalette(&mut self, addr: u32) {
+        let (palette, stamp) = (&self.palette, self.palette_stamp);
+        let Some(t) = self.textures.get_mut(&addr) else {
+            return;
+        };
+        if !paletted(t.format) || t.pal_stamp == stamp || !t.known.iter().all(|&k| k) {
+            return;
+        }
+        let px = convert(t.format, &t.raw, (t.w * t.h) as usize, palette);
+        t.pal_stamp = stamp;
+        let h = t.h;
+        stage(t, 0, h - 1, &px);
     }
 
     /// Twice the layers (all textures in use, TMU memory not full): new arrays, every texture
@@ -2349,14 +2544,17 @@ fn glide_set_state(c: &mut Cpu) -> u32 {
 /// grLfbLock(type, buffer, write mode, origin, pixel pipeline, GrLfbInfo*): type bit 0 is
 /// write. GrLfbInfo: size, pointer, stride, write mode, origin.
 fn lfb_lock(c: &mut Cpu) -> u32 {
-    let (ty, mode, origin, info) = (arg(c, 0), arg(c, 2), arg(c, 3), arg(c, 5));
+    let (ty, buffer, mode, origin, info) = (arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 5));
     let write = ty & 1 != 0;
+    if write && buffer == 2 {
+        log!("warn: grLfbLock: writing the depth buffer not supported");
+    }
     let mode = if mode == 0xff { 0 } else { mode };
     if write && mode > 2 {
         log!("warn: grLfbLock write mode {mode:#x} not supported");
     }
     let lower = origin == 1;
-    let Some(buf) = with(|g, gl| g.lfb_lock(gl, write, mode, lower)) else {
+    let Some(buf) = with(|g, gl| g.lfb_lock(gl, write, buffer, mode, lower)) else {
         return 0;
     };
     let m = mem();
@@ -2593,6 +2791,7 @@ fn clip_window(c: &mut Cpu) -> u32 {
     0
 }
 
+
 fn combine(c: &Cpu) -> [u32; 5] {
     [arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4)]
 }
@@ -2761,6 +2960,59 @@ fn tex_download_mipmap_level_partial(c: &mut Cpu) -> u32 {
     0
 }
 
+/// grTexDownloadTable(tmu, type, data): the palette (GR_TEXTABLE_PALETTE, 2: 256 0RGB
+/// entries); NCC tables (0, 1) are not done (their YIQ textures are drawn magenta).
+fn tex_download_table(c: &mut Cpu) -> u32 {
+    table(arg(c, 1), arg(c, 2), 0, 255);
+    0
+}
+
+/// grTexDownloadTablePartial(tmu, type, data, start, end): entries start..=end of the table at
+/// data.
+fn tex_download_table_partial(c: &mut Cpu) -> u32 {
+    table(arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4));
+    0
+}
+
+fn table(ty: u32, data: u32, start: u32, end: u32) {
+    if ty != 2 {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| log!("glide: NCC tables (grTexDownloadTable type {ty}) not done"));
+        return;
+    }
+    let m = mem();
+    with(|g, _| {
+        let mut changed = false;
+        for i in start..=end.min(255) {
+            let v = m.rd32(data + 4 * i) & 0xff_ffff;
+            changed |= g.palette[i as usize] != v;
+            g.palette[i as usize] = v;
+        }
+        if changed {
+            g.palette_stamp = palette_hash(&g.palette);
+        }
+    });
+}
+
+/// A palette's contents as a number (FNV-1a; never 0, a texture's "converted with none").
+/// Not a count of changes: a game that switches between palettes (Motorhead: A, B, A...) would
+/// have every texture converted and uploaded again at each switch, ~60% of its time in a race.
+fn palette_hash(p: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &v in p {
+        for b in v.to_le_bytes() {
+            h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    h | 1
+}
+
+/// grGlideGetVersion(char[80]): the version of the Glide 2 the game expects.
+fn glide_get_version(c: &mut Cpu) -> u32 {
+    super::put_cstr(arg(c, 0), "2.43", 80);
+    0
+}
+
 fn tex_source(c: &mut Cpu) -> u32 {
     let addr = arg(c, 1);
     with(|g, _| g.tex = Some(addr));
@@ -2839,6 +3091,11 @@ const FUNCTIONS: &[(&str, fn(&mut Cpu) -> u32)] = &[
         tex_download_mipmap_level_partial,
     ),
     ("grTexSource", tex_source),
+    ("grTexDownloadTable", tex_download_table),
+    ("grTexDownloadTablePartial", tex_download_table_partial),
+    ("grGlideGetVersion", glide_get_version),
+    // pictures are shown by the present thread: none waits in a queue
+    ("grBufferNumPending", ret0),
 ];
 
 /// GetProcAddress on glide2x.dll: a thunk for the name (`_grName@argbytes`).
