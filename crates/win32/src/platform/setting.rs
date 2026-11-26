@@ -28,6 +28,10 @@ impl Setting {
         if e != 2 {
             return e == 1;
         }
+        // no game folder, no registry (the Linux start window draws with the game's GL code)
+        if !super::has_game_dir() && recomp::config::env(self.env).is_none() {
+            return self.default;
+        }
         let on = match recomp::config::env(self.env) {
             Some(v) => v != "0",
             None => advapi32::value("", self.value)

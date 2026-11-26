@@ -1096,6 +1096,11 @@ pub fn game_dir() -> &'static Path {
     GAME_DIR.get().expect("game folder not set")
 }
 
+/// The game folder is known (not in the start window's own process, nor before the game runs).
+pub fn has_game_dir() -> bool {
+    GAME_DIR.get().is_some()
+}
+
 /// One path below `root`, matching each part case-insensitively against what exists.
 fn host_path_in(root: &Path, parts: &[&str]) -> PathBuf {
     let mut p = root.to_path_buf();

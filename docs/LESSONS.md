@@ -111,6 +111,10 @@ White. Most apply to any game of that time. Add new ones here.
   variants in one build behind a switch, alternating runs). The player's key (`Game::fps_key`,
   default F12; setting `ShowFps`) or `<PREFIX>_STATS=1` shows frames a second and frame times
   in the window (no RivaTuner hooking our GL).
+- The Linux start window is its own process (`<exe> --splash`) without a game folder, but it
+  draws with the game's GL code: anything there that reads a setting (the registry lies in the
+  game folder) panicked with "game folder not set" (rustcoil v0.1.1). Settings give their
+  default where no game folder is known (`has_game_dir`).
 - Count before optimising a path: a temporary counter in the slow call (`rt_fpu_round`, the
   Glide flush's reasons) told what a profile could not (which operations, which state change).
 - A Glide renderer drew ~250 batches a picture because the game changed the alpha test
