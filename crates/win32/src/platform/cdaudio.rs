@@ -1,7 +1,7 @@
 //! CD audio through MCI (`mciSendCommandA`, device type "cdaudio"): the game plays its music
 //! from the CD's audio tracks. They are read straight from the player's CD image: a `.cue`
-//! sheet in the game folder or the folder above it (`game_files/<name>.cue` next to the game's
-//! folder), with its `.bin` files (raw sectors of 2352 bytes: 588 frames of 16-bit
+//! sheet in the game folder, in the folder above it (`game_files`, or a folder in it) or next
+//! to our program (where `setup` also looks for the image), with its `.bin` files (raw sectors of 2352 bytes: 588 frames of 16-bit
 //! stereo at 44.1 kHz, little-endian). Nothing is extracted; a track is read when it is played
 //! and mixed by `dsound.rs`.
 //! Without a cue sheet there is no device (the game goes on without music).
@@ -66,10 +66,11 @@ fn tracks() -> Option<&'static [Track]> {
     static T: OnceLock<Option<Vec<Track>>> = OnceLock::new();
     T.get_or_init(|| {
         let dir = super::game_dir();
-        let cue = [Some(dir), dir.parent()]
-            .into_iter()
-            .flatten()
-            .find_map(find_cue)?;
+        let home = std::env::current_exe().ok();
+        let home = home.as_deref().and_then(Path::parent);
+        let cue = find_cue(dir, 0)
+            .or_else(|| find_cue(dir.parent()?, 2))
+            .or_else(|| find_cue(home?, 0))?;
         let t = parse_cue(&cue);
         log!("CD audio: {} ({} tracks)", cue.display(), t.len());
         (!t.is_empty()).then_some(t)
@@ -77,12 +78,18 @@ fn tracks() -> Option<&'static [Track]> {
     .as_deref()
 }
 
-fn find_cue(dir: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue")))
+/// The first cue sheet in `dir` or below it, at most `depth` folders down.
+fn find_cue(dir: &Path, depth: u32) -> Option<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    let cue = |p: &&PathBuf| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cue"));
+    if let Some(p) = paths.iter().find(cue) {
+        return Some(p.clone());
+    }
+    if depth == 0 {
+        return None;
+    }
+    paths.iter().filter(|p| p.is_dir()).find_map(|p| find_cue(p, depth - 1))
 }
 
 /// Read a cue sheet: FILE "name" BINARY, TRACK nn AUDIO|MODE1/2352, INDEX 01 mm:ss:ff. A track

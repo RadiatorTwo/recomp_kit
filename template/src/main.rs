@@ -45,6 +45,10 @@ static ID: Identity = Identity {
     game_files: &[],
     // a file in the CD's video folder, if the game has videos there
     video_marker: None,
+    // the game is on its CD only inside InstallShield cabinets (data1.cab): the file groups
+    // not installed from them, e.g. Some(&["Uninstal Files", "AVI Files"]); None: the files
+    // lie on the CD as they are
+    cab_left_out: None,
     // network discovery (DirectPlay over UDP): 8 bytes of the game's own, question and answer
     net_magic: (b"GAMENET?", b"GAMENET!"),
     log_file: "mygame.log",

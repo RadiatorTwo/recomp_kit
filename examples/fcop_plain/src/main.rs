@@ -36,6 +36,7 @@ static ID: Identity = Identity {
     required: &["febmp.bin", "missions"],
     game_files: &["controls.txt", "save.cfg"],
     video_marker: Some("intro.mpg"),
+    cab_left_out: None,
     net_magic: (b"FCOPNET?", b"FCOPNET!"),
     log_file: "fcop_plain.log",
 };

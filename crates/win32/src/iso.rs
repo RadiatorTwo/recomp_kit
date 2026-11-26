@@ -1,6 +1,7 @@
 //! Reading files from a CD image: ISO 9660 with Joliet names when there are, or UDF (images
 //! made without ISO 9660, as one of the German CD), in an `.iso` (2048 bytes a sector) or a raw
-//! `.bin` (2352 bytes a sector, mode 1 or mode 2 form 1).
+//! `.bin`, `.img` or `.mdf` (2352 bytes a sector, mode 1 or mode 2 form 1; 2448 with the
+//! subchannel after each sector, as Alcohol and CloneCD can write).
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -31,7 +32,7 @@ pub struct Iso {
 }
 
 /// The layouts an image can have: (sector size, data offset).
-const LAYOUTS: [(u64, u64); 3] = [(2048, 0), (2352, 16), (2352, 24)];
+const LAYOUTS: [(u64, u64); 5] = [(2048, 0), (2352, 16), (2352, 24), (2448, 16), (2448, 24)];
 
 impl Iso {
     /// Open a CD image; None when the file is none.

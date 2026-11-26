@@ -445,8 +445,20 @@ Seiten, Start schließt); Knöpfe in der Mission wie in rustcoil `gamepad.rs`
   `SMACKW32.DLL` mit der EXE kompilieren (`Game::dlls`, Basis außerhalb unseres Heaps,
   Vorbild motorhead_rust); ihr Ton über waveOut fehlt noch. Bink und AVI fehlen noch.
 - DirectPlay (TCP/UDP): fertig für das, was Future Cop braucht (`dplay.rs`).
-- Installation: `Identity::required` (was neben der EXE liegen muss), `video_marker` (eine
-  Datei im Video-Ordner der CD). Das Setup holt alles aus einem CD-Image (.iso/.bin, auch UDF).
+- Installation: `Identity::required` (was neben der EXE liegen muss), `game_files` (was
+  mitwandert: Sounds, Schriften, Spielstände), `video_marker` (eine Datei im Video-Ordner der
+  CD). Das Setup nimmt ein CD-Image (.cue/.bin, .iso, .img, .mdf; ISO 9660/Joliet oder UDF; auch
+  2448-Byte-Sektoren mit Subkanal), eine kopierte CD oder einen installierten Spielordner. Liegt
+  das Spiel auf der CD nur in einem InstallShield-Archiv (data1.cab, ggf. data1.hdr):
+  `cab_left_out` = die Dateigruppen, die nicht installiert werden (Deinstaller, Treiber, die
+  Videos, wenn die CD sie auch lose hat; `rtools iscab data1.cab` listet die Gruppen). Dann
+  packt das Setup das Archiv selbst aus (Datei für Datei unter `.part`, die EXE zuletzt), auch
+  um einem installierten Spiel fehlende Dateien (MFC-DLLs im Windows-Ordner) nachzuliefern. Nur
+  eine EXE mit bekannter SHA-256 zählt (Launcher heißen oft gleich, Recoils
+  `Westwood\RECOIL\Recoil3Dfx.exe`). Eine CD-Prüfung, die nach einer Videodatei sucht, besser
+  per `code_patches` bestehen lassen: das Spiel läuft dann auch ohne Videos (Recoil 0x42e78a).
+  CD-Musik (`cdaudio.rs`): die .cue im Spielordner, in `game_files` (2 Ebenen tief) oder neben
+  dem Programm.
 
 ## 10. Differenztest und Release
 
