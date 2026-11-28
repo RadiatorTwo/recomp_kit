@@ -64,6 +64,11 @@ impl Guest {
             "not supported: {:?}",
             c.stats.missing
         );
+        assert!(
+            c.stats.failed.is_empty(),
+            "not compiled: {:?}",
+            c.stats.failed
+        );
         let mem = Memory::reserve();
         mem.map(TEXT, TEXT + n);
         mem.slice(TEXT, n as usize).copy_from_slice(&img.data);

@@ -123,6 +123,19 @@
   (`set_fcw`, `Cpu::x87_mode` gone; Recoil ~1.5 %); `x87_cache` with joins (other values or
   stack depth per edge); test `alias.rs`. Tried without gain: alias regions, x87 registers
   across jumps (LESSONS).
+- From motorhead_rust (2026-11-28): x87 under 24 bits to nearest (0x07f, Motorhead's
+  renderer): an operation on floats' values is the double rounded to a float when that is a
+  float's normal number (`floats`; else the general way, ~60 instructions); straight runs get
+  a version for 0x07f (`Lifter::near24`, `NO_NEAR24`) beside 0xc7f's and the usual one; a
+  store of a float's value is not rounded (`is_float`), a float loaded and stored again is
+  stored as it is (`promoted`). `rt_fpu_round`: a tie beyond a float's range goes by the
+  24-bit number's own last bit (`even24`). Overlapping instructions (Watcom's `test ax, imm`
+  hiding a `mov`) are joins: a cached x87 value crossed into code also reached from the
+  other one (Cranelift's verifier refused the function). The game logs functions Cranelift
+  refused (`run.rs`; they stop with "not supported yet" when called). Tests
+  `x87_floats_to_nearest`, `x87_store_floats`, `x87_loops`, `x87_cache` (a branch over
+  arithmetic, 1000 programs, NaNs compared as NaNs in floats too). Motorhead: 0x456d4c (the
+  renderer's polygons) 21.8% -> 20.3% of a race before it went to Rust.
 
 ## Open code fixes (known from future_rust_cop, not yet in the kit)
 

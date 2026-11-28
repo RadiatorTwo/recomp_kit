@@ -955,12 +955,29 @@ fn round24(s: f64, err: i32, rc: u32) -> f64 {
                 lo
             } else if s > mid || err > 0 {
                 hi
-            } else if (lo as f32).to_bits() & 1 == 0 {
+            } else if even24(lo) {
                 lo // a tie: to even
             } else {
                 hi
             }
         }
+    }
+}
+
+/// Whether a 24-bit number's last bit is 0. The FPU's exponent is wider than a float's: the
+/// bit of the number itself, not of it as a float (beyond a float's range that was infinity,
+/// "even", and a tie went the wrong way).
+fn even24(v: f64) -> bool {
+    let b = v.to_bits() & (u64::MAX >> 1);
+    if b >= 1 << 52 {
+        // a normal double: 52 bits after the point, the 24-bit number's last is bit 29
+        b >> 29 & 1 == 0
+    } else {
+        // a subnormal double: by its unit (`floor24`)
+        let unit = f64::from_bits(1);
+        let k = (v.abs() / unit) as u64;
+        let top = 64 - k.leading_zeros();
+        top <= 24 || k >> (top - 24) & 1 == 0
     }
 }
 

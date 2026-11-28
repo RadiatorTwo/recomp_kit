@@ -286,7 +286,7 @@ pub struct Lifter<'a, 'f> {
     /// x87 control word (I16, in memory too) and its tests for the arithmetic (`x87::Mode`:
     /// usual, near_or_trunc, add), see `set_fcw`
     fcw: Variable,
-    mode_vars: [Variable; 3],
+    mode_vars: [Variable; 4],
     cfg: TargetFrontendConfig,
     blocks: HashMap<u32, Block>,
     /// blocks that leave the function towards an address
@@ -304,6 +304,10 @@ pub struct Lifter<'a, 'f> {
     /// while lifting a straight run's version for the usual control words (53 or 64 bits, to
     /// nearest): x87 arithmetic is the double operation, without the other cases' branches
     usual87: bool,
+    /// while lifting a straight run's version for 24 bits to nearest (0x07f, a renderer's):
+    /// x87 arithmetic is the double rounded to a float when that is the FPU's result (`floats`),
+    /// without reading the control word for each operation; else the general way
+    near24: bool,
     /// the flags live after each instruction (`flag_liveness`; `ALL_FLAGS` where unknown)
     live: HashMap<u32, u8>,
     /// the current instruction's: a flag no later instruction reads is not computed
@@ -343,7 +347,12 @@ impl<'a, 'f> Lifter<'a, 'f> {
         let top = b.declare_var(I32);
         let fsw = b.declare_var(I16);
         let fcw = b.declare_var(I16);
-        let mode_vars = [b.declare_var(I8), b.declare_var(I8), b.declare_var(I64)];
+        let mode_vars = [
+            b.declare_var(I8),
+            b.declare_var(I8),
+            b.declare_var(I64),
+            b.declare_var(I8),
+        ];
         let mut l = Lifter {
             b,
             f,
@@ -373,6 +382,7 @@ impl<'a, 'f> Lifter<'a, 'f> {
             joins: std::collections::HashSet::new(),
             rz: None,
             usual87: false,
+            near24: false,
             live: HashMap::new(),
             out: ALL_FLAGS,
         };
@@ -882,6 +892,15 @@ impl<'a, 'f> Lifter<'a, 'f> {
             .filter_map(|&a| direct_target(&code.at(a).unwrap()).filter(|&t| self.f.inside(t)))
             .collect();
         self.joins.insert(self.f.entry);
+        // overlapping instructions (Watcom's `test ax, imm` hiding a `mov`): an instruction
+        // reached by falling through from one that is not the one before it
+        for w in addrs.windows(2) {
+            let next = code.at(w[0]).unwrap().next_ip32();
+            if next != w[1] {
+                self.joins.insert(next);
+                self.joins.insert(w[1]);
+            }
+        }
         self.joins.extend(self.smc.variants.keys().copied());
         let runs = if self.xc.enabled {
             self.rz_runs(code, &addrs)
@@ -1051,6 +1070,31 @@ impl<'a, 'f> Lifter<'a, 'f> {
         );
         self.blocks.extend(kept);
         self.b.switch_to_block(other);
+        if crate::config::env("NO_NEAR24").is_none() {
+            // 24 bits to nearest
+            let (n_blk, rest) = (self.b.create_block(), self.b.create_block());
+            let near = self.b.ins().icmp_imm_u(IntCC::Equal, pcrc, 0);
+            self.b.ins().brif(near, n_blk, &[], rest, &[]);
+            self.b.switch_to_block(n_blk);
+            self.near24 = true;
+            let kept: Vec<(u32, Block)> = run[1..]
+                .iter()
+                .map(|&a| (a, self.blocks.insert(a, self.b.create_block()).unwrap()))
+                .collect();
+            for (n, &a) in run.iter().enumerate() {
+                if n > 0 {
+                    let blk = self.blocks[&a];
+                    self.b.switch_to_block(blk);
+                }
+                self.emit(&code.at(a).unwrap());
+            }
+            assert!(
+                !self.near24,
+                "a version's run ends with the cache written back"
+            );
+            self.blocks.extend(kept);
+            self.b.switch_to_block(rest);
+        }
         if crate::config::env("NO_USUAL87").is_none() {
             // the usual control words: a version of their own (the general one's branches
             // spread its code: Recoil's vertex loop of ~40 instructions became ~7700)
@@ -1071,7 +1115,10 @@ impl<'a, 'f> Lifter<'a, 'f> {
                 }
                 self.emit(&code.at(a).unwrap());
             }
-            assert!(!self.usual87, "a version's run ends with the cache written back");
+            assert!(
+                !self.usual87,
+                "a version's run ends with the cache written back"
+            );
             self.blocks.extend(kept);
             self.b.switch_to_block(general);
         }
@@ -2304,10 +2351,7 @@ fn flag_liveness(code: &mut crate::discover::Code, addrs: &[u32]) -> HashMap<u32
         let mut changed = false;
         for k in (0..info.len()).rev() {
             let (_, uses, defs, succ) = info[k];
-            let o = succ
-                .iter()
-                .flatten()
-                .fold(0, |s, t| s | live_in[index[t]]);
+            let o = succ.iter().flatten().fold(0, |s, t| s | live_in[index[t]]);
             let l = uses | (o & !defs);
             if (o, l) != (out[k], live_in[k]) {
                 (out[k], live_in[k]) = (o, l);

@@ -132,7 +132,21 @@ fn precision(a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.ret()
 }
 
-const SNIPPETS: [(&str, Snippet); 8] = [
+/// (p, cw): under cw, the float at p loaded and stored at p + 4, the double at p + 8
+/// stored as a float at p + 16
+fn store32(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.mov(eax, dword_ptr(esp + 4))?;
+    a.fnstcw(word_ptr(eax + 20))?;
+    a.fldcw(word_ptr(esp + 8))?;
+    a.fld(dword_ptr(eax))?;
+    a.fstp(dword_ptr(eax + 4))?;
+    a.fld(qword_ptr(eax + 8))?;
+    a.fstp(dword_ptr(eax + 16))?;
+    a.fldcw(word_ptr(eax + 20))?;
+    a.ret()
+}
+
+const SNIPPETS: [(&str, Snippet); 9] = [
     ("arith", arith),
     ("copy64", copy64),
     ("round", round),
@@ -141,6 +155,7 @@ const SNIPPETS: [(&str, Snippet); 8] = [
     ("f80", f80),
     ("stack8", stack8),
     ("precision", precision),
+    ("store32", store32),
 ];
 
 fn same(x: f64, y: f64) -> bool {
@@ -269,6 +284,15 @@ fn x87_precision() {
         (1.0, 3.0),
         (-1.0, 3.0),
         (5.0, -5.0),
+        // floats (the way for 24-bit operands) at the ends of a float's range: the FPU's
+        // wider exponent keeps what a float cannot
+        (f32::MAX as f64, 2.0),
+        (f32::MAX as f64, f32::MAX as f64),
+        (f32::MIN_POSITIVE as f64, 0.75),
+        (f32::MIN_POSITIVE as f64 * 1.5, 0.5),
+        (f32::MIN_POSITIVE as f64, -f32::MIN_POSITIVE as f64 * 0.5),
+        (1.0 + 2f64.powi(-23), 1.0 - 2f64.powi(-24)),
+        (16777215.0, 3.0),
     ];
     for i in 0..200000 {
         // also floats and their sums: results right on 24-bit numbers
@@ -335,6 +359,104 @@ fn x87_precision() {
         assert!(
             same(f as f64, want as f64),
             "fst ({x}) cw {cw:#x}: {f} want {want}"
+        );
+    }
+}
+
+/// 24 bits to nearest (0x07f, Motorhead's renderer) with floats' values as operands: the way
+/// that rounds the double result to a float (`floats` in lift/x87.rs) against the FPU's
+/// rounding (`rt_fpu_round`), with floats of every size (also near a float's range's ends).
+#[test]
+fn x87_floats_to_nearest() {
+    use recomp::rt::{FpuOp, rt_fpu_round};
+    let g = Guest::new(&SNIPPETS);
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let m = &g.mem;
+    let cw = 0x07f;
+    for _ in 0..300000 {
+        let mut v = || {
+            let bits = rng.next() as u32;
+            // half any float, half near 1 (results within the range, rounding everywhere)
+            let f = if bits & 1 == 0 {
+                f32::from_bits(bits >> 1 | (bits & 2) << 30)
+            } else {
+                1.0 + (bits >> 8) as f32 / 16777216.0
+            };
+            f as f64
+        };
+        let (x, y) = (v(), v());
+        g.call(
+            7,
+            &[dbl(x)[0], dbl(x)[1], dbl(y)[0], dbl(y)[1], cw, SCRATCH],
+        );
+        let got = |k: u32| {
+            f64::from_bits(u64::from_le_bytes(
+                m.slice(SCRATCH + 8 * k, 8).try_into().unwrap(),
+            ))
+        };
+        let ops = [
+            (FpuOp::Add, x, y),
+            (FpuOp::Sub, x, y),
+            (FpuOp::Mul, x, y),
+            (FpuOp::Div, x, y),
+            (FpuOp::Sqrt, x.abs(), 0.0),
+        ];
+        for (k, &(op, a, b)) in ops.iter().enumerate() {
+            let want = rt_fpu_round(op as u32, a, b, cw);
+            assert!(
+                same(got(k as u32), want),
+                "op {k} ({:#x}, {:#x}): {:#x} want {:#x}",
+                x.to_bits(),
+                y.to_bits(),
+                got(k as u32).to_bits(),
+                want.to_bits()
+            );
+        }
+    }
+}
+
+/// Stores of floats' values under every control word: a float loaded and stored again is
+/// itself (`promoted`), a double that is a float's value is stored as it is (`is_float`),
+/// others are rounded as the FPU does (`rt_fpu_round`).
+#[test]
+fn x87_store_floats() {
+    use recomp::rt::{FpuOp, rt_fpu_round};
+    let g = Guest::new(&SNIPPETS);
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let m = &g.mem;
+    for _ in 0..100000 {
+        let bits = rng.next() as u32;
+        let f = f32::from_bits(bits);
+        if f.is_nan() {
+            continue;
+        }
+        // a float's value, or one with bits beyond a float's
+        let x = if rng.next() & 1 == 0 {
+            f as f64
+        } else {
+            f64::from_bits((f as f64).to_bits() ^ (rng.next() & 0x1fff_ffff))
+        };
+        let cw = [0x07f, 0x27f, 0x37f, 0xc7f, 0x47f][(rng.next() % 5) as usize];
+        m.wr32(SCRATCH, bits);
+        let xb = x.to_bits();
+        m.wr32(SCRATCH + 8, xb as u32);
+        m.wr32(SCRATCH + 12, (xb >> 32) as u32);
+        g.call(8, &[SCRATCH, cw]);
+        let back = m.rd32(SCRATCH + 4);
+        assert_eq!(back, bits, "fld/fstp dword {f} cw {cw:#x}");
+        // (below a float's normal range `rt_fpu_round` rounds twice: not checked)
+        if x != 0.0 && x.abs() < f32::MIN_POSITIVE as f64 {
+            continue;
+        }
+        let got = f32::from_bits(m.rd32(SCRATCH + 16));
+        let want = if (cw & 0xc00) == 0 && (cw & 0x300) != 0 {
+            x as f32
+        } else {
+            rt_fpu_round(FpuOp::Round as u32, x, 0.0, cw) as f32
+        };
+        assert!(
+            same(got as f64, want as f64),
+            "fstp dword ({x:e}, {xb:#x}) cw {cw:#x}: {got:e} want {want:e}"
         );
     }
 }

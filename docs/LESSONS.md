@@ -60,7 +60,13 @@ White. Most apply to any game of that time. Add new ones here.
 - Alias regions in Cranelift's memory flags (`Cpu` state and guest memory apart) gave
   nothing measurable, and one access tagged with the wrong region breaks the game silently
   (test `alias.rs`). Keeping x87 registers across jumps (shapes per target, fix-ups on
-  edges) was correct but no faster than the control word's variables alone.
+  edges) was correct but no faster than the control word's variables alone. Motorhead
+  measured the same (2.18 against 2.28 ms a picture, within the noise of two runs).
+- Overlapping instructions (Watcom's `test ax, 0xcf89` whose last two bytes are a `mov` that
+  a branch jumps to): two instructions fall through to the same one, which is no branch
+  target. It has to count as a join, else what one way cached is used on the other.
+- A switch read at lifting time (`NO_NEAR24`, ...) is not part of the compiled code's cache
+  key: delete the cache file between A/B runs, else the second loads the first's code.
 - Under 0xc7f a straight run with 4 or more x87 operations is lifted twice (`rz_runs`,
   `versions`): if the control word truncates to 24 bits, `rt_mxcsr_rz` sets the SSE rounding
   to truncate as well, and each operation is the double one cut to 24 bits (truncating twice
